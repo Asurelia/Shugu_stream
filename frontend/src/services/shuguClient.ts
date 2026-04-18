@@ -1,0 +1,128 @@
+// Shugu WS client — routes to /ws/visitor or /ws/operator depending on auth.
+
+import { nanoid } from "./nanoid";
+
+export type PerformanceTags = {
+  scene?: string;
+  action?: string;
+  emote?: string;
+  shot?: string;
+};
+
+export type ShuguEvent =
+  | { type: "performance.start"; performance_id: string; start_at_server_ts: number; author: string; original_text_truncated: string | null }
+  | { type: "performance.audio"; performance_id: string; audio_b64: string; mime: string; duration_ms: number; screenplay: { emotion: string; talk_style: string }; text: string; tags?: PerformanceTags }
+  | { type: "performance.end"; performance_id: string }
+  | { type: "viewer.count"; n: number }
+  | { type: "error.moderation"; nonce?: string; reason: string; detector: string }
+  | { type: "queue.rejected"; nonce?: string; reason: string }
+  | { type: "hermes_task.acknowledged"; nonce?: string; eta_estimate_s: number }
+  | { type: "pong"; t?: number }
+  | { type: "error"; nonce?: string; reason: string };
+
+export type ChatTarget = "shugu" | "hermes";
+
+export type ShuguClientOptions = {
+  operator?: boolean;
+  url?: string;
+  onEvent: (ev: ShuguEvent) => void;
+  onStatus?: (status: "connecting" | "open" | "closed" | "error") => void;
+};
+
+export class ShuguClient {
+  private ws: WebSocket | null = null;
+  private url: string;
+  private onEvent: (ev: ShuguEvent) => void;
+  private onStatus?: (status: "connecting" | "open" | "closed" | "error") => void;
+  private reconnectDelay = 500;
+  private maxReconnectDelay = 8000;
+  private stopped = false;
+
+  constructor(opts: ShuguClientOptions) {
+    const wsProto = typeof window !== "undefined" && window.location.protocol === "https:" ? "wss:" : "ws:";
+    const host = typeof window !== "undefined" ? window.location.host : "";
+    const endpoint = opts.operator ? "/ws/operator" : "/ws/visitor";
+    this.url = opts.url || `${wsProto}//${host}${endpoint}`;
+    this.onEvent = opts.onEvent;
+    this.onStatus = opts.onStatus;
+  }
+
+  connect() {
+    if (this.stopped) return;
+    this.onStatus?.("connecting");
+    try {
+      this.ws = new WebSocket(this.url);
+    } catch (err) {
+      this.onStatus?.("error");
+      this.scheduleReconnect();
+      return;
+    }
+    this.ws.onopen = () => {
+      this.reconnectDelay = 500;
+      this.onStatus?.("open");
+    };
+    this.ws.onmessage = (msg) => {
+      try {
+        const ev = JSON.parse(msg.data) as ShuguEvent;
+        this.onEvent(ev);
+      } catch (_) { /* ignore */ }
+    };
+    this.ws.onerror = () => { this.onStatus?.("error"); };
+    this.ws.onclose = () => {
+      this.onStatus?.("closed");
+      if (!this.stopped) this.scheduleReconnect();
+    };
+  }
+
+  private scheduleReconnect() {
+    setTimeout(() => this.connect(), this.reconnectDelay);
+    this.reconnectDelay = Math.min(this.reconnectDelay * 2, this.maxReconnectDelay);
+  }
+
+  sendChat(text: string, target: ChatTarget = "shugu"): boolean {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return false;
+    const msg: any = { type: "chat.send", text, nonce: nanoid() };
+    if (target === "hermes") msg.target = "hermes";
+    this.ws.send(JSON.stringify(msg));
+    return true;
+  }
+
+  close() {
+    this.stopped = true;
+    this.ws?.close();
+  }
+}
+
+export function base64ToArrayBuffer(b64: string): ArrayBuffer {
+  const bin = atob(b64);
+  const buf = new ArrayBuffer(bin.length);
+  const view = new Uint8Array(buf);
+  for (let i = 0; i < bin.length; i++) view[i] = bin.charCodeAt(i);
+  return buf;
+}
+
+// ─── Auth helpers (cookies are httpOnly, so we probe GET /auth/me) ────────────
+export async function fetchAuthStatus(): Promise<{ username: string } | null> {
+  try {
+    const r = await fetch("/auth/me", { credentials: "include" });
+    if (!r.ok) return null;
+    return (await r.json()) as { username: string };
+  } catch (_) { return null; }
+}
+
+export async function login(username: string, password: string): Promise<string | null> {
+  const r = await fetch("/auth/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({ username, password }),
+  });
+  if (!r.ok) {
+    try { return (await r.json()).detail || `HTTP ${r.status}`; } catch { return `HTTP ${r.status}`; }
+  }
+  return null;
+}
+
+export async function logout(): Promise<void> {
+  try { await fetch("/auth/logout", { method: "POST", credentials: "include" }); } catch {}
+}
