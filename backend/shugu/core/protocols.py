@@ -38,6 +38,22 @@ class TTSResult:
 
 
 @dataclass(slots=True)
+class TTSChunk:
+    """One streaming audio chunk from a TTS backend.
+
+    `payload` is raw audio bytes matching `mime`. The very first chunk must be
+    self-describing (contains MP3 frame header or AAC ADTS) so the client's
+    Media Source Extensions SourceBuffer can start decoding immediately.
+    `seq` is 0-indexed and strictly increasing. `final=True` signals the last
+    chunk of this synthesis — the client ends the MSE segment + closes.
+    """
+    payload: bytes
+    seq: int
+    final: bool = False
+    mime: str = "audio/mpeg"
+
+
+@dataclass(slots=True)
 class ModerationVerdict:
     allowed: bool
     reason: str = ""
@@ -75,6 +91,21 @@ class TTSAdapter(Protocol):
     async def synthesize(self, text: str, *, voice_id: str) -> TTSResult: ...
 
 
+class TTSStreamAdapter(Protocol):
+    """Text → async chunks of audio. Adapters that support this fulfill both
+    `TTSAdapter.synthesize` (blocking blob) and `synthesize_stream` (progressive).
+
+    The picker prefers `synthesize_stream` when available: it can start
+    broadcasting chunks to the client ~500-800ms after the request instead of
+    waiting 3-6s for the whole blob. Adapters that can't stream (e.g. non-WS
+    backends) simply don't implement this protocol; `FallbackTTS` detects the
+    absence and wraps the blob as a single `final=True` chunk."""
+
+    async def synthesize_stream(
+        self, text: str, *, voice_id: str,
+    ) -> "AsyncIterator[TTSChunk]": ...
+
+
 class STTAdapter(Protocol):
     """Audio → text. Phase 5 — operator voice input."""
 
@@ -89,9 +120,13 @@ class ModerationLayer(Protocol):
 
 
 class PersonalityLoader(Protocol):
-    """Hot-reloadable system prompts. Backed by markdown files polled by mtime."""
+    """Hot-reloadable system prompts. Backed by markdown files polled by mtime.
 
-    def get(self, persona: Literal["shugu", "filter"]) -> PersonalityDoc: ...
+    Known personas: "shugu", "filter", "hermes_public", "hermes_private".
+    The loader accepts any string — the Literal is informational only so new
+    personas can be added by dropping a markdown file without touching code."""
+
+    def get(self, persona: str) -> PersonalityDoc: ...
 
 
 class EventBus(Protocol):

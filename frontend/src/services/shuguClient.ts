@@ -7,13 +7,39 @@ export type PerformanceTags = {
   action?: string;
   emote?: string;
   shot?: string;
+  /** Storyboard audio source (relative URL under frontend/public/) — when
+   *  present the client fetches audio from this path instead of decoding
+   *  `audio_b64` (which will be empty for storyboards). */
+  audio_src?: string;
 };
+
+export type TimedCue = {
+  offset_ms: number;
+  tags: PerformanceTags;
+};
+
+export type MoodName = "cheerful" | "focused" | "sleepy" | "playful" | "bored";
 
 export type ShuguEvent =
   | { type: "performance.start"; performance_id: string; start_at_server_ts: number; author: string; original_text_truncated: string | null }
-  | { type: "performance.audio"; performance_id: string; audio_b64: string; mime: string; duration_ms: number; screenplay: { emotion: string; talk_style: string }; text: string; tags?: PerformanceTags }
+  | { type: "performance.audio"; performance_id: string; audio_b64: string; mime: string; duration_ms: number; screenplay: { emotion: string; talk_style: string }; text: string; tags?: PerformanceTags; timed_cues?: TimedCue[] }
+  | { type: "performance.audio_begin"; performance_id: string; mime: string; duration_estimate_ms: number; screenplay: { emotion: string; talk_style: string }; text: string; tags?: PerformanceTags; timed_cues?: TimedCue[] }
+  | { type: "performance.audio_chunk"; performance_id: string; seq: number; audio_b64: string; mime: string; final: boolean }
+  | { type: "performance.truncate"; performance_id: string; reason?: string }
   | { type: "performance.end"; performance_id: string }
   | { type: "viewer.count"; n: number }
+  | { type: "mood.change"; from: MoodName; to: MoodName }
+  | { type: "scene.change"; scene: string }
+  | { type: "look.hint"; ndc: { x: number; y: number }; hold_ms?: number }
+  | { type: "expression.set"; expression: string; duration_ms?: number }
+  | { type: "shot.change"; shot: string }
+  | { type: "desktop.window_open"; file_name: string; kind: string; initial_content: string; language: string }
+  | { type: "desktop.file_edit"; file_name: string; find: string | null; replace: string | null; append: string | null }
+  | { type: "desktop.window_close"; file_name: string }
+  | { type: "desktop.image_show"; url: string; fit: string; caption: string }
+  | { type: "desktop.arrange"; layout: string }
+  | { type: "hermes_state.window_open"; tab: string; view: string }
+  | { type: "hermes_state.window_close" }
   | { type: "error.moderation"; nonce?: string; reason: string; detector: string }
   | { type: "queue.rejected"; nonce?: string; reason: string }
   | { type: "hermes_task.acknowledged"; nonce?: string; eta_estimate_s: number }

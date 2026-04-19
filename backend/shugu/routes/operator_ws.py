@@ -27,6 +27,17 @@ from ..pipeline.queue import QueuedMessage, RedisQueue, new_msg_id
 router = APIRouter()
 log = structlog.get_logger(__name__)
 
+# Strong refs on fire-and-forget tasks so CPython's weak-ref GC doesn't drop
+# them mid-execution (hermes delegation / embodied run can take seconds).
+_bg_tasks: set["asyncio.Task"] = set()
+
+
+def _spawn_bg(coro, *, name: str) -> None:
+    import asyncio
+    task = asyncio.create_task(coro, name=name)
+    _bg_tasks.add(task)
+    task.add_done_callback(_bg_tasks.discard)
+
 
 @dataclass(slots=True)
 class OpWSDeps:
@@ -39,6 +50,9 @@ class OpWSDeps:
     tts: "object"
     filter_brain: "object"
     viewer_counter: "object" = None
+    ambient: "object" = None          # AmbientDaemon
+    body_router: "object" = None      # BodyRouter
+    hermes_embodied: "object" = None  # HermesEmbodiedBrain
 
 
 _deps: Optional[OpWSDeps] = None
@@ -137,11 +151,28 @@ async def _handle_operator_message(
         await _send_error(ws, nonce=nonce, reason="too long")
         return
 
+    if _deps.ambient is not None:
+        _deps.ambient.mark_human_input()
+
     if target == "hermes":
-        # Fire-and-forget delegation
-        import asyncio
+        # Embodied path: Hermes drives Shugu's body directly via tool_calls.
+        if _deps.settings.hermes_embodied and _deps.hermes_embodied is not None:
+            _spawn_bg(
+                _deps.hermes_embodied.run_once(text, identity=identity, priority_tier=0),
+                name=f"hermes_embodied:{identity.username}",
+            )
+            await ws.send_text(json.dumps({
+                "type": "hermes_task.acknowledged",
+                "nonce": nonce,
+                "eta_estimate_s": 3,
+                "mode": "embodied",
+            }))
+            log.info("operator.hermes_embodied", username=identity.username, text_len=len(text))
+            return
+
+        # Legacy delegation path: Hermes produces raw, FilterBrain summarizes.
         from ..pipeline.hermes_task import delegate_to_hermes
-        asyncio.create_task(delegate_to_hermes(
+        _spawn_bg(delegate_to_hermes(
             settings=_deps.settings,
             http=_deps.http,
             identity=identity,
@@ -154,6 +185,7 @@ async def _handle_operator_message(
             "type": "hermes_task.acknowledged",
             "nonce": nonce,
             "eta_estimate_s": 10,
+            "mode": "delegation",
         }))
         log.info("operator.hermes_delegation", username=identity.username, text_len=len(text))
         return

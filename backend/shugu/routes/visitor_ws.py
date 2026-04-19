@@ -53,6 +53,7 @@ class WSDeps:
     queue: RedisQueue
     settings: Settings
     viewer_counter: "object" = None
+    ambient: "object" = None   # AmbientDaemon; avoids circular import
 
 
 # Set by app startup (app.py) — avoids FastAPI DI tangling for WS
@@ -158,6 +159,11 @@ async def _handle_visitor_message(
             "reason": "backpressure",
         }))
         return
+
+    # Signal the ambient daemon that a real human spoke — resets the silence
+    # clock so the mood drift stays biased toward cheerful/playful.
+    if _deps.ambient is not None:
+        _deps.ambient.mark_human_input()
 
 
 async def _send_error(ws: WebSocket, *, nonce, reason: str) -> None:

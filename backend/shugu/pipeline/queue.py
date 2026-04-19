@@ -34,6 +34,11 @@ class QueuedMessage:
     # {"scene": "reading_chat", "action": "wave", "emote": "heart", "shot": "close"}.
     # Broadcast verbatim to clients so the avatar/scene managers can react.
     tags: dict = field(default_factory=dict)
+    # Timed cues for storyboarded ambient performances (AmbientScene playback).
+    # Each entry = {"offset_ms": int, "tags": {scene|action|emote|shot: str}}.
+    # The client schedules setTimeout() off the audio start to fire tags in sync.
+    # Empty for normal LLM-driven messages (they only carry a single `tags` dict).
+    timed_cues: list = field(default_factory=list)
 
 
 _PENDING_KEY = "shugu:queue:pending"
@@ -61,6 +66,7 @@ class RedisQueue:
         data = json.loads(raw)
         data["precomputed_audio"] = b""   # audio only on ready queue
         data.setdefault("tags", {})       # older enqueued messages may lack this
+        data.setdefault("timed_cues", []) # likewise for storyboard scenes
         return QueuedMessage(**data)
 
     async def enqueue_ready(self, msg: QueuedMessage) -> None:
@@ -78,6 +84,7 @@ class RedisQueue:
             import base64
             data["precomputed_audio"] = base64.b64decode(data["precomputed_audio"])
         data.setdefault("tags", {})
+        data.setdefault("timed_cues", [])
         return QueuedMessage(**data)
 
     async def pending_size(self) -> int:

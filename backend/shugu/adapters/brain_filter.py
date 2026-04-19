@@ -61,7 +61,11 @@ class FilterBrain:
                 {"role": "user", "content": user_msg},
             ],
             "max_tokens": 300,
-            "temperature": 0.5,
+            # Filter is cooler-headed than persona: we want a crisp summary,
+            # not creative writing. But still honour M2's recommended envelope.
+            "temperature": 0.7,
+            "top_p": 0.95,
+            "top_k": 40,
             "stream": False,
         }
         try:

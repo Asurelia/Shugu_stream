@@ -15,6 +15,7 @@ import structlog
 from ..config import Settings
 from ..core.errors import BrainError, ModerationReject, TTSError
 from ..core.identity import Identity, OperatorIdentity, VisitorIdentity
+from ..adapters.brain_shugu import strip_think
 from ..core.protocols import BrainAdapter, ModerationLayer, TTSAdapter, Turn
 from .queue import QueuedMessage, RedisQueue
 
@@ -107,7 +108,9 @@ class PrepWorker:
 
         history = self._history_per_session.setdefault(msg.session_id, [])
 
-        # Brain
+        # Brain — response may still contain <think>...</think> blocks. We keep
+        # the raw version for history replay (MiniMax requires it) and strip
+        # thinking only at the last mile, right before moderation/TTS.
         chunks: list[str] = []
         async for delta in self._brain_shugu.respond(
             prompt=msg.text, history=history, identity=identity,
@@ -115,7 +118,8 @@ class PrepWorker:
             chunks.append(delta.text)
             if delta.done:
                 break
-        response = "".join(chunks).strip()
+        raw_response = "".join(chunks).strip()
+        response = strip_think(raw_response)
         if not response:
             log.warning("prep_worker.empty_response", msg_id=msg.msg_id)
             return
@@ -127,6 +131,7 @@ class PrepWorker:
             return
         if verdict.rewrite_to:
             response = verdict.rewrite_to
+            raw_response = verdict.rewrite_to   # moderator override wins over the raw too
 
         emotion, after_emotion = extract_emotion(response)
         clean_text, perf_tags = extract_tags(after_emotion)
@@ -136,20 +141,53 @@ class PrepWorker:
         # output wins on key conflict — it's the one directing the scene now.
         merged_tags = {**(msg.tags or {}), **perf_tags}
 
-        # TTS — FallbackTTS stores the primary voice, so we pass empty.
+        # Update conversation history BEFORE the TTS step — even if TTS fails
+        # we want the turn recorded so the next one doesn't re-trigger it.
+        # Keep the RAW response (with <think> blocks intact) — MiniMax quality
+        # degrades if thinking gets scrubbed from subsequent turns' context.
+        history.append(Turn(role="user", content=msg.text))
+        history.append(Turn(role="assistant", content=raw_response))
+        if len(history) > self._settings.visitor_history_turns * 2:
+            self._history_per_session[msg.session_id] = history[-self._settings.visitor_history_turns * 2:]
+
+        # Two paths:
+        #   • streaming on → skip TTS here, enqueue text-only; picker streams.
+        #   • streaming off → synthesize blob now, enqueue with precomputed audio.
+        if self._settings.tts_streaming:
+            duration_estimate = _estimate_speech_duration_ms(clean_text)
+            ready = QueuedMessage(
+                msg_id=msg.msg_id,
+                route=msg.route,
+                text=clean_text,
+                author_role=msg.author_role,
+                author_ip_hash=msg.author_ip_hash,
+                session_id=msg.session_id,
+                nonce=msg.nonce,
+                received_ns=msg.received_ns,
+                priority_tier=msg.priority_tier,
+                precomputed_audio=b"",
+                precomputed_emotion=emotion,
+                precomputed_duration_ms=duration_estimate,
+                tags=merged_tags,
+            )
+            await self._queue.enqueue_ready(ready)
+            log.info(
+                "prep_worker.prepared_stream",
+                msg_id=msg.msg_id,
+                chars=len(clean_text),
+                estimate_ms=duration_estimate,
+                emotion=emotion,
+                tags=merged_tags or None,
+            )
+            return
+
+        # Legacy blob path — synthesize before enqueue.
         try:
             tts = await self._tts.synthesize(clean_text, voice_id="")
         except TTSError as exc:
             log.exception("prep_worker.tts_error", msg_id=msg.msg_id, error=str(exc))
             return
 
-        # Update conversation history
-        history.append(Turn(role="user", content=msg.text))
-        history.append(Turn(role="assistant", content=response))
-        if len(history) > self._settings.visitor_history_turns * 2:
-            self._history_per_session[msg.session_id] = history[-self._settings.visitor_history_turns * 2:]
-
-        # Push to ready queue with precomputed audio embedded
         ready = QueuedMessage(
             msg_id=msg.msg_id,
             route=msg.route,
@@ -173,3 +211,11 @@ class PrepWorker:
             emotion=emotion,
             tags=merged_tags or None,
         )
+
+
+def _estimate_speech_duration_ms(text: str) -> int:
+    """Rough speaking-rate estimate used by the streaming path so the picker
+    has a duration to hold the stage for. French TTS lands around 14-16 chars
+    per second; we pad +700ms to cover start/end silence."""
+    chars = max(1, len(text))
+    return int(chars / 15.0 * 1000) + 700

@@ -9,18 +9,27 @@ import { useMediaQuery } from "@/hooks/useMediaQuery";
  *   the panel's left edge slides it in/out.
  * Mobile  (<768px): hidden by default. A floating bubble FAB in the bottom-right
  *   opens a full-height drawer (85vw).
+ *
+ * `showAssistant` (default false): visitors never see Shugu's own messages —
+ * her voice carries them. The operator can flip the debug-captions toggle in
+ * OperatorPanel to render them for developer visibility.
  */
 
 type Props = {
   messages: Message[];
+  showAssistant?: boolean;
 };
 
 const DESKTOP_QUERY = "(min-width: 768px)";
 
-export function ChatFeed({ messages }: Props) {
+export function ChatFeed({ messages, showAssistant = false }: Props) {
   const isDesktop = useMediaQuery(DESKTOP_QUERY, true);
   const scrollRef = useRef<HTMLDivElement | null>(null);
-  const prevLenRef = useRef<number>(messages.length);
+  const visibleMessages = useMemo(
+    () => (showAssistant ? messages : messages.filter((m) => m.role !== "assistant")),
+    [messages, showAssistant],
+  );
+  const prevLenRef = useRef<number>(visibleMessages.length);
   const [autoFollow, setAutoFollow] = useState(true);
   const [open, setOpen] = useState(true);
   const [unread, setUnread] = useState(0);
@@ -36,11 +45,11 @@ export function ChatFeed({ messages }: Props) {
         const el = scrollRef.current;
         if (el) el.scrollTop = el.scrollHeight;
       }
-    } else if (messages.length > prevLenRef.current) {
-      setUnread((n) => Math.min(99, n + (messages.length - prevLenRef.current)));
+    } else if (visibleMessages.length > prevLenRef.current) {
+      setUnread((n) => Math.min(99, n + (visibleMessages.length - prevLenRef.current)));
     }
-    prevLenRef.current = messages.length;
-  }, [messages.length, open, autoFollow]);
+    prevLenRef.current = visibleMessages.length;
+  }, [visibleMessages.length, open, autoFollow]);
 
   const onScroll = () => {
     const el = scrollRef.current;
@@ -58,13 +67,16 @@ export function ChatFeed({ messages }: Props) {
 
   const content = (
     <>
-      <header className="px-4 py-2.5 flex items-center justify-between border-b border-shugu-pink-soft/15 shrink-0">
-        <span className="text-xs font-bold text-shugu-pink-soft tracking-wide">
-          ♡ CHAT
+      <header
+        className="px-4 py-2.5 flex items-center justify-between shrink-0"
+        style={{ background: "linear-gradient(90deg, rgba(224,142,254,0.10) 0%, rgba(129,236,255,0.05) 100%)" }}
+      >
+        <span className="veil-headline text-xs text-veil-primary tracking-[0.12em] uppercase">
+          ✦ Chat
         </span>
         <div className="flex items-center gap-2">
-          <span className="text-[10px] text-shugu-cream-dim">
-            {messages.length > 0 ? `${messages.length} msg` : "—"}
+          <span className="veil-body text-[10px] text-veil-on-surface-variant">
+            {visibleMessages.length > 0 ? `${visibleMessages.length} msg` : "—"}
           </span>
           {!isDesktop && (
             <button
@@ -83,21 +95,21 @@ export function ChatFeed({ messages }: Props) {
         onScroll={onScroll}
         className="flex-1 min-h-0 overflow-y-auto px-3 py-2 space-y-1.5 scroll-hidden"
       >
-        {messages.length === 0 && (
+        {visibleMessages.length === 0 && (
           <div className="text-shugu-cream-dim text-xs text-center py-8 italic leading-relaxed">
             Aucun message pour l&apos;instant.<br />
             Dis bonjour à Shugu ♡
           </div>
         )}
-        {messages.map((m, i) => (
+        {visibleMessages.map((m, i) => (
           <ChatLine key={i} message={m} />
         ))}
       </div>
 
-      {!autoFollow && messages.length > 0 && (
+      {!autoFollow && visibleMessages.length > 0 && (
         <button
           onClick={scrollToBottom}
-          className="mx-3 mb-2 px-3 py-1.5 bg-shugu-pink hover:bg-shugu-pink-glow text-white text-xs font-bold rounded-full shadow-lg shrink-0"
+          className="mx-3 mb-2 px-4 py-1.5 veil-gradient-primary text-white text-xs font-bold rounded-full veil-halo-pink shrink-0 hover:scale-[1.02] transition-transform"
         >
           ↓ nouveaux messages
         </button>
@@ -105,9 +117,14 @@ export function ChatFeed({ messages }: Props) {
     </>
   );
 
+  // Celestial Veil: no 1px solid border — separation via surface gradient +
+  // backdrop blur. The thin inset shadow acts as a "ghost border" at 15% opacity.
   const panelBgStyle = {
-    background: "linear-gradient(180deg, rgba(26,10,32,0.72) 0%, rgba(26,10,32,0.95) 35%)",
-    borderLeft: "1px solid rgba(255,168,185,0.2)",
+    background: "linear-gradient(180deg, rgba(18,18,30,0.78) 0%, rgba(13,13,24,0.95) 35%)",
+    backdropFilter: "blur(20px)",
+    WebkitBackdropFilter: "blur(20px)",
+    boxShadow:
+      "inset 1px 0 0 0 rgba(224,142,254,0.12), -14px 0 40px rgba(224,142,254,0.10)",
   };
 
   if (isDesktop) {
@@ -132,20 +149,20 @@ export function ChatFeed({ messages }: Props) {
           className={[
             "fixed z-40",
             "h-20 w-9 flex flex-col items-center justify-center gap-1",
-            "bg-shugu-pink hover:bg-shugu-pink-glow text-white",
+            "veil-gradient-primary text-white",
             "rounded-l-xl font-bold",
-            "transition-[right,background-color] duration-300 ease-out",
-            "shadow-[0_4px_18px_rgba(255,97,127,0.55)]",
+            "transition-[right] duration-300 ease-out",
+            "veil-halo-pink hover:scale-[1.03]",
           ].join(" ")}
           style={{
             right: open ? "320px" : "0px",
             top: "calc(50vh - 2.5rem)",
           }}
         >
-          <span className="text-base leading-none">💬</span>
+          <span className="text-base leading-none">✦</span>
           <span className="text-sm leading-none font-black">{open ? "›" : "‹"}</span>
           {!open && unread > 0 && (
-            <span className="absolute -top-1 -left-1 min-w-[18px] h-[18px] px-1 rounded-full bg-shugu-live text-white text-[9px] font-bold flex items-center justify-center shadow-md">
+            <span className="absolute -top-1 -left-1 min-w-[18px] h-[18px] px-1 rounded-full veil-gradient-secondary text-white text-[9px] font-bold flex items-center justify-center shadow-md">
               {unread > 99 ? "99+" : unread}
             </span>
           )}
@@ -181,9 +198,9 @@ export function ChatFeed({ messages }: Props) {
         className={[
           "fixed z-30",
           "w-14 h-14 rounded-full",
-          "bg-shugu-pink hover:bg-shugu-pink-glow text-white text-2xl",
+          "veil-gradient-primary text-white text-2xl",
           "flex items-center justify-center",
-          "shadow-[0_6px_22px_rgba(255,97,127,0.55)]",
+          "veil-halo-pink",
           "transition-all duration-300",
           open ? "opacity-0 pointer-events-none scale-75" : "opacity-100 scale-100",
         ].join(" ")}
@@ -192,9 +209,9 @@ export function ChatFeed({ messages }: Props) {
           bottom: "calc(5rem + env(safe-area-inset-bottom, 0px))",
         }}
       >
-        <span>💬</span>
+        <span>✦</span>
         {unread > 0 && (
-          <span className="absolute -top-1 -right-1 min-w-[20px] h-5 px-1.5 rounded-full bg-shugu-live text-white text-[10px] font-bold flex items-center justify-center shadow-md">
+          <span className="absolute -top-1 -right-1 min-w-[20px] h-5 px-1.5 rounded-full veil-gradient-secondary text-white text-[10px] font-bold flex items-center justify-center shadow-md">
             {unread > 99 ? "99+" : unread}
           </span>
         )}
@@ -206,16 +223,18 @@ export function ChatFeed({ messages }: Props) {
 function ChatLine({ message }: { message: Message }) {
   const isShugu = message.role === "assistant";
   return (
-    <div className="animate-fade-up">
+    <div className="animate-fade-up rounded-lg px-2 py-1"
+      style={{ background: isShugu ? "rgba(224,142,254,0.06)" : "rgba(129,236,255,0.04)" }}
+    >
       <div className="flex items-baseline gap-1.5 flex-wrap">
         <span
-          className={`text-[11px] font-bold shrink-0 ${
-            isShugu ? "text-shugu-pink-glow" : "text-shugu-blue"
+          className={`veil-headline text-[10px] uppercase tracking-wider shrink-0 ${
+            isShugu ? "text-veil-primary" : "text-veil-tertiary"
           }`}
         >
-          {isShugu ? "Shugu ♡" : "visiteur"}
+          {isShugu ? "Shugu" : "visiteur"}
         </span>
-        <span className="text-shugu-cream text-[13px] leading-snug break-words">
+        <span className="veil-body text-veil-on-surface text-[13px] leading-snug break-words">
           {message.content}
         </span>
       </div>

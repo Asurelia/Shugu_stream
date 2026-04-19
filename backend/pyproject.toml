@@ -19,6 +19,12 @@ dependencies = [
     "python-ulid>=2.5,<4.0",
     "better-profanity>=0.7,<1.0",
     "structlog>=24.1,<25.0",
+    "edge-tts>=7.0,<8.0",
+    # Voice duplex (phase 5) — STT streaming + VAD. faster-whisper pulls CTranslate2
+    # and a CUDA-capable Torch if GPU is available; CPU-only works on the target VPS.
+    "faster-whisper>=1.0,<2.0",
+    "webrtcvad-wheels>=2.0,<3.0",
+    "numpy>=1.26,<3.0",
 ]
 
 [project.optional-dependencies]

@@ -96,6 +96,18 @@ export class Model {
     });
   }
 
+  /** Streaming variant of `speak`: the audio is already being decoded by the
+   *  browser (MSE). We just set the emotion and wire the media element into
+   *  the lip-sync analyser so per-frame volume still drives the mouth. */
+  public startStreamingSpeak(audio: HTMLAudioElement, screenplay: Screenplay) {
+    if (this.prevPlayedEmotion !== screenplay.expression) {
+      this.emoteController?.playEmotion(screenplay.expression);
+      this.procedural?.triggerEmotion(screenplay.expression as VRMExpressionPresetName);
+      this.prevPlayedEmotion = screenplay.expression;
+    }
+    this._lipSync?.attachMediaElement(audio);
+  }
+
   /**
    * Per-frame update. Called from Viewer.update() with the frame delta AND
    * the viewer-captured cursor NDC (used by the look-at manager).

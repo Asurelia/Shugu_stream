@@ -44,6 +44,60 @@ body.shugu-body {
     box-shadow: 0 8px 24px rgba(255, 97, 127, 0.15);
   }
 
+  /* ─── Celestial Veil utilities ─────────────────────────────────────────
+     Tonal layering + glassmorphism, no solid borders, rose/cyan glows. */
+  .veil-glass {
+    background: linear-gradient(180deg, rgba(30,30,45,0.65), rgba(18,18,30,0.82));
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    box-shadow: 0 10px 34px rgba(224,142,254,0.14),
+                inset 0 0 0 1px rgba(255,255,255,0.035);
+  }
+  .veil-glass-bright {
+    background: linear-gradient(180deg, rgba(43,42,60,0.7), rgba(30,30,45,0.88));
+    backdrop-filter: blur(24px);
+    -webkit-backdrop-filter: blur(24px);
+    box-shadow: 0 14px 44px rgba(224,142,254,0.20),
+                inset 0 0 0 1px rgba(255,255,255,0.04);
+  }
+  .veil-ghost-border {
+    /* 2px soft border for VIP/mod chips — stays on the allowed-border list
+       because it explicitly signals rank. Avoid elsewhere. */
+    box-shadow:
+      0 0 0 2px rgba(253,108,156,0.55),
+      0 0 10px 0 rgba(253,108,156,0.35);
+  }
+  .veil-ghost-border-cyan {
+    box-shadow:
+      0 0 0 2px rgba(129,236,255,0.55),
+      0 0 10px 0 rgba(129,236,255,0.35);
+  }
+  .veil-halo-pink {
+    box-shadow: 0 0 40px rgba(224,142,254,0.35);
+  }
+  .veil-halo-cyan {
+    box-shadow: 0 0 40px rgba(129,236,255,0.28);
+  }
+  .veil-gradient-primary {
+    background-image: linear-gradient(135deg, #e08efe 0%, #d180ef 100%);
+  }
+  .veil-gradient-secondary {
+    background-image: linear-gradient(135deg, #fd6c9c 0%, #e85f8b 100%);
+  }
+  .veil-gradient-tertiary {
+    background-image: linear-gradient(135deg, #81ecff 0%, #5fd4f0 100%);
+  }
+  /* Editorial headline — tight tracking, Plus Jakarta Sans. */
+  .veil-headline {
+    font-family: var(--font-display), 'Plus Jakarta Sans', system-ui, sans-serif;
+    letter-spacing: -0.02em;
+    font-weight: 800;
+  }
+  .veil-body {
+    font-family: var(--font-body), 'Inter', system-ui, sans-serif;
+    letter-spacing: 0;
+  }
+
   .emote-pop {
     animation: emotePop 2200ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
     will-change: transform, opacity;

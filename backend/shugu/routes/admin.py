@@ -120,7 +120,7 @@ async def unban_ip(ip_hash: str, identity: OperatorIdentity = Depends(require_op
 
 @router.get("/stats")
 async def stats(_: OperatorIdentity = Depends(require_operator)):
-    from ..app import get_redis
+    from ..app import get_redis, get_quota
     redis = get_redis()
     pending = await redis.llen("shugu:queue:pending")
     ready = await redis.zcard("shugu:queue:ready")
@@ -136,10 +136,34 @@ async def stats(_: OperatorIdentity = Depends(require_operator)):
                 Visitor.ban_until > datetime.now(tz=timezone.utc)
             )
         )).scalar_one()
+    quota_snapshot = await get_quota().snapshot()
     return {
         "queue_pending": pending,
         "queue_ready": ready,
         "performances_total": total_perf,
         "performances_last_24h": last_24h,
         "active_bans": active_bans,
+        "quota": quota_snapshot,
+    }
+
+
+@router.get("/quota")
+async def quota_snapshot(_: OperatorIdentity = Depends(require_operator)):
+    """Daily TTS character budget + 5h LLM request budget, per current plan."""
+    from ..app import get_quota
+    return await get_quota().snapshot()
+
+
+@router.get("/metrics")
+async def metrics_snapshot(_: OperatorIdentity = Depends(require_operator)):
+    """In-memory observability snapshot: rate-limit usage per tool +
+    per-minute event rates + TTS TTFB percentiles + interrupt counters."""
+    from ..app import get_metrics, get_rate_limiter, get_redis
+    redis = get_redis()
+    pending = await redis.llen("shugu:queue:pending")
+    ready = await redis.zcard("shugu:queue:ready")
+    return {
+        "queue": {"pending": pending, "ready": ready},
+        "rate_limits": get_rate_limiter().snapshot(),
+        "metrics": get_metrics().snapshot(),
     }

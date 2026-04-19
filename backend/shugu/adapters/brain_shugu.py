@@ -1,7 +1,15 @@
 """Shugu persona brain — MiniMax via OpenAI-compatible API.
 
 Contract: stateless chat completion with Shugu's system prompt.
-Strips `<think>...</think>` reasoning blocks from MiniMax output.
+
+MiniMax-M2 guidance (from the official model card / tool_calling_guide):
+  • Recommended sampling params: temperature=1.0, top_p=0.95, top_k=40.
+    Using lower temps (e.g. 0.7) rigidifies the persona and tends to make
+    responses bland — keep close to the card's numbers.
+  • `<think>...</think>` blocks must be **preserved in conversation history**
+    on replay, otherwise subsequent responses degrade. We strip them only at
+    the very last moment (before TTS/display), not inside `respond()`, so
+    PrepWorker stores the thinking in history untouched.
 """
 from __future__ import annotations
 
@@ -21,6 +29,11 @@ _THINK_RE = re.compile(r"<think>.*?</think>\s*", re.DOTALL)
 
 
 def strip_think(text: str) -> str:
+    """Drop `<think>...</think>` blocks from a completion.
+
+    Only call this when you're about to *display* or *synthesize* the text.
+    Never call it before appending to conversation history — MiniMax requires
+    thinking blocks to stay in the rollup for quality."""
     return _THINK_RE.sub("", text).strip()
 
 
@@ -54,9 +67,11 @@ class ShuguPersonaBrain(BrainAdapter):
             "model": self._settings.minimax_model,
             "messages": messages,
             "max_tokens": 400,
-            "temperature": 0.8,
-            "stream": False,   # v1: non-streaming; we need the full text anyway for
-                               # <think> stripping + emotion tag extraction before TTS.
+            # Model-card recommended sampling; lower temps drain personality.
+            "temperature": 1.0,
+            "top_p": 0.95,
+            "top_k": 40,
+            "stream": False,   # v1: non-streaming; full text needed for tag extraction.
         }
         try:
             resp = await self._http.post(
@@ -72,9 +87,10 @@ class ShuguPersonaBrain(BrainAdapter):
         except json.JSONDecodeError as exc:
             raise BrainError(f"minimax: invalid json ({exc})") from exc
 
-        text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
-        text = strip_think(text)
-        if not text:
-            raise BrainError("minimax: empty response")
+        raw = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+        # Do NOT strip <think> here — the PrepWorker keeps the raw version in
+        # history (MiniMax guidance) and only strips before TTS.
+        if not strip_think(raw):
+            raise BrainError("minimax: empty response (after think-strip)")
 
-        yield BrainDelta(text=text, done=True)
+        yield BrainDelta(text=raw, done=True)

@@ -2,16 +2,16 @@ export function Brand() {
   return (
     <div className="fixed top-4 left-4 z-20 select-none pointer-events-none">
       <div
-        className="font-comfortaa font-bold text-lg sm:text-xl text-shugu-cream flex items-center gap-1 sm:gap-1.5"
-        style={{ textShadow: "0 2px 10px rgba(255, 97, 127, 0.45)" }}
+        className="veil-headline text-xl sm:text-2xl text-shugu-cream flex items-center gap-1.5 sm:gap-2"
+        style={{ textShadow: "0 2px 14px rgba(224, 142, 254, 0.55)" }}
       >
-        <span className="text-shugu-pink text-base sm:text-lg">🌸</span>
-        <span className="bg-gradient-to-r from-shugu-pink-soft via-shugu-cream to-shugu-lavender bg-clip-text text-transparent">
+        <span className="text-veil-primary text-base sm:text-lg animate-veil-pulse-glow rounded-full">✦</span>
+        <span className="bg-gradient-to-r from-veil-primary via-veil-tertiary to-veil-primary-container bg-clip-text text-transparent">
           Shugu
         </span>
       </div>
-      <div className="hidden sm:block text-shugu-cream-dim text-[10px] mt-0.5 tracking-wide">
-        ♡ AI VTuber live
+      <div className="hidden sm:block veil-body text-veil-on-surface-variant text-[10px] mt-0.5 tracking-[0.15em] uppercase">
+        AI VTuber · live
       </div>
     </div>
   );

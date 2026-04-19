@@ -32,3 +32,6 @@ Thumbs.db
 # ── Logs / tmp ─────────────────────────────────────────────────────────
 *.log
 tmp/
+
+# ── shugustream CLI state (PIDs + captured logs) ───────────────────────
+.shugustream/

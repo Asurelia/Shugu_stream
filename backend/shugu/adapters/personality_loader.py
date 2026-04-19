@@ -8,8 +8,6 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Literal
-
 from ..core.protocols import PersonalityDoc
 
 
@@ -45,7 +43,7 @@ class MarkdownPersonalityLoader:
     def _path(self, persona: str) -> Path:
         return self._dir / f"{persona}.md"
 
-    def get(self, persona: Literal["shugu", "filter"]) -> PersonalityDoc:
+    def get(self, persona: str) -> PersonalityDoc:
         import time
         now = time.monotonic()
         if persona in self._cache and (now - self._last_check.get(persona, 0)) < self._poll:
