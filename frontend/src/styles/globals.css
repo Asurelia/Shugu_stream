@@ -102,6 +102,76 @@ body.shugu-body {
     animation: emotePop 2200ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
     will-change: transform, opacity;
   }
+
+  /* ─── Celestial Veil (Stitch mockup) ─────────────────────────────
+     Panel glass signature + marques "+" aux quatre coins. */
+  .glass-panel {
+    background: rgba(10, 10, 15, 0.15);
+    backdrop-filter: blur(24px);
+    -webkit-backdrop-filter: blur(24px);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 1rem;
+    box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.5);
+    position: relative;
+  }
+  .glass-panel::before,
+  .glass-panel::after {
+    content: "+";
+    position: absolute;
+    color: rgba(255, 255, 255, 0.3);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 14px;
+    line-height: 1;
+  }
+  .glass-panel::before { top: 8px; left: 8px; }
+  .glass-panel::after  { top: 8px; right: 8px; }
+
+  .glow-purple { text-shadow: 0 0 12px rgba(181, 133, 255, 0.8); }
+  .glow-pink   { text-shadow: 0 0 8px  rgba(232, 121, 249, 0.8); }
+  .glow-cyan   { text-shadow: 0 0 8px  rgba(34,  211, 238, 0.8); }
+
+  /* Crosshairs décoratifs (coins du viewport). */
+  .crosshair {
+    position: fixed;
+    width: 15px;
+    height: 15px;
+    border-color: rgba(255, 255, 255, 0.3);
+    pointer-events: none;
+    z-index: 15;
+  }
+  .ch-tl { top: 20px;    left: 20px;  border-top: 1px solid;    border-left: 1px solid; }
+  .ch-tr { top: 20px;    right: 20px; border-top: 1px solid;    border-right: 1px solid; }
+  .ch-bl { bottom: 20px; left: 20px;  border-bottom: 1px solid; border-left: 1px solid; }
+  .ch-br { bottom: 20px; right: 20px; border-bottom: 1px solid; border-right: 1px solid; }
+
+  .tech-label {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.65rem;
+    color: rgba(255, 255, 255, 0.5);
+    letter-spacing: 0.05em;
+  }
+
+  /* Nebula background (dégradé radial sombre centré). */
+  .nebula-bg {
+    background: radial-gradient(circle at center, #1a1a2e 0%, #0a0a0f 100%);
+    overflow: hidden;
+  }
+
+  /* Scrollbar subtil. */
+  .custom-scrollbar::-webkit-scrollbar        { width: 4px; }
+  .custom-scrollbar::-webkit-scrollbar-track  { background: transparent; }
+  .custom-scrollbar::-webkit-scrollbar-thumb  {
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 10px;
+  }
+
+  @keyframes subtle-float {
+    0%, 100% { transform: translateY(0); }
+    50%      { transform: translateY(-10px); }
+  }
+  .animate-subtle-float {
+    animation: subtle-float 6s ease-in-out infinite;
+  }
 }
 
 @keyframes emotePop {

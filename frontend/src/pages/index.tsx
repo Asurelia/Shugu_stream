@@ -9,17 +9,17 @@ import {
   base64ChunkToUint8,
 } from "@/features/messages/audioStreamer";
 import { Meta } from "@/components/meta";
-import { Brand } from "@/components/Brand";
-import { LiveHUD } from "@/components/LiveHUD";
+import { OverlayHeader } from "@/components/OverlayHeader";
+import { SupportersRail } from "@/components/SupportersRail";
+import { SubGoalBar } from "@/components/SubGoalBar";
 import { VisitorLogin } from "@/components/VisitorLogin";
-import { ChatInput } from "@/components/ChatInput";
 import { ChatFeed } from "@/components/ChatFeed";
 import { SpeakingRing } from "@/components/SpeakingRing";
 import { LoadingScreen } from "@/components/LoadingScreen";
 import { Sparkles } from "@/components/Sparkles";
-import { OperatorPanel, Mode } from "@/components/OperatorPanel";
 import { OperatorVoicePanel } from "@/components/OperatorVoicePanel";
 import { EmoteOverlay, EmoteOverlayHandle } from "@/components/EmoteOverlay";
+import { Mode } from "@/components/OperatorPanel";
 import { SceneManager } from "@/features/scenes/SceneManager";
 import { VirtualDesktop } from "@/features/desktop/VirtualDesktop";
 import { useDesktopState, WindowKind } from "@/features/desktop/desktopState";
@@ -67,6 +67,21 @@ export default function Home() {
   const [authLoaded, setAuthLoaded] = useState(false);
   const [mode, setMode] = useState<Mode>("shugu");
   const [pendingHermes, setPendingHermes] = useState(false);
+
+  // Override le fond body.shugu-body (dégradé rose) par un nebula radial sombre
+  // pour matcher le mockup Stitch. SceneManager peut encore réécrire
+  // `document.body.style.background` plus tard; cet effet ne pose que le fond
+  // "au repos" et restaure la classe shugu-body en démontage.
+  useEffect(() => {
+    const prev = document.body.style.background;
+    document.body.style.background =
+      "radial-gradient(circle at center, #1a1a2e 0%, #0a0a0f 100%)";
+    document.body.style.animation = "none";
+    return () => {
+      document.body.style.background = prev;
+      document.body.style.animation = "";
+    };
+  }, []);
 
   const [connStatus, setConnStatus] = useState<ConnStatus>("connecting");
   const [chatLog, setChatLog] = useState<Message[]>([]);
@@ -400,42 +415,45 @@ export default function Home() {
 
       {!avatarLoaded && <LoadingScreen />}
 
-      <Brand />
-      <LiveHUD
+      <OverlayHeader
         connStatus={connStatus}
         viewerCount={viewerCount}
         speaking={speaking}
+        operatorUsername={operator?.username}
       />
-      {!operator && <VisitorLogin />}
 
-      {operator && (
-        <OperatorPanel
-          username={operator.username}
-          mode={mode}
-          onModeChange={setMode}
-          pendingHermesTask={pendingHermes}
-          debugCaptions={debugCaptions}
-          onDebugCaptionsChange={handleDebugCaptionsChange}
-        />
-      )}
+      {/* Crosshairs décoratifs aux 4 coins du viewport (signature Stitch). */}
+      <div className="crosshair ch-tl" />
+      <div className="crosshair ch-tr" />
+      <div className="crosshair ch-bl" />
+      <div className="crosshair ch-br" />
+
+      {/* Tech labels monospace — tirés du mockup pour l'ambiance 3D-tracker. */}
+      <div className="fixed top-24 left-8 tech-label z-10 pointer-events-none hidden md:block">
+        X: 184.5 Y: 228.1<br />Z: 80.8
+      </div>
+      <div className="fixed top-24 right-8 tech-label z-10 pointer-events-none hidden md:block text-right">
+        X: 104.5 Y: 220.1<br />Z: 60.8
+      </div>
+      <div className="fixed bottom-8 right-8 tech-label z-10 pointer-events-none hidden md:block text-right">
+        STATUS: {connStatus === "open" ? "ACTIVE" : connStatus.toUpperCase()}
+      </div>
+
+      <SupportersRail />
+      <SubGoalBar />
+
+      {!operator && <VisitorLogin />}
 
       <OperatorVoicePanel enabled={!!operator} />
 
-      <ChatFeed messages={chatLog} showAssistant={!!operator && debugCaptions} />
-
-      <VirtualDesktop />
-
-      {notice && (
-        <div className="fixed top-[5.5rem] sm:top-24 right-4 md:right-[340px] z-20 animate-fade-up bg-shugu-live/90 text-white px-4 py-2 rounded-full text-xs sm:text-sm shadow-lg max-w-xs font-semibold">
-          ✕ {notice}
-        </div>
-      )}
-
-      <ChatInput
-        value={inputValue}
-        onChange={setInputValue}
+      <ChatFeed
+        messages={chatLog}
+        showAssistant={!!operator && debugCaptions}
+        viewerCount={viewerCount}
+        inputValue={inputValue}
+        onInputChange={setInputValue}
         onSubmit={handleSubmit}
-        disabled={connStatus !== "open"}
+        inputDisabled={connStatus !== "open"}
         hermesMode={!!operator && mode === "hermes"}
         voice={operator && voice.supported ? {
           supported: voice.supported,
@@ -445,6 +463,14 @@ export default function Home() {
           stop: voice.stop,
         } : undefined}
       />
+
+      <VirtualDesktop />
+
+      {notice && (
+        <div className="fixed top-[5.5rem] sm:top-24 right-[360px] z-20 animate-fade-up bg-shugu-live/90 text-white px-4 py-2 rounded-full text-xs sm:text-sm shadow-lg max-w-xs font-semibold">
+          ✕ {notice}
+        </div>
+      )}
     </div>
   );
 }

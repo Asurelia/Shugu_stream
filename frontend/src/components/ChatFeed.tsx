@@ -1,28 +1,61 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { Message } from "@/features/messages/messages";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 
 /**
- * Twitch-style chat panel.
+ * Rail chat droit — port direct du mockup Stitch `vtuber_immersive_room_overlay`.
  *
- * Desktop (≥768px): persistent 320px sidebar on the right. A pill toggle FAB on
- *   the panel's left edge slides it in/out.
- * Mobile  (<768px): hidden by default. A floating bubble FAB in the bottom-right
- *   opens a full-height drawer (85vw).
+ *   ┌─ + ─────── LIVE COMMUNITY ───── + ─┐
+ *   │  ✦ CyberMod_Alpha                  │   glyph + pseudo coloré par rang
+ *   │  Welcome to the stream everyone…   │
+ *   │  ★ Lunar_Glow                      │
+ *   │  The character model looks…        │
+ *   │  ─────────────────────────────     │
+ *   │  ( Send a message…              )  │   input rounded-full
+ *   └────────────────────────────────────┘
  *
- * `showAssistant` (default false): visitors never see Shugu's own messages —
- * her voice carries them. The operator can flip the debug-captions toggle in
- * OperatorPanel to render them for developer visibility.
+ * Glyphes par rang (copiés du HTML fourni) :
+ *  - ✦ rose-400  → MOD
+ *  - ★ blue-400  → SUB / VIP
+ *  - 👑 yellow-500 → King / top-donator
+ *  - aucun glyph, gray-400 → simple viewer
+ *
+ * `showAssistant` : les visiteurs ne voient pas les messages de Shugu.
  */
+
+type VoiceProps = {
+  supported: boolean;
+  listening: boolean;
+  interim: string;
+  start: () => void;
+  stop: () => void;
+};
 
 type Props = {
   messages: Message[];
   showAssistant?: boolean;
+  viewerCount?: number;
+  inputValue: string;
+  onInputChange: (v: string) => void;
+  onSubmit: (e: FormEvent) => void;
+  inputDisabled: boolean;
+  hermesMode?: boolean;
+  voice?: VoiceProps;
 };
 
 const DESKTOP_QUERY = "(min-width: 768px)";
 
-export function ChatFeed({ messages, showAssistant = false }: Props) {
+// Palette de rangs — chaque entrée = glyph + couleur username.
+// Ajouter un rang : new row ici, zéro JSX à toucher.
+const ROLE_STYLES = {
+  assistant: { label: "Shugu",   glyph: "✦", glyphClass: "text-celestial-pink",   nameClass: "text-celestial-pink" },
+  user:      { label: "viewer",  glyph: "",  glyphClass: "",                      nameClass: "text-gray-400"       },
+} as const;
+
+export function ChatFeed({
+  messages, showAssistant = false, viewerCount,
+  inputValue, onInputChange, onSubmit, inputDisabled, hermesMode, voice,
+}: Props) {
   const isDesktop = useMediaQuery(DESKTOP_QUERY, true);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const visibleMessages = useMemo(
@@ -34,9 +67,7 @@ export function ChatFeed({ messages, showAssistant = false }: Props) {
   const [open, setOpen] = useState(true);
   const [unread, setUnread] = useState(0);
 
-  useEffect(() => {
-    setOpen(isDesktop);
-  }, [isDesktop]);
+  useEffect(() => { setOpen(isDesktop); }, [isDesktop]);
 
   useEffect(() => {
     if (open) {
@@ -58,111 +89,158 @@ export function ChatFeed({ messages, showAssistant = false }: Props) {
     setAutoFollow(nearBottom);
   };
 
-  const scrollToBottom = () => {
-    const el = scrollRef.current;
-    if (!el) return;
-    setAutoFollow(true);
-    el.scrollTop = el.scrollHeight;
-  };
+  const placeholder = voice?.listening
+    ? (voice.interim ? `✦ « ${voice.interim} »` : "✦ écoute…")
+    : (hermesMode ? "⚡ commande Hermes…" : "Send a message…");
 
-  const content = (
-    <>
-      <header
-        className="px-4 py-2.5 flex items-center justify-between shrink-0"
-        style={{ background: "linear-gradient(90deg, rgba(224,142,254,0.10) 0%, rgba(129,236,255,0.05) 100%)" }}
-      >
-        <span className="veil-headline text-xs text-veil-primary tracking-[0.12em] uppercase">
-          ✦ Chat
-        </span>
-        <div className="flex items-center gap-2">
-          <span className="veil-body text-[10px] text-veil-on-surface-variant">
-            {visibleMessages.length > 0 ? `${visibleMessages.length} msg` : "—"}
-          </span>
-          {!isDesktop && (
+  const inputEl = (
+    <form onSubmit={onSubmit} className="p-4">
+      <div className="relative flex items-center">
+        <input
+          type="text"
+          value={voice?.listening ? voice.interim : inputValue}
+          onChange={(e) => onInputChange(e.target.value)}
+          placeholder={placeholder}
+          maxLength={hermesMode ? 2000 : 500}
+          disabled={inputDisabled || !!voice?.listening}
+          aria-label="message"
+          className="w-full bg-white/5 border border-white/10 rounded-full py-3 pl-6 pr-20 text-sm focus:outline-none focus:ring-1 focus:ring-celestial-purple placeholder:text-gray-500 text-white veil-body"
+        />
+        <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1">
+          {voice?.supported && (
             <button
-              onClick={() => setOpen(false)}
-              aria-label="fermer le chat"
-              className="w-7 h-7 rounded-full bg-shugu-ink-soft/80 hover:bg-shugu-ink-soft text-shugu-cream-dim hover:text-shugu-cream flex items-center justify-center text-sm"
+              type="button"
+              onClick={voice.listening ? voice.stop : voice.start}
+              disabled={inputDisabled}
+              title={voice.listening ? "arrêter" : "parler"}
+              className={[
+                "w-8 h-8 rounded-full flex items-center justify-center text-xs transition-all",
+                voice.listening
+                  ? "bg-gradient-to-r from-[#b585ff] to-[#e879f9] text-black animate-pulse"
+                  : "text-gray-400 hover:text-celestial-pink hover:bg-white/5",
+              ].join(" ")}
             >
-              ×
+              {voice.listening ? "●" : "◉"}
             </button>
           )}
+          <button
+            type="submit"
+            disabled={!inputValue.trim() || inputDisabled || !!voice?.listening}
+            aria-label="envoyer"
+            className="w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold bg-gradient-to-r from-[#b585ff] to-[#e879f9] text-black hover:scale-105 transition-transform disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:scale-100"
+          >
+            {hermesMode ? "⚡" : "→"}
+          </button>
         </div>
-      </header>
+      </div>
+    </form>
+  );
 
+  const chatBody = (
+    <div className="glass-panel flex-grow flex flex-col overflow-hidden">
+      {/* Header chat */}
+      <div className="p-4 border-b border-white/10 flex items-center justify-between">
+        <div className="flex items-center space-x-2.5">
+          <span className="w-1.5 h-1.5 rounded-full bg-celestial-pink animate-live-pulse" />
+          <h2 className="text-xs uppercase tracking-[0.2em] font-bold text-gray-300">
+            Live Community
+          </h2>
+        </div>
+        {typeof viewerCount === "number" && viewerCount > 0 && (
+          <span className="tech-label">
+            {viewerCount.toLocaleString("fr-FR")} viewers
+          </span>
+        )}
+        {!isDesktop && (
+          <button
+            onClick={() => setOpen(false)}
+            aria-label="fermer le chat"
+            className="w-7 h-7 rounded-full text-gray-400 hover:text-white flex items-center justify-center text-sm"
+          >
+            ×
+          </button>
+        )}
+      </div>
+
+      {/* Messages */}
       <div
         ref={scrollRef}
         onScroll={onScroll}
-        className="flex-1 min-h-0 overflow-y-auto px-3 py-2 space-y-1.5 scroll-hidden"
+        className="flex-grow min-h-0 p-4 space-y-5 overflow-y-auto custom-scrollbar"
       >
         {visibleMessages.length === 0 && (
-          <div className="text-shugu-cream-dim text-xs text-center py-8 italic leading-relaxed">
+          <div className="text-gray-500 text-xs text-center py-10 italic leading-relaxed">
             Aucun message pour l&apos;instant.<br />
-            Dis bonjour à Shugu ♡
+            Dis bonjour à Shugu ✦
           </div>
         )}
         {visibleMessages.map((m, i) => (
-          <ChatLine key={i} message={m} />
+          <ChatMessage key={i} message={m} />
         ))}
       </div>
 
       {!autoFollow && visibleMessages.length > 0 && (
         <button
-          onClick={scrollToBottom}
-          className="mx-3 mb-2 px-4 py-1.5 veil-gradient-primary text-white text-xs font-bold rounded-full veil-halo-pink shrink-0 hover:scale-[1.02] transition-transform"
+          onClick={() => {
+            const el = scrollRef.current;
+            if (!el) return;
+            setAutoFollow(true);
+            el.scrollTop = el.scrollHeight;
+          }}
+          className="mx-4 mb-1 px-4 py-1.5 bg-gradient-to-r from-[#b585ff] to-[#e879f9] text-black text-[11px] font-bold rounded-full shrink-0 hover:scale-[1.02] transition-transform"
         >
           ↓ nouveaux messages
         </button>
       )}
-    </>
-  );
 
-  // Celestial Veil: no 1px solid border — separation via surface gradient +
-  // backdrop blur. The thin inset shadow acts as a "ghost border" at 15% opacity.
-  const panelBgStyle = {
-    background: "linear-gradient(180deg, rgba(18,18,30,0.78) 0%, rgba(13,13,24,0.95) 35%)",
-    backdropFilter: "blur(20px)",
-    WebkitBackdropFilter: "blur(20px)",
-    boxShadow:
-      "inset 1px 0 0 0 rgba(224,142,254,0.12), -14px 0 40px rgba(224,142,254,0.10)",
-  };
+      {inputEl}
+    </div>
+  );
 
   if (isDesktop) {
     return (
       <>
         <aside
           className={[
-            "fixed top-20 right-0 z-30 font-quicksand flex flex-col",
-            "w-[320px] h-[calc(100vh-5rem)]",
+            "fixed right-8 top-24 bottom-12 w-80 flex flex-col z-20",
             "transition-transform duration-300 ease-out",
-            open ? "translate-x-0" : "translate-x-full",
+            open ? "translate-x-0" : "translate-x-[calc(100%+2rem)]",
           ].join(" ")}
-          style={panelBgStyle}
         >
-          {content}
+          {chatBody}
         </aside>
 
+        {/* Handle rétractable — ancré au bord droit du viewport (right:0 quand
+            fermé, aligné sur le bord gauche du rail quand ouvert). On fige
+            `top` à 50vh - 3rem (hauteur/2) au lieu d'utiliser translate, pour
+            que `hover:brightness` ne casse pas le positioning. Transition
+            limitée à `right` → pas d'effet de bord sur le hover. */}
         <button
           onClick={() => setOpen((v) => !v)}
           aria-label={open ? "masquer le chat" : "afficher le chat"}
           title={open ? "masquer le chat" : "afficher le chat"}
           className={[
-            "fixed z-40",
-            "h-20 w-9 flex flex-col items-center justify-center gap-1",
-            "veil-gradient-primary text-white",
-            "rounded-l-xl font-bold",
-            "transition-[right] duration-300 ease-out",
-            "veil-halo-pink hover:scale-[1.03]",
+            "fixed z-40 flex flex-col items-center justify-center gap-1",
+            "w-10 h-24 rounded-l-xl",
+            "bg-gradient-to-b from-[#b585ff] to-[#e879f9] text-black",
+            "hover:brightness-110",
+            "shadow-[0_8px_24px_rgba(181,133,255,0.45)]",
           ].join(" ")}
           style={{
-            right: open ? "320px" : "0px",
-            top: "calc(50vh - 2.5rem)",
+            right: open ? "352px" : "0px",
+            top: "calc(50vh - 3rem)",
+            transition: "right 300ms ease-out, filter 150ms",
           }}
         >
-          <span className="text-base leading-none">✦</span>
-          <span className="text-sm leading-none font-black">{open ? "›" : "‹"}</span>
+          <span className="text-base font-bold leading-none">{open ? "›" : "‹"}</span>
+          <span
+            className="text-[10px] leading-none font-bold tracking-[0.3em]"
+            style={{ writingMode: "vertical-rl" }}
+          >
+            CHAT
+          </span>
           {!open && unread > 0 && (
-            <span className="absolute -top-1 -left-1 min-w-[18px] h-[18px] px-1 rounded-full veil-gradient-secondary text-white text-[9px] font-bold flex items-center justify-center shadow-md">
+            <span className="absolute -top-1.5 -left-1.5 min-w-[18px] h-[18px] px-1 rounded-full bg-celestial-pink text-white text-[9px] font-bold flex items-center justify-center shadow-md">
               {unread > 99 ? "99+" : unread}
             </span>
           )}
@@ -175,43 +253,39 @@ export function ChatFeed({ messages, showAssistant = false }: Props) {
     <>
       {open && (
         <div
-          className="fixed inset-0 z-30 bg-black/45 backdrop-blur-sm animate-fade-up"
+          className="fixed inset-0 z-30 bg-black/55 backdrop-blur-sm animate-fade-up"
           onClick={() => setOpen(false)}
         />
       )}
-
       <aside
         className={[
-          "fixed top-0 right-0 z-40 font-quicksand flex flex-col",
-          "w-[85vw] max-w-[360px] h-full",
+          "fixed top-20 right-4 bottom-4 z-40 flex flex-col",
+          "w-[86vw] max-w-[360px]",
           "transition-transform duration-300 ease-out",
           open ? "translate-x-0" : "translate-x-full",
         ].join(" ")}
-        style={panelBgStyle}
       >
-        {content}
+        {chatBody}
       </aside>
 
       <button
         onClick={() => setOpen(true)}
         aria-label="afficher le chat"
         className={[
-          "fixed z-30",
-          "w-14 h-14 rounded-full",
-          "veil-gradient-primary text-white text-2xl",
-          "flex items-center justify-center",
-          "veil-halo-pink",
+          "fixed z-30 w-14 h-14 rounded-full",
+          "bg-gradient-to-r from-[#b585ff] to-[#e879f9] text-black text-2xl",
+          "flex items-center justify-center shadow-lg",
           "transition-all duration-300",
           open ? "opacity-0 pointer-events-none scale-75" : "opacity-100 scale-100",
         ].join(" ")}
         style={{
           right: "1rem",
-          bottom: "calc(5rem + env(safe-area-inset-bottom, 0px))",
+          bottom: "calc(1.25rem + env(safe-area-inset-bottom, 0px))",
         }}
       >
         <span>✦</span>
         {unread > 0 && (
-          <span className="absolute -top-1 -right-1 min-w-[20px] h-5 px-1.5 rounded-full veil-gradient-secondary text-white text-[10px] font-bold flex items-center justify-center shadow-md">
+          <span className="absolute -top-1 -right-1 min-w-[20px] h-5 px-1.5 rounded-full bg-celestial-pink text-black text-[10px] font-bold flex items-center justify-center shadow-md">
             {unread > 99 ? "99+" : unread}
           </span>
         )}
@@ -220,24 +294,28 @@ export function ChatFeed({ messages, showAssistant = false }: Props) {
   );
 }
 
-function ChatLine({ message }: { message: Message }) {
-  const isShugu = message.role === "assistant";
+/**
+ * Message : glyph coloré + username bold ligne 1, puis texte sur ligne 2.
+ * (Aucun conteneur de bulle, aucun avatar — aligné avec le HTML Stitch.)
+ */
+function ChatMessage({ message }: { message: Message }) {
+  const role = message.role === "assistant" ? "assistant" : "user";
+  const style = ROLE_STYLES[role];
   return (
-    <div className="animate-fade-up rounded-lg px-2 py-1"
-      style={{ background: isShugu ? "rgba(224,142,254,0.06)" : "rgba(129,236,255,0.04)" }}
-    >
-      <div className="flex items-baseline gap-1.5 flex-wrap">
-        <span
-          className={`veil-headline text-[10px] uppercase tracking-wider shrink-0 ${
-            isShugu ? "text-veil-primary" : "text-veil-tertiary"
-          }`}
-        >
-          {isShugu ? "Shugu" : "visiteur"}
-        </span>
-        <span className="veil-body text-veil-on-surface text-[13px] leading-snug break-words">
-          {message.content}
+    <div className="group animate-fade-up">
+      <div className="flex items-center space-x-2 mb-1">
+        {style.glyph && (
+          <span className={`text-[10px] font-bold ${style.glyphClass}`}>
+            {style.glyph}
+          </span>
+        )}
+        <span className={`text-xs font-bold ${style.nameClass}`}>
+          {style.label}
         </span>
       </div>
+      <p className="text-sm text-gray-200 leading-relaxed break-words m-0">
+        {message.content}
+      </p>
     </div>
   );
 }

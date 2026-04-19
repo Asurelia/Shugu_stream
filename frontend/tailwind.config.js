@@ -30,6 +30,62 @@ module.exports = {
       xl: "1280px",
       "2xl": "1536px",
     },
+    // Restore le scale `spacing` standard Tailwind. Charcoal redéfinit
+    // `spacing` en valeurs pixel directes (0→0, 4→4px, 8→8px, 16→16px, etc.)
+    // ce qui casse TOUT `h-16` / `top-24` / `bottom-12` / `space-x-6` en les
+    // rendant soit minuscules soit ignorés. On remet le scale par défaut de
+    // Tailwind ici — indispensable dès qu'on écrit des layouts modernes.
+    //
+    // Note : Charcoal redéfinit AUSSI `width` / `height` / `padding` / `margin`
+    // à côté de `spacing`. Les override ci-dessous (dans le même theme root)
+    // restaurent la dérivation standard depuis `spacing`.
+    width:   (t) => ({ auto: "auto", full: "100%", screen: "100vw", min: "min-content", max: "max-content", fit: "fit-content", ...t("spacing") }),
+    height:  (t) => ({ auto: "auto", full: "100%", screen: "100vh", svh: "100svh", dvh: "100dvh", min: "min-content", max: "max-content", fit: "fit-content", ...t("spacing") }),
+    minWidth:  (t) => ({ 0: "0px", full: "100%", min: "min-content", max: "max-content", fit: "fit-content", ...t("spacing") }),
+    minHeight: (t) => ({ 0: "0px", full: "100%", svh: "100svh", screen: "100vh", min: "min-content", max: "max-content", fit: "fit-content", ...t("spacing") }),
+    maxWidth:  (t) => ({ none: "none", xs: "20rem", sm: "24rem", md: "28rem", lg: "32rem", xl: "36rem", "2xl": "42rem", "3xl": "48rem", "4xl": "56rem", "5xl": "64rem", "6xl": "72rem", "7xl": "80rem", full: "100%", screen: "100vw", prose: "65ch", ...t("spacing") }),
+    maxHeight: (t) => ({ none: "none", full: "100%", screen: "100vh", svh: "100svh", ...t("spacing") }),
+    padding: (t) => t("spacing"),
+    margin:  (t) => ({ auto: "auto", ...t("spacing"), ...Object.fromEntries(Object.entries(t("spacing")).filter(([k]) => k !== "px" && k !== "0").map(([k, v]) => ["-" + k, `-${v}`])) }),
+    inset:   (t) => ({ auto: "auto", full: "100%", ...t("spacing") }),
+    gap:     (t) => t("spacing"),
+    spacing: {
+      px: "1px",
+      0: "0px",
+      0.5: "0.125rem",
+      1: "0.25rem",
+      1.5: "0.375rem",
+      2: "0.5rem",
+      2.5: "0.625rem",
+      3: "0.75rem",
+      3.5: "0.875rem",
+      4: "1rem",
+      5: "1.25rem",
+      6: "1.5rem",
+      7: "1.75rem",
+      8: "2rem",
+      9: "2.25rem",
+      10: "2.5rem",
+      11: "2.75rem",
+      12: "3rem",
+      14: "3.5rem",
+      16: "4rem",
+      20: "5rem",
+      24: "6rem",
+      28: "7rem",
+      32: "8rem",
+      36: "9rem",
+      40: "10rem",
+      44: "11rem",
+      48: "12rem",
+      52: "13rem",
+      56: "14rem",
+      60: "15rem",
+      64: "16rem",
+      72: "18rem",
+      80: "20rem",
+      96: "24rem",
+    },
     extend: {
       colors: {
         shugu: {
@@ -45,6 +101,12 @@ module.exports = {
           "ink-soft": "#2A1437",
           "ink-card": "rgba(42, 20, 55, 0.72)",
           live: "#FF3B5C",
+        },
+        // Celestial Veil — palette officielle (alignée sur le HTML Stitch).
+        celestial: {
+          purple:  "#b585ff",
+          pink:    "#e879f9",
+          overlay: "#0a0a0f",
         },
         // Celestial Veil design system — "Luminous Etherealism".
         // Surface hierarchy: stacked frosted-glass layers, darker → lighter.

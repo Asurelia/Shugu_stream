@@ -23,12 +23,18 @@ export class Viewer {
   private _scene: THREE.Scene;
   private _camera?: THREE.PerspectiveCamera;
   private _cameraControls?: OrbitControls;
-  private _cameraBase = new THREE.Vector3(0, 1.35, 1.2);
-  private _cameraBaseTarget = new THREE.Vector3(0, 1.35, 1.2);
-  private _lookAtCurrent = new THREE.Vector3(0, 1.3, 0);
-  private _lookAtTarget = new THREE.Vector3(0, 1.3, 0);
-  private _fovCurrent = 20;
-  private _fovTarget = 20;
+  // Celestial Veil framing: plan tête→genoux équilibré. FOV 26° à Z=2.8 donne
+  // ~1.29m de hauteur visible, centre à la poitrine (tête - 0.30m). Offset
+  // choisi pour laisser ~35cm de marge au-dessus de la tête (libère le header
+  // fixé h-16 + backdrop-blur) tout en gardant les genoux dans le cadre.
+  private _cameraBase = new THREE.Vector3(0, 1.2, 2.8);
+  private _cameraBaseTarget = new THREE.Vector3(0, 1.2, 2.8);
+  private _lookAtCurrent = new THREE.Vector3(0, 1.2, 0);
+  private _lookAtTarget = new THREE.Vector3(0, 1.2, 0);
+  private _fovCurrent = 26;
+  private _fovTarget = 26;
+  // Décalage vertical du centre de cadrage par rapport à la tête. -0.30m = poitrine.
+  private _cameraHeadOffset = -0.30;
   private _sceneLerpRate = 2.0;   // per-second lerp rate toward scene targets (~500ms settle)
   private _cinematicTime = 0;
 
@@ -114,13 +120,13 @@ export class Viewer {
     this._renderer.setSize(width, height);
     this._renderer.setPixelRatio(window.devicePixelRatio);
 
-    // Portrait framing — closer than ChatVRM default (1.5). Shugu occupies more
-    // of the frame, typical for a VTuber stream cadrage.
-    this._camera = new THREE.PerspectiveCamera(20.0, width / height, 0.1, 20.0);
+    // Celestial Veil framing — plan 3/4 tête→genoux. FOV 24° et Z=2.8 laissent
+    // de la respiration autour du modèle pour les rails overlay gauche/droit.
+    this._camera = new THREE.PerspectiveCamera(this._fovCurrent, width / height, 0.1, 20.0);
     this._camera.position.copy(this._cameraBase);
 
     this._cameraControls = new OrbitControls(this._camera, this._renderer.domElement);
-    this._cameraControls.target.set(0, 1.3, 0);
+    this._cameraControls.target.copy(this._lookAtCurrent);
     // Lock ALL interactive controls. The viewer is a streamer audience, not a 3D
     // model inspector. OrbitControls is still used purely as a lookAt helper.
     this._cameraControls.enableRotate = false;
@@ -184,16 +190,14 @@ export class Viewer {
 
     if (headNode && this._camera) {
       const headWPos = headNode.getWorldPosition(new THREE.Vector3());
-      // Keep the portrait framing from _cameraBase but lock the vertical axis
-      // to the actual head world position of the loaded model.
-      this._camera.position.set(
-        this._cameraBase.x,
-        headWPos.y,
-        this._cameraBase.z
-      );
-      this._cameraBase.y = headWPos.y;
-      this._cameraBaseTarget.y = headWPos.y;
-      this._lookAtCurrent.set(headWPos.x, headWPos.y, headWPos.z);
+      // Centre de cadrage = tête + offset (≈ hanches). La caméra et le lookAt
+      // se collent à ce Y : le plan reste stable à tête→genoux quelle que soit
+      // la taille du modèle chargé.
+      const centerY = headWPos.y + this._cameraHeadOffset;
+      this._camera.position.set(this._cameraBase.x, centerY, this._cameraBase.z);
+      this._cameraBase.y = centerY;
+      this._cameraBaseTarget.y = centerY;
+      this._lookAtCurrent.set(headWPos.x, centerY, headWPos.z);
       this._lookAtTarget.copy(this._lookAtCurrent);
       this._cameraControls?.target.copy(this._lookAtCurrent);
       this._cameraControls?.update();
