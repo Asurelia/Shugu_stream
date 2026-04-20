@@ -1,4 +1,5 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
+import { getItems } from "@/features/registry/registryClient";
 
 /**
  * Floating emoji pop-ups layered over the VRM canvas.
@@ -6,15 +7,21 @@ import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useSta
  * Exposes an imperative `push(name)` via the ref — the page-level WS handler
  * calls it whenever a `[emote=...]` tag arrives, bypassing React state churn
  * in the parent. Particles self-expire after 2.2s.
+ *
+ * Phase 1 — data-fication : la map `EMOJI` commence avec le fallback statique
+ * et est enrichie au boot par fetch `/api/registry/emote`. Ajouter un emote
+ * via l'admin UI le rend disponible sans redéploiement.
  */
 
-export type EmoteName = "heart" | "sparkle" | "sweat" | "question" | "laugh" | "fire";
+export type EmoteName = string;
 
 export type EmoteOverlayHandle = {
   push: (name: string) => void;
 };
 
-const EMOJI: Record<string, string> = {
+// Fallback statique — conservé pour zéro régression si le registry est
+// injoignable. Enrichi au boot depuis `/api/registry/emote`.
+const FALLBACK_EMOJI: Record<string, string> = {
   heart: "♡",
   sparkle: "✨",
   sweat: "💦",
@@ -22,6 +29,30 @@ const EMOJI: Record<string, string> = {
   laugh: "😆",
   fire: "🔥",
 };
+
+const FALLBACK_HUE: Record<string, string> = {
+  heart: "#FF6B8A",
+  fire: "#FF8A3D",
+  sparkle: "#FFF2A8",
+};
+
+const EMOJI: Record<string, string> = { ...FALLBACK_EMOJI };
+const HUE: Record<string, string> = { ...FALLBACK_HUE };
+
+/** À appeler au boot (et à chaque WS `registry.invalidated`). */
+export async function refreshEmotes(): Promise<void> {
+  const items = await getItems("emote");
+  for (const k of Object.keys(EMOJI)) delete EMOJI[k];
+  for (const k of Object.keys(HUE)) delete HUE[k];
+  Object.assign(EMOJI, FALLBACK_EMOJI);
+  Object.assign(HUE, FALLBACK_HUE);
+  for (const item of items) {
+    if (!item.is_active) continue;
+    const payload = item.payload as { emoji?: string; hue?: string };
+    if (typeof payload.emoji === "string") EMOJI[item.slug] = payload.emoji;
+    if (typeof payload.hue === "string") HUE[item.slug] = payload.hue;
+  }
+}
 
 type Particle = {
   id: number;
@@ -41,19 +72,14 @@ export const EmoteOverlay = forwardRef<EmoteOverlayHandle>((_, ref) => {
   const idRef = useRef(0);
 
   const push = useCallback((name: string) => {
-    const emoji = EMOJI[name.toLowerCase()];
+    const slug = name.toLowerCase();
+    const emoji = EMOJI[slug];
     if (!emoji) return;
     const id = ++idRef.current;
     const leftPct = 30 + Math.random() * 40;
     const topPct = 35 + Math.random() * 25;
     const drift = (Math.random() - 0.5) * 40;
-    const hue = name === "heart"
-      ? "#FF6B8A"
-      : name === "fire"
-      ? "#FF8A3D"
-      : name === "sparkle"
-      ? "#FFF2A8"
-      : "#FFD1DC";
+    const hue = HUE[slug] ?? "#FFD1DC";
     setParticles((prev) => {
       const next = [...prev, { id, emoji, leftPct, topPct, drift, hue, createdAt: performance.now() }];
       return next.slice(-MAX_PARTICLES);

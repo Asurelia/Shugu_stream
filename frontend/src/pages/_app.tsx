@@ -1,4 +1,5 @@
 import "@/styles/globals.css";
+import "@/styles/celestial-veil-tokens.css";
 import type { AppProps } from "next/app";
 import "@charcoal-ui/icons";
 import { Quicksand, Comfortaa, Plus_Jakarta_Sans, Inter } from "next/font/google";

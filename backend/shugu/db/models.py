@@ -5,7 +5,8 @@ from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import (
-    BigInteger, Column, DateTime, ForeignKey, Index, Integer, String, Text, func,
+    BigInteger, Boolean, Column, DateTime, ForeignKey, Index, Integer,
+    String, Text, UniqueConstraint, func,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -73,3 +74,37 @@ class ModerationEvent(Base):
     verdict: Mapped[str] = mapped_column(String(16), nullable=False)
     details: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class AssetRegistry(Base):
+    """Registry universel des capacités Hermes (gestures, scenes, emotes…).
+
+    Remplace les frozensets Python hardcodés (body_control.GESTURE_CLIPS, etc.)
+    par un registre DB que l'opérateur peut étendre via l'admin UI sans toucher
+    au code. `payload` porte les métadonnées spécifiques au kind :
+      - gesture → {url: str, source: 'fbx'|'vrma', duration_ms?: int}
+      - scene   → {camera: {...}, background: str, idle_animation_slug: str, ...}
+      - etc.
+
+    `is_active=false` = soft-delete (ne plus exposer à Hermes) sans perdre
+    l'historique. `owner_username` = opérateur qui a créé la row — utile pour
+    un futur multi-tenant.
+    """
+    __tablename__ = "asset_registry"
+
+    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    slug: Mapped[str] = mapped_column(String(64), nullable=False)
+    display_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    payload: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    owner_username: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(),
+    )
+
+    __table_args__ = (
+        UniqueConstraint("kind", "slug", name="uq_asset_registry_kind_slug"),
+        Index("idx_asset_registry_kind_active", "kind", "is_active"),
+    )

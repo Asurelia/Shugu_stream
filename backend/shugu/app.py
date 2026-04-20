@@ -24,6 +24,7 @@ from .adapters.tts_fallback import FallbackTTS
 from .adapters.tts_minimax import MiniMaxTTS
 from .config import get_settings
 from .core.event_bus import InProcessEventBus
+from .core.registry import init_registry
 from .core.observability import Metrics, SlidingRateLimiter
 from .core.quota import QuotaTracker
 from .core.viewer_count import ViewerCounter
@@ -33,7 +34,7 @@ from .pipeline.picker import Picker
 from .pipeline.queue import RedisQueue
 from .pipeline.workers import PrepWorker
 from .routes import (
-    admin, auth, health, hermes_state_api,
+    admin, auth, health, hermes_state_api, registry_api,
     operator_voice_ws, operator_ws, visitor_ws,
 )
 
@@ -92,6 +93,11 @@ async def lifespan(app: FastAPI):
     _metrics = Metrics()
 
     event_bus = InProcessEventBus()
+    # Asset Registry (Phase POC) — remplace les whitelists hardcoded de
+    # body_control. Lazy reload 5s, invalidation broadcast via event_bus.
+    init_registry(event_bus=event_bus, ttl_s=5.0)
+    # Scene preview endpoint a besoin du bus pour broadcaster (Phase 2).
+    registry_api.set_event_bus(event_bus)
     viewer_counter = ViewerCounter(event_bus)
     viewer_counter.start()
     quota = QuotaTracker(_redis, plan=settings.minimax_plan)
@@ -191,6 +197,8 @@ def create_app() -> FastAPI:
     app.include_router(health.router)
     app.include_router(auth.router)
     app.include_router(admin.router)
+    app.include_router(registry_api.public_router)
+    app.include_router(registry_api.admin_router)
     app.include_router(hermes_state_api.router)
     app.include_router(visitor_ws.router)
     app.include_router(operator_ws.router)

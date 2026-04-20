@@ -1,5 +1,6 @@
 import { useContext, useEffect, useRef, useState } from "react";
 import { Quicksand, Comfortaa, Plus_Jakarta_Sans, Inter } from "next/font/google";
+import * as THREE from "three";
 import VrmViewer from "@/components/vrmViewer";
 import { ViewerContext } from "@/features/vrmViewer/viewerContext";
 import { Message, Screenplay } from "@/features/messages/messages";
@@ -9,22 +10,30 @@ import {
   base64ChunkToUint8,
 } from "@/features/messages/audioStreamer";
 import { Meta } from "@/components/meta";
-import { OverlayHeader } from "@/components/OverlayHeader";
-import { SupportersRail } from "@/components/SupportersRail";
-import { SubGoalBar } from "@/components/SubGoalBar";
 import { VisitorLogin } from "@/components/VisitorLogin";
 import { ChatFeed } from "@/components/ChatFeed";
 import { SpeakingRing } from "@/components/SpeakingRing";
 import { LoadingScreen } from "@/components/LoadingScreen";
-import { Sparkles } from "@/components/Sparkles";
 import { OperatorVoicePanel } from "@/components/OperatorVoicePanel";
 import { EmoteOverlay, EmoteOverlayHandle } from "@/components/EmoteOverlay";
+import { LiquidGlassRail, LiquidGlassFilter } from "@/components/LiquidGlassRail";
+import { CanvasGradients } from "@/components/viewer/CanvasGradients";
+import { HudTopBar } from "@/components/viewer/HudTopBar";
+import { CornerTelemetry } from "@/components/viewer/CornerTelemetry";
+import { FloatingEvents } from "@/components/viewer/FloatingEvents";
+import { BottomTitleBand } from "@/components/viewer/BottomTitleBand";
 import { Mode } from "@/components/OperatorPanel";
 import { SceneManager } from "@/features/scenes/SceneManager";
 import { VirtualDesktop } from "@/features/desktop/VirtualDesktop";
 import { useDesktopState, WindowKind } from "@/features/desktop/desktopState";
-import { ACTION_CLIPS } from "@/features/animations/animationPack";
+import {
+  ACTION_CLIPS, getActionClips, invalidateActionClipsCache,
+} from "@/features/animations/animationPack";
+import { refreshScenes } from "@/features/scenes/scenes";
+import { refreshEmotes } from "@/components/EmoteOverlay";
+import { invalidate as invalidateRegistry } from "@/features/registry/registryClient";
 import { useVoiceInput } from "@/hooks/useVoiceInput";
+import { useHmsUptime } from "@/hooks/useHmsUptime";
 import {
   ShuguClient, ShuguEvent, PerformanceTags, base64ToArrayBuffer, fetchAuthStatus,
 } from "../services/shuguClient";
@@ -41,7 +50,6 @@ const comfortaa = Comfortaa({
   display: "swap",
   weight: ["500", "600", "700"],
 });
-// Celestial Veil design system — Plus Jakarta Sans for headlines, Inter for body.
 const plusJakarta = Plus_Jakarta_Sans({
   variable: "--font-display",
   subsets: ["latin"],
@@ -91,6 +99,16 @@ export default function Home() {
   const [viewerCount, setViewerCount] = useState<number>(0);
   const [speaking, setSpeaking] = useState(false);
   const [debugCaptions, setDebugCaptions] = useState(false);
+
+  // V3 Immersive HUD — rail chat toggleable, uptime démarré à l'ouverture du WS.
+  const [chatOpen, setChatOpen] = useState(true);
+  const [streamStartMs, setStreamStartMs] = useState<number | null>(null);
+  const uptime = useHmsUptime(streamStartMs);
+  useEffect(() => {
+    if (connStatus === "open" && streamStartMs === null) {
+      setStreamStartMs(Date.now());
+    }
+  }, [connStatus, streamStartMs]);
 
   const clientRef = useRef<ShuguClient | null>(null);
   const modeRef = useRef<Mode>(mode);
@@ -159,6 +177,12 @@ export default function Home() {
   useEffect(() => {
     let cancelled = false;
     fetchAuthStatus().then((me) => { if (!cancelled) { setOperator(me); setAuthLoaded(true); } });
+    // Prime les caches registry au boot : gestures (via animationPack),
+    // scenes (map SCENES), emotes (map EMOJI). Toutes ont un fallback
+    // statique → safe même si le fetch échoue.
+    getActionClips().catch(() => { /* fallback pris automatiquement */ });
+    refreshScenes().catch(() => { /* idem */ });
+    refreshEmotes().catch(() => { /* idem */ });
     return () => { cancelled = true; };
   }, []);
 
@@ -312,6 +336,27 @@ export default function Home() {
         } else if (ev.type === "scene.change") {
           // Direct state-change from Hermes body control — bypasses picker.
           sceneManagerRef.current?.requestScene(ev.scene);
+        } else if (ev.type === "scene.preview") {
+          // Scene editor admin broadcast — applique la config directement
+          // au Viewer, en **bypassant** le cooldown SceneManager. Temporaire :
+          // au F5 le visiteur retombe sur la scene DB.
+          const cfg = ev.config;
+          const v = viewerRef.current;
+          console.log("[scene.preview] received", ev.slug, cfg);
+          if (v) {
+            v.setShot({
+              cameraBase: new THREE.Vector3(cfg.camera.x, cfg.camera.y, cfg.camera.z),
+              lookAt: new THREE.Vector3(cfg.look_at.x, cfg.look_at.y, cfg.look_at.z),
+              fov: cfg.fov,
+            });
+            v.setAvatarTransform(
+              new THREE.Vector3(
+                cfg.avatar_position.x, cfg.avatar_position.y, cfg.avatar_position.z,
+              ),
+              cfg.avatar_rotation_y,
+            );
+          }
+          if (cfg.background) document.body.style.background = cfg.background;
         } else if (ev.type === "look.hint") {
           viewerRef.current?.triggerChatGlance(ev.ndc);
         } else if (ev.type === "expression.set") {
@@ -366,6 +411,16 @@ export default function Home() {
         } else if (ev.type === "hermes_task.acknowledged") {
           setPendingHermes(true);
           setTimeout(() => setPendingHermes(false), (ev.eta_estimate_s + 120) * 1000);
+        } else if (ev.type === "registry.invalidated") {
+          // Le backend a modifié le registry : on flush TOUS les caches
+          // locaux + on re-fetch les kinds consommés par la page visiteur
+          // (gestures, scenes, emotes). Les autres kinds (shot, expression,
+          // mood) sont lus à la demande donc pas besoin de refresh immédiat.
+          invalidateRegistry();
+          invalidateActionClipsCache();
+          void getActionClips();
+          void refreshScenes();
+          void refreshEmotes();
         } else if (ev.type === "error.moderation" || ev.type === "queue.rejected") {
           setNotice(ev.reason);
           setTimeout(() => setNotice(""), 4000);
@@ -389,85 +444,88 @@ export default function Home() {
     if (target === "hermes") setPendingHermes(true);
   };
 
+  // Props communes aux deux instances ChatFeed (desktop rail + mobile overlay).
+  // Un seul state applicatif (chatLog, inputValue, voice) alimente les deux :
+  // le viewer ne voit qu'une instance à la fois selon son viewport.
+  const chatFeedProps = {
+    messages: chatLog,
+    showAssistant: !!operator && debugCaptions,
+    viewerCount,
+    inputValue,
+    onInputChange: setInputValue,
+    onSubmit: handleSubmit,
+    inputDisabled: connStatus !== "open",
+    hermesMode: !!operator && mode === "hermes",
+    voice: operator && voice.supported ? {
+      supported: voice.supported,
+      listening: voice.listening,
+      interim: voice.interim,
+      start: voice.start,
+      stop: voice.stop,
+    } : undefined,
+  };
+
   return (
     <div className={`${quicksand.variable} ${comfortaa.variable} ${plusJakarta.variable} ${interFont.variable} font-quicksand`}>
       <Meta />
-      <Sparkles />
       <VrmViewer
         onLoaded={() => {
           setAvatarLoaded(true);
           const v = viewerRef.current;
           if (v && !sceneManagerRef.current) {
-            sceneManagerRef.current = new SceneManager({
+            const mgr = new SceneManager({
               viewer: v,
               onBackgroundChange: (bg) => {
                 document.body.style.background = bg;
               },
             });
-            // No applyInitial — boot-state already matches `just_chatting` and
-            // we want the CSS gradient animation to keep running until a scene
-            // tag actually requests a switch.
+            sceneManagerRef.current = mgr;
+            // Applique la scene par défaut depuis le registry persistée :
+            // au reload, le VRM retrouve la dernière pose/caméra sauvegardée
+            // via le scene-editor au lieu de snapper à origine.
+            void refreshScenes().then(() => mgr.applyInitial());
           }
         }}
       />
+
+      <CanvasGradients chatOpen={chatOpen} />
+      <LiquidGlassFilter />
+
       <EmoteOverlay ref={emoteOverlayRef} />
       <SpeakingRing visible={speaking} />
 
       {!avatarLoaded && <LoadingScreen />}
 
-      <OverlayHeader
+      <HudTopBar
         connStatus={connStatus}
         viewerCount={viewerCount}
-        speaking={speaking}
+        uptime={uptime}
         operatorUsername={operator?.username}
+        chatOpen={chatOpen}
       />
+      <CornerTelemetry connStatus={connStatus} />
+      <FloatingEvents />
+      <BottomTitleBand chatOpen={chatOpen} />
 
-      {/* Crosshairs décoratifs aux 4 coins du viewport (signature Stitch). */}
-      <div className="crosshair ch-tl" />
-      <div className="crosshair ch-tr" />
-      <div className="crosshair ch-bl" />
-      <div className="crosshair ch-br" />
+      <LiquidGlassRail
+        open={chatOpen}
+        onOpen={() => setChatOpen(true)}
+        onClose={() => setChatOpen(false)}
+      >
+        <ChatFeed variant="viewer-rail" {...chatFeedProps} />
+      </LiquidGlassRail>
 
-      {/* Tech labels monospace — tirés du mockup pour l'ambiance 3D-tracker. */}
-      <div className="fixed top-24 left-8 tech-label z-10 pointer-events-none hidden md:block">
-        X: 184.5 Y: 228.1<br />Z: 80.8
+      {/* Fallback mobile — ChatFeed en mode default (overlay plein écran + FAB). */}
+      <div className="md:hidden">
+        <ChatFeed {...chatFeedProps} />
       </div>
-      <div className="fixed top-24 right-8 tech-label z-10 pointer-events-none hidden md:block text-right">
-        X: 104.5 Y: 220.1<br />Z: 60.8
-      </div>
-      <div className="fixed bottom-8 right-8 tech-label z-10 pointer-events-none hidden md:block text-right">
-        STATUS: {connStatus === "open" ? "ACTIVE" : connStatus.toUpperCase()}
-      </div>
-
-      <SupportersRail />
-      <SubGoalBar />
 
       {!operator && <VisitorLogin />}
-
       <OperatorVoicePanel enabled={!!operator} />
-
-      <ChatFeed
-        messages={chatLog}
-        showAssistant={!!operator && debugCaptions}
-        viewerCount={viewerCount}
-        inputValue={inputValue}
-        onInputChange={setInputValue}
-        onSubmit={handleSubmit}
-        inputDisabled={connStatus !== "open"}
-        hermesMode={!!operator && mode === "hermes"}
-        voice={operator && voice.supported ? {
-          supported: voice.supported,
-          listening: voice.listening,
-          interim: voice.interim,
-          start: voice.start,
-          stop: voice.stop,
-        } : undefined}
-      />
-
       <VirtualDesktop />
 
       {notice && (
-        <div className="fixed top-[5.5rem] sm:top-24 right-[360px] z-20 animate-fade-up bg-shugu-live/90 text-white px-4 py-2 rounded-full text-xs sm:text-sm shadow-lg max-w-xs font-semibold">
+        <div className="fixed top-[5.5rem] sm:top-24 right-[380px] z-20 animate-fade-up bg-shugu-live/90 text-white px-4 py-2 rounded-full text-xs sm:text-sm shadow-lg max-w-xs font-semibold">
           ✕ {notice}
         </div>
       )}

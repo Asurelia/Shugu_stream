@@ -22,6 +22,8 @@ import { fetchAuthStatus, logout } from "@/services/shuguClient";
 
 type Section =
   | "overview"
+  | "creator-home"
+  | "scene-editor"
   | "analytics"
   | "community"
   | "assets"
@@ -36,12 +38,14 @@ type SidebarItem = {
 };
 
 const SIDEBAR: SidebarItem[] = [
-  { section: "overview",   label: "Live Control", path: "",             icon: "◉" },
-  { section: "analytics",  label: "Analytics",    path: "/analytics",   icon: "∿" },
-  { section: "community",  label: "Community",    path: "/community",   icon: "✦" },
-  { section: "assets",     label: "Assets",       path: "/assets",      icon: "◇" },
-  { section: "schedule",   label: "Schedule",     path: "/schedule",    icon: "◷" },
-  { section: "moderation", label: "Moderation",   path: "/moderation",  icon: "⊘" },
+  { section: "overview",     label: "Live Control",  path: "",               icon: "◉" },
+  { section: "creator-home", label: "Creator Home",  path: "/creator-home",  icon: "✧" },
+  { section: "scene-editor", label: "Scene Editor",  path: "/scene-editor",  icon: "◈" },
+  { section: "analytics",    label: "Analytics",     path: "/analytics",     icon: "∿" },
+  { section: "community",    label: "Community",     path: "/community",     icon: "✦" },
+  { section: "assets",       label: "Assets",        path: "/assets",        icon: "◇" },
+  { section: "schedule",     label: "Schedule",      path: "/schedule",      icon: "◷" },
+  { section: "moderation",   label: "Moderation",    path: "/moderation",    icon: "⊘" },
 ];
 
 type Props = {

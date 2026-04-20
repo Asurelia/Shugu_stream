@@ -65,7 +65,7 @@ export function OperatorVoicePanel({ enabled }: Props) {
   const stateLabel = STATE_LABELS[state];
 
   return (
-    <div className="fixed bottom-28 right-4 md:right-[340px] z-20 font-quicksand pointer-events-auto">
+    <div className="fixed bottom-28 right-4 md:right-[380px] z-20 font-quicksand pointer-events-auto">
       <div
         className="glass-pink rounded-2xl px-3 py-2.5 shadow-xl min-w-[200px]"
         style={{ maxWidth: 260 }}

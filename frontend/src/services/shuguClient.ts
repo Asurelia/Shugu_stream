@@ -43,6 +43,19 @@ export type ShuguEvent =
   | { type: "error.moderation"; nonce?: string; reason: string; detector: string }
   | { type: "queue.rejected"; nonce?: string; reason: string }
   | { type: "hermes_task.acknowledged"; nonce?: string; eta_estimate_s: number }
+  | { type: "registry.invalidated"; reason?: string }
+  | {
+      type: "scene.preview"; slug: string;
+      config: {
+        camera: { x: number; y: number; z: number };
+        look_at: { x: number; y: number; z: number };
+        fov: number;
+        background: string;
+        idle_animation: string;
+        avatar_position: { x: number; y: number; z: number };
+        avatar_rotation_y: number;
+      };
+    }
   | { type: "pong"; t?: number }
   | { type: "error"; nonce?: string; reason: string };
 

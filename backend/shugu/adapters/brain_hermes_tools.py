@@ -27,10 +27,11 @@ import httpx
 import structlog
 
 from ..config import Settings
-from ..core.body_control import openai_tools_schema, parse_call
+from ..core.body_control import openai_tools_schema, parse_call_async
 from ..core.errors import BrainError
 from ..core.identity import OperatorIdentity
 from ..core.protocols import PersonalityLoader, Turn
+from ..core.registry import get_registry
 from ..pipeline.body_router import BodyRouter
 from .brain_shugu import strip_think
 
@@ -149,10 +150,13 @@ class HermesEmbodiedBrain:
         return [{"role": "system", "content": system_prompt}, *history]
 
     async def _call_llm(self, messages: list[dict]) -> dict:
+        # Registry-backed tools schema — l'enum des gestures reflète les rows
+        # actives de `asset_registry` (ajoutées via admin UI sans redéploiement).
+        tools = await openai_tools_schema(registry=get_registry())
         payload = {
             "model": self._settings.minimax_model,
             "messages": messages,
-            "tools": openai_tools_schema(),
+            "tools": tools,
             "tool_choice": "auto",
             "max_tokens": 600,
             "temperature": 1.0,
@@ -191,7 +195,7 @@ class HermesEmbodiedBrain:
         priority_tier: int,
     ) -> dict:
         try:
-            call = parse_call(name, args)
+            call = await parse_call_async(name, args, registry=get_registry())
         except Exception as exc:
             log.warning("hermes.tool_rejected", name=name, args=args, error=str(exc))
             return {"ok": False, "error": f"rejected: {exc}"}

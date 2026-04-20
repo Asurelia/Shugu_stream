@@ -8,7 +8,7 @@ export function VisitorLogin() {
   return (
     <Link
       href="/login"
-      className="fixed top-4 right-4 md:right-[340px] z-20 text-[11px] text-shugu-cream-dim hover:text-shugu-pink-soft underline-offset-2 hover:underline font-quicksand transition-colors"
+      className="fixed top-4 right-4 md:right-[380px] z-20 text-[11px] text-shugu-cream-dim hover:text-shugu-pink-soft underline-offset-2 hover:underline font-quicksand transition-colors"
     >
       login ♡
     </Link>

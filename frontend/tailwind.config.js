@@ -49,6 +49,23 @@ module.exports = {
     margin:  (t) => ({ auto: "auto", ...t("spacing"), ...Object.fromEntries(Object.entries(t("spacing")).filter(([k]) => k !== "px" && k !== "0").map(([k, v]) => ["-" + k, `-${v}`])) }),
     inset:   (t) => ({ auto: "auto", full: "100%", ...t("spacing") }),
     gap:     (t) => t("spacing"),
+    // Charcoal preset supprime le scale `borderRadius` standard de Tailwind :
+    // seul `.rounded-none` reste, donc `rounded-full`/`rounded-xl`/etc. sont
+    // silencieusement inertes (le bouton send apparaît carré au lieu de rond,
+    // le rail chat handle n'a plus son coin arrondi, etc.). On rétablit le
+    // scale Tailwind par défaut ici — safe car aucun code n'exploite l'absence
+    // de ces utilities, et indispensable pour les UI récentes.
+    borderRadius: {
+      none: "0px",
+      sm: "0.125rem",
+      DEFAULT: "0.25rem",
+      md: "0.375rem",
+      lg: "0.5rem",
+      xl: "0.75rem",
+      "2xl": "1rem",
+      "3xl": "1.5rem",
+      full: "9999px",
+    },
     spacing: {
       px: "1px",
       0: "0px",

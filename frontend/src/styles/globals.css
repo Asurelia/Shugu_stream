@@ -126,6 +126,23 @@ body.shugu-body {
   .glass-panel::before { top: 8px; left: 8px; }
   .glass-panel::after  { top: 8px; right: 8px; }
 
+  /* Variante viewer-rail (V3 Immersive HUD) : le chatBody est fully
+     transparent — c'est le wrapper parent (inline style) qui porte l'effet
+     "glace" (background rgba + blur + saturate). Ceci évite la double glass
+     et garantit un rendu lisible avec le VRM en arrière-plan. */
+  .glass-panel.chat-rail-translucent {
+    background: transparent;
+    border: none;
+    border-radius: 0;
+    box-shadow: none;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+  .glass-panel.chat-rail-translucent::before,
+  .glass-panel.chat-rail-translucent::after {
+    display: none;
+  }
+
   .glow-purple { text-shadow: 0 0 12px rgba(181, 133, 255, 0.8); }
   .glow-pink   { text-shadow: 0 0 8px  rgba(232, 121, 249, 0.8); }
   .glow-cyan   { text-shadow: 0 0 8px  rgba(34,  211, 238, 0.8); }

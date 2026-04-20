@@ -41,6 +41,15 @@ type Props = {
   inputDisabled: boolean;
   hermesMode?: boolean;
   voice?: VoiceProps;
+  /**
+   * "default" → comportement historique (aside fixed right-8 top-24 bottom-12
+   * w-80 avec handle retractable gradient rose).
+   * "viewer-rail" → rend uniquement le corps chat (glass-panel intérieur) en
+   *   mode plus translucide (classe `chat-rail-translucent`). Le parent
+   *   s'occupe du positionnement/toggle/width. Fallback mobile identique au
+   *   mode default (overlay plein écran).
+   */
+  variant?: "default" | "viewer-rail";
 };
 
 const DESKTOP_QUERY = "(min-width: 768px)";
@@ -55,6 +64,7 @@ const ROLE_STYLES = {
 export function ChatFeed({
   messages, showAssistant = false, viewerCount,
   inputValue, onInputChange, onSubmit, inputDisabled, hermesMode, voice,
+  variant = "default",
 }: Props) {
   const isDesktop = useMediaQuery(DESKTOP_QUERY, true);
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -104,9 +114,9 @@ export function ChatFeed({
           maxLength={hermesMode ? 2000 : 500}
           disabled={inputDisabled || !!voice?.listening}
           aria-label="message"
-          className="w-full bg-white/5 border border-white/10 rounded-full py-3 pl-6 pr-20 text-sm focus:outline-none focus:ring-1 focus:ring-celestial-purple placeholder:text-gray-500 text-white veil-body"
+          className="w-full bg-white/5 border border-white/10 rounded-full py-3 pl-6 pr-12 text-sm focus:outline-none focus:ring-1 focus:ring-celestial-purple placeholder:text-gray-500 text-white veil-body"
         />
-        <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1">
+        <div className="absolute right-1.5 top-1/2 -translate-y-1/2 flex items-center gap-1">
           {voice?.supported && (
             <button
               type="button"
@@ -114,7 +124,7 @@ export function ChatFeed({
               disabled={inputDisabled}
               title={voice.listening ? "arrêter" : "parler"}
               className={[
-                "w-8 h-8 rounded-full flex items-center justify-center text-xs transition-all",
+                "w-7 h-7 rounded-full flex items-center justify-center text-xs transition-all",
                 voice.listening
                   ? "bg-gradient-to-r from-[#b585ff] to-[#e879f9] text-black animate-pulse"
                   : "text-gray-400 hover:text-celestial-pink hover:bg-white/5",
@@ -127,7 +137,7 @@ export function ChatFeed({
             type="submit"
             disabled={!inputValue.trim() || inputDisabled || !!voice?.listening}
             aria-label="envoyer"
-            className="w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold bg-gradient-to-r from-[#b585ff] to-[#e879f9] text-black hover:scale-105 transition-transform disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:scale-100"
+            className="w-7 h-7 rounded-full flex items-center justify-center text-sm font-bold bg-gradient-to-r from-[#b585ff] to-[#e879f9] text-black hover:scale-105 transition-transform disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:scale-100"
           >
             {hermesMode ? "⚡" : "→"}
           </button>
@@ -137,7 +147,12 @@ export function ChatFeed({
   );
 
   const chatBody = (
-    <div className="glass-panel flex-grow flex flex-col overflow-hidden">
+    <div
+      className={[
+        "glass-panel flex-grow flex flex-col overflow-hidden",
+        variant === "viewer-rail" ? "chat-rail-translucent" : "",
+      ].filter(Boolean).join(" ")}
+    >
       {/* Header chat */}
       <div className="p-4 border-b border-white/10 flex items-center justify-between">
         <div className="flex items-center space-x-2.5">
@@ -198,6 +213,12 @@ export function ChatFeed({
   );
 
   if (isDesktop) {
+    // Variante viewer-rail : le parent (page viewer V3 Immersive HUD)
+    // s'occupe de `position: fixed`, de la largeur du rail et du toggle.
+    // ChatFeed ne rend alors que son corps, avec la classe translucide.
+    if (variant === "viewer-rail") {
+      return <>{chatBody}</>;
+    }
     return (
       <>
         <aside

@@ -19,14 +19,25 @@ Design rules:
 from __future__ import annotations
 
 import re
-from typing import Annotated, Literal, Optional, Union
+from typing import TYPE_CHECKING, Annotated, Literal, Optional, Union
 
 from pydantic import BaseModel, Field, field_validator
 
+if TYPE_CHECKING:
+    from .registry import Registry
 
-# ─── Whitelists (source of truth) ────────────────────────────────────────────
 
-# Must match /frontend/src/features/animations/animationPack.ts ACTION_CLIPS.
+# ─── Whitelists (fallback — la source de vérité est la DB `asset_registry`) ─
+
+# Ces frozensets sont conservés comme **fallback de sécurité** :
+#   1. Utilisés quand `parse_call` / `openai_tools_schema` sont appelés sans
+#      Registry (ex. tests unitaires, démarrage avant lifespan).
+#   2. Permettent au système de rester fonctionnel si la DB registry est vide
+#      après un reset accidentel.
+# En prod avec le Registry initialisé, les slugs actifs de la DB priment.
+#
+# Must stay aligned with /frontend/src/features/animations/animationPack.ts
+# ACTION_CLIPS (le frontend a aussi son propre fallback).
 GESTURE_CLIPS: frozenset[str] = frozenset({
     "wave", "nod", "shake_head", "think", "laugh", "shrug", "point",
     "bow", "clap", "peace", "heart", "peek", "stretch",
@@ -69,6 +80,22 @@ class BodySayCall(BaseModel):
     hold_tags: dict = Field(default_factory=dict)   # optional scene/emote/action to layer
 
 
+# Regex restreint pour tous les slugs de registry — mêmes caractères que les
+# noms de fichier safe : lettres, chiffres, underscore, dash. 1-64 chars.
+_SLUG_RE = re.compile(r"^[a-zA-Z0-9_\-]{1,64}$")
+
+
+def _validate_slug(v: str, label: str) -> str:
+    """Validation charset (anti-injection) uniquement. La présence réelle
+    dans le registre est vérifiée par `parse_call` (async, DB lookup)."""
+    if not _SLUG_RE.match(v):
+        raise ValueError(
+            f"{label} '{v}' contains invalid chars "
+            "(allowed: letters, digits, underscore, dash, 1-64 chars)"
+        )
+    return v
+
+
 class BodyGestureCall(BaseModel):
     """One-shot gesture animation."""
     name: Literal["body.gesture"] = "body.gesture"
@@ -78,9 +105,7 @@ class BodyGestureCall(BaseModel):
     @field_validator("clip")
     @classmethod
     def _valid_clip(cls, v: str) -> str:
-        if v not in GESTURE_CLIPS:
-            raise ValueError(f"gesture '{v}' not in whitelist {sorted(GESTURE_CLIPS)}")
-        return v
+        return _validate_slug(v, "gesture")
 
 
 class BodySceneCall(BaseModel):
@@ -91,9 +116,7 @@ class BodySceneCall(BaseModel):
     @field_validator("scene")
     @classmethod
     def _valid_scene(cls, v: str) -> str:
-        if v not in SCENES:
-            raise ValueError(f"scene '{v}' not in whitelist {sorted(SCENES)}")
-        return v
+        return _validate_slug(v, "scene")
 
 
 class BodyLookAtCall(BaseModel):
@@ -125,9 +148,7 @@ class BodyEmoteCall(BaseModel):
     @field_validator("emote")
     @classmethod
     def _valid_emote(cls, v: str) -> str:
-        if v not in EMOTES:
-            raise ValueError(f"emote '{v}' not in whitelist {sorted(EMOTES)}")
-        return v
+        return _validate_slug(v, "emote")
 
 
 class BodyShotCall(BaseModel):
@@ -138,9 +159,7 @@ class BodyShotCall(BaseModel):
     @field_validator("shot")
     @classmethod
     def _valid_shot(cls, v: str) -> str:
-        if v not in SHOTS:
-            raise ValueError(f"shot '{v}' not in whitelist {sorted(SHOTS)}")
-        return v
+        return _validate_slug(v, "shot")
 
 
 # ─── Desktop (virtual surface) calls ─────────────────────────────────────────
@@ -335,7 +354,13 @@ KNOWN_NAMES: frozenset[str] = frozenset({
 
 def parse_call(name: str, args: dict) -> BodyControlCall:
     """Parse a (name, args) pair into a typed call. Raises ValueError if the
-    name is unknown or the args don't pass validation."""
+    name is unknown or the args don't pass static validation (charset,
+    bounds, enums statiques comme `emotion`/`mood`).
+
+    **La présence du slug dans le registre actif n'est PAS vérifiée ici** —
+    ça se fait via `parse_call_async` quand un `Registry` est disponible.
+    Gardé sync pour les tests unitaires qui n'ont pas de DB.
+    """
     if name not in KNOWN_NAMES:
         raise ValueError(f"unknown body control tool '{name}'")
     payload = {"name": name, **(args or {})}
@@ -359,15 +384,74 @@ def parse_call(name: str, args: dict) -> BodyControlCall:
     return mapping[name].model_validate(payload)
 
 
+# Mapping call-type → (registry_kind, attr_name) pour la validation dynamique.
+# Phase 1 : scene/emote/shot ajoutés. `expression` et `mood` restent Literal
+# (contraints par le VRM et la machine à état Markov respectivement — pas
+# d'intérêt à les rendre no-code pour l'instant, car ajouter un "mood"
+# demanderait du code côté ambient).
+_DYNAMIC_REGISTRY_SLOTS: dict[type, tuple[str, str]] = {
+    BodyGestureCall: ("gesture", "clip"),
+    BodySceneCall:   ("scene",   "scene"),
+    BodyEmoteCall:   ("emote",   "emote"),
+    BodyShotCall:    ("shot",    "shot"),
+}
+
+
+async def parse_call_async(
+    name: str, args: dict, registry: Optional["Registry"] = None,
+) -> BodyControlCall:
+    """Comme `parse_call` + validation dynamique contre le Registry.
+
+    Si `registry` est fourni et que le call concerne un slug registry-backed
+    (cf. `_DYNAMIC_REGISTRY_SLOTS`), on vérifie que le slug est **actif** dans
+    la table `asset_registry`. Sinon on retombe sur le fallback frozenset
+    interne (charset déjà validé par Pydantic).
+    """
+    call = parse_call(name, args)
+    if registry is None:
+        return call
+
+    slot = _DYNAMIC_REGISTRY_SLOTS.get(type(call))
+    if slot is None:
+        return call
+
+    kind, attr = slot
+    slug = getattr(call, attr)
+    if not await registry.exists(kind, slug):
+        slugs = sorted(await registry.get_slugs(kind))
+        raise ValueError(f"{kind} '{slug}' not in active registry (have: {slugs})")
+    return call
+
+
 # ─── OpenAI-style tools schema for the brain to send to MiniMax ──────────────
 
-def openai_tools_schema() -> list[dict]:
+async def openai_tools_schema(registry: Optional["Registry"] = None) -> list[dict]:
     """Return the tool declarations to send as `tools=[...]` in the chat call.
 
     MiniMax M2/M2.7 accept the standard OpenAI tool-calling shape and translate
     it to their native XML under the hood. We match OpenAI's schema exactly
     so the same model config can also run against OpenAI-compatible backends.
+
+    `registry` optionnel : si fourni, les enums dynamiques (gesture) sont
+    construits depuis la DB `asset_registry` au lieu du frozenset fallback.
+    Permet d'ajouter un gesture via l'admin UI et Hermes le verra au prochain
+    appel, sans redéploiement.
     """
+    # ─── Enums dynamiques (registry → fallback frozenset si non-init ou vide)
+    if registry is not None:
+        async def _enum(kind: str, fallback: frozenset[str]) -> list[str]:
+            slugs = sorted(await registry.get_slugs(kind))
+            return slugs or sorted(fallback)
+        gesture_enum = await _enum("gesture", GESTURE_CLIPS)
+        scene_enum   = await _enum("scene",   SCENES)
+        emote_enum   = await _enum("emote",   EMOTES)
+        shot_enum    = await _enum("shot",    SHOTS)
+    else:
+        gesture_enum = sorted(GESTURE_CLIPS)
+        scene_enum   = sorted(SCENES)
+        emote_enum   = sorted(EMOTES)
+        shot_enum    = sorted(SHOTS)
+
     return [
         {
             "type": "function",
@@ -400,7 +484,7 @@ def openai_tools_schema() -> list[dict]:
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "clip": {"type": "string", "enum": sorted(GESTURE_CLIPS)},
+                        "clip": {"type": "string", "enum": gesture_enum},
                         "hold_ms": {"type": "integer", "minimum": 200, "maximum": 10000},
                     },
                     "required": ["clip"],
@@ -414,7 +498,7 @@ def openai_tools_schema() -> list[dict]:
                 "description": "Switch the scene (camera, background, idle animation).",
                 "parameters": {
                     "type": "object",
-                    "properties": {"scene": {"type": "string", "enum": sorted(SCENES)}},
+                    "properties": {"scene": {"type": "string", "enum": scene_enum}},
                     "required": ["scene"],
                 },
             },
@@ -469,7 +553,7 @@ def openai_tools_schema() -> list[dict]:
                 "description": "Pop a 2D emote overlay (no body movement).",
                 "parameters": {
                     "type": "object",
-                    "properties": {"emote": {"type": "string", "enum": sorted(EMOTES)}},
+                    "properties": {"emote": {"type": "string", "enum": emote_enum}},
                     "required": ["emote"],
                 },
             },
@@ -481,7 +565,7 @@ def openai_tools_schema() -> list[dict]:
                 "description": "Camera framing hint (wide/medium/close).",
                 "parameters": {
                     "type": "object",
-                    "properties": {"shot": {"type": "string", "enum": sorted(SHOTS)}},
+                    "properties": {"shot": {"type": "string", "enum": shot_enum}},
                     "required": ["shot"],
                 },
             },

@@ -35,3 +35,8 @@ tmp/
 
 # ── shugustream CLI state (PIDs + captured logs) ───────────────────────
 .shugustream/
+
+# ── Design review artifacts (screenshots, visual QA) — local only ──────
+# Généré à la volée par les sessions de review (Chrome DevTools MCP,
+# Playwright, etc.). Peut être volumineux (~40 MB+), pas besoin en remote.
+.design-review/
