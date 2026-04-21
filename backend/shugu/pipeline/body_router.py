@@ -42,6 +42,7 @@ from ..core.body_control import (
     BodySayCall,
     BodySceneCall,
     BodyShotCall,
+    ChatPostCall,
     DesktopArrangeCall,
     DesktopCloseFileCall,
     DesktopEditFileCall,
@@ -138,6 +139,9 @@ class BodyRouter:
                 return await self._desktop_show_hermes_state(call)
             if isinstance(call, DesktopHideHermesStateCall):
                 return await self._desktop_hide_hermes_state(call)
+            # Chat texte — publie sur le topic `stage` directement (pas de queue).
+            if isinstance(call, ChatPostCall):
+                return await self._chat_post(call)
             return {"ok": False, "error": f"unrouted call: {getattr(call, 'name', '?')}"}
         except Exception as exc:
             log.exception("body_router.dispatch_error", name=getattr(call, "name", "?"), error=str(exc))
@@ -342,6 +346,22 @@ class BodyRouter:
         })
         log.info("desktop.hide_hermes_state")
         return {"ok": True, "effect": "hermes hud closed"}
+
+    # ─── Chat (texte curé v4 Phase 1) ───────────────────────────────────────
+
+    async def _chat_post(self, call: ChatPostCall) -> dict:
+        """Publie un message texte direct sur le topic `stage` (pas de queue,
+        pas de TTS, pas de Picker). Les clients `/ws/visitor` voient l'event
+        `chat.post` et l'affichent dans le ChatFeed avec `from=shugu`.
+        """
+        await self._deps.event_bus.publish("stage", {
+            "type": "chat.post",
+            "from": "shugu",
+            "text": call.text,
+            "ts_ms": int(time.time() * 1000),
+        })
+        log.info("chat.post", text_len=len(call.text))
+        return {"ok": True, "effect": "chat broadcast", "text_len": len(call.text)}
 
     # ─── Helpers ────────────────────────────────────────────────────────────
 

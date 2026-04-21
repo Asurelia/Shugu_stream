@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Bienvenue VIP — Shugu</title>
+</head>
+<body style="margin:0;padding:40px 16px;background:#0b0a12;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;color:#f4efe1">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;margin:0 auto;background:linear-gradient(180deg,#1a1128,#14101e);border:1px solid rgba(255,217,140,0.25);border-radius:20px">
+    <tr>
+      <td style="padding:40px 32px 24px">
+        <div style="display:inline-block;padding:6px 14px;background:linear-gradient(135deg,#ffd98c,#ff9e5e);color:#3a1d0c;border-radius:999px;font-size:12px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;margin-bottom:20px">
+          VIP
+        </div>
+        <h1 style="margin:0 0 8px;font-weight:300;font-size:28px;letter-spacing:-0.02em;color:#ffd98c">Bienvenue, {{ username }}</h1>
+        <p style="margin:0 0 16px;opacity:0.75;font-size:15px;line-height:1.6">
+          Tu as maintenant accès au <strong>salon vocal privé</strong> avec moi.
+          On peut parler en temps réel, en toute intimité, sans public autour.
+        </p>
+        {% if vip_until %}
+        <p style="margin:0 0 24px;font-size:13px;opacity:0.55">
+          Ton accès VIP est actif jusqu'au <strong>{{ vip_until }}</strong>.
+        </p>
+        {% else %}
+        <p style="margin:0 0 24px;font-size:13px;opacity:0.55">
+          Ton accès VIP est actif sans date d'expiration.
+        </p>
+        {% endif %}
+        <p style="text-align:center;margin:32px 0">
+          <a href="{{ site_url }}/vip/room" style="display:inline-block;padding:14px 28px;background:linear-gradient(135deg,#ffd98c,#ff9e5e);color:#3a1d0c;text-decoration:none;border-radius:999px;font-weight:600;font-size:15px">
+            Rejoindre le salon VIP
+          </a>
+        </p>
+      </td>
+    </tr>
+    <tr>
+      <td style="padding:24px 32px;border-top:1px solid rgba(255,217,140,0.15);font-size:12px;opacity:0.45;text-align:center">
+        <a href="{{ site_url }}" style="color:#ffd98c;text-decoration:none">{{ site_url }}</a>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>

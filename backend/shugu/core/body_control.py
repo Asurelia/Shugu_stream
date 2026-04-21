@@ -321,6 +321,23 @@ class DesktopHideHermesStateCall(BaseModel):
     name: Literal["desktop.hide_hermes_state"] = "desktop.hide_hermes_state"
 
 
+# ─── Chat (texte curé v4 Phase 1) ────────────────────────────────────────────
+# Shugu appelle chat.post() uniquement quand elle veut afficher un message
+# TEXTE dans le chat visiteur : rappels, liens, sponsors. Pas pour sous-titrer
+# sa voix — le canal oral reste le canal principal.
+
+
+class ChatPostCall(BaseModel):
+    """Publie un message texte dans le chat visiteur, côté Shugu.
+
+    NE PAS utiliser pour transcrire ce qu'elle dit oralement — la voix reste
+    le canal principal. Utiliser pour les rappels, liens cliquables, noms de
+    sponsors, CTAs. 500 chars max (même borne que body.say).
+    """
+    name: Literal["chat.post"] = "chat.post"
+    text: str = Field(min_length=1, max_length=500)
+
+
 BodyControlCall = Annotated[
     Union[
         BodySayCall,
@@ -338,6 +355,7 @@ BodyControlCall = Annotated[
         DesktopArrangeCall,
         DesktopShowHermesStateCall,
         DesktopHideHermesStateCall,
+        ChatPostCall,
     ],
     Field(discriminator="name"),
 ]
@@ -349,6 +367,7 @@ KNOWN_NAMES: frozenset[str] = frozenset({
     "desktop.open_file", "desktop.edit_file", "desktop.close_file",
     "desktop.show_image", "desktop.arrange",
     "desktop.show_hermes_state", "desktop.hide_hermes_state",
+    "chat.post",
 })
 
 
@@ -380,6 +399,7 @@ def parse_call(name: str, args: dict) -> BodyControlCall:
         "desktop.arrange":           DesktopArrangeCall,
         "desktop.show_hermes_state": DesktopShowHermesStateCall,
         "desktop.hide_hermes_state": DesktopHideHermesStateCall,
+        "chat.post":                 ChatPostCall,
     }
     return mapping[name].model_validate(payload)
 

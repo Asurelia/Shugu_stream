@@ -17,6 +17,7 @@ from .adapters.brain_hermes_tools import HermesEmbodiedBrain
 from .adapters.brain_shugu import ShuguPersonaBrain
 from .adapters.moderation_basic import BasicModeration
 from .adapters.personality_loader import MarkdownPersonalityLoader
+from .adapters.smtp_resend import EmailSender, NullSender, ResendSender
 from .adapters.stt_streaming import FasterWhisperSTT, STTSettings
 from .adapters.tts_edge import EdgeTTS
 from .adapters.tts_elevenlabs import ElevenLabsTTS
@@ -34,7 +35,7 @@ from .pipeline.picker import Picker
 from .pipeline.queue import RedisQueue
 from .pipeline.workers import PrepWorker
 from .routes import (
-    admin, auth, health, hermes_state_api, registry_api,
+    account, admin, admin_users, auth, health, hermes_state_api, registry_api,
     operator_voice_ws, operator_ws, visitor_ws,
 )
 
@@ -43,6 +44,7 @@ _redis: Optional[aioredis.Redis] = None
 _quota: Optional["QuotaTracker"] = None
 _rate_limiter: Optional["SlidingRateLimiter"] = None
 _metrics: Optional["Metrics"] = None
+_email_sender: Optional[EmailSender] = None
 
 
 def get_redis() -> aioredis.Redis:
@@ -67,6 +69,12 @@ def get_metrics() -> "Metrics":
     return _metrics
 
 
+def get_email_sender() -> EmailSender:
+    """Retourne l'EmailSender global (Resend si configuré, sinon NullSender)."""
+    assert _email_sender is not None, "email_sender not initialized"
+    return _email_sender
+
+
 def _setup_logging() -> None:
     structlog.configure(
         processors=[
@@ -85,12 +93,25 @@ async def lifespan(app: FastAPI):
     _setup_logging()
     log = structlog.get_logger("lifespan")
 
-    global _redis, _quota, _rate_limiter, _metrics
+    global _redis, _quota, _rate_limiter, _metrics, _email_sender
     settings = get_settings()
     http = httpx.AsyncClient()
     _redis = aioredis.from_url(settings.shugu_redis_url, decode_responses=False)
     _rate_limiter = SlidingRateLimiter()
     _metrics = Metrics()
+
+    # Email (Resend) — NullSender si pas de clé, ResendSender sinon. Ça permet
+    # de développer/tester les flows auth sans avoir un domaine vérifié.
+    if settings.resend_api_key:
+        _email_sender = ResendSender(
+            api_key=settings.resend_api_key,
+            from_addr=settings.email_from,
+            http=http,
+        )
+        log.info("email.sender_configured", provider="resend", from_=settings.email_from)
+    else:
+        _email_sender = NullSender()
+        log.warning("email.sender_null", reason="resend_api_key empty — emails logged only")
 
     event_bus = InProcessEventBus()
     # Asset Registry (Phase POC) — remplace les whitelists hardcoded de
@@ -196,7 +217,9 @@ def create_app() -> FastAPI:
     app = FastAPI(title="Shugu", version="0.2.0", lifespan=lifespan)
     app.include_router(health.router)
     app.include_router(auth.router)
+    app.include_router(account.router)       # /account/* — self-service user auth (v4 Phase 1)
     app.include_router(admin.router)
+    app.include_router(admin_users.router)   # /api/admin/users — VIP promote/revoke
     app.include_router(registry_api.public_router)
     app.include_router(registry_api.admin_router)
     app.include_router(hermes_state_api.router)

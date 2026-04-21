@@ -44,12 +44,23 @@ class Settings(BaseSettings):
     shugu_host: str = "127.0.0.1"
     shugu_port: int = 8701
 
-    # Auth
+    # Auth operator
     shugu_jwt_secret: str = Field(default="", description="HS256 secret for operator JWT")
     operator_username: str = ""
     operator_password_hash: str = ""
     jwt_access_ttl_s: int = 1800       # 30 min
     jwt_refresh_ttl_s: int = 604800    # 7 days
+
+    # Auth user (self-service: member / vip) — v4 Phase 1
+    # Secret séparé du JWT opérateur pour cloisonnement des surfaces d'attaque.
+    user_jwt_secret: str = Field(default="", description="HS256 secret for user JWT (member/vip)")
+    user_access_ttl_s: int = 3600      # 1 h
+    user_refresh_ttl_s: int = 2592000  # 30 j
+
+    # Email (Resend) — envoi des mails de vérification et notifications VIP.
+    resend_api_key: str = ""
+    email_from: str = "shugu@spoukie.uk"
+    public_site_url: str = "https://shugu.spoukie.uk"
 
     # LLM (Shugu + FilterBrain share the MiniMax account; can diverge later)
     minimax_api_key: str = ""
