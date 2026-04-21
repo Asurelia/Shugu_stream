@@ -22,7 +22,8 @@ type Section =
   | "community"
   | "assets"
   | "schedule"
-  | "moderation";
+  | "moderation"
+  | "users";
 
 type SidebarItem = { section: Section; label: string; path: string; icon: string };
 
@@ -35,6 +36,7 @@ const SIDEBAR: SidebarItem[] = [
   { section: "assets",       label: "Assets",        path: "/assets",        icon: "◇" },
   { section: "schedule",     label: "Schedule",      path: "/schedule",      icon: "◷" },
   { section: "moderation",   label: "Moderation",    path: "/moderation",    icon: "⊘" },
+  { section: "users",        label: "Utilisateurs",  path: "/users",         icon: "◆" },
 ];
 
 type Props = {
