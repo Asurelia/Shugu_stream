@@ -60,7 +60,7 @@ class Settings(BaseSettings):
     minimax_plan: str = "max"
     # MiniMax TTS (speech-2.8-hd, included in max-highspeed plan)
     minimax_tts_model: str = "speech-2.8-hd"
-    minimax_voice_id: str = "French_MovieLeadFemale"
+    minimax_voice_id: str = "French_Female_Speech_New"
     minimax_tts_speed: float = 1.0
 
     # TTS
