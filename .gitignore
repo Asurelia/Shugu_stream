@@ -43,3 +43,12 @@ tmp/
 
 # ── Claude Code agent state (scheduled tasks, session locks) — local only
 .claude/
+
+# ── Voice samples (TTS cloning source audio) — local / private by default
+# Les enregistrements de voix sont personnels, potentiellement identifiables.
+# On garde le dossier (README + .gitkeep) mais pas les samples eux-mêmes.
+assets/voice/*.wav
+assets/voice/*.mp3
+assets/voice/*.flac
+assets/voice/*.ogg
+assets/voice/*.m4a
