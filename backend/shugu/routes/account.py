@@ -37,7 +37,7 @@ from ..db.models import UserAccount, UserSession
 from ..db.session import session_scope
 
 
-router = APIRouter(prefix="/account", tags=["account"])
+router = APIRouter(prefix="/api/account", tags=["account"])
 log = structlog.get_logger(__name__)
 
 
@@ -123,13 +123,13 @@ def _set_user_cookies(response: Response, access: str, refresh: str, settings: S
         httponly=True,
         secure=True,
         samesite="strict",
-        path="/account/",
+        path="/api/account/",
     )
 
 
 def _clear_user_cookies(response: Response) -> None:
     response.delete_cookie(USER_ACCESS_COOKIE, path="/")
-    response.delete_cookie(USER_REFRESH_COOKIE, path="/account/")
+    response.delete_cookie(USER_REFRESH_COOKIE, path="/api/account/")
 
 
 def _compute_vip_active(account: UserAccount, now: Optional[datetime] = None) -> bool:

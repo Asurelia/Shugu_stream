@@ -55,26 +55,26 @@ async function request<T>(
 export async function register(
   body: { username: string; email: string; password: string },
 ): Promise<RegisterResponse> {
-  return request("/account/register", { method: "POST", body: JSON.stringify(body) });
+  return request("/api/account/register", { method: "POST", body: JSON.stringify(body) });
 }
 
 export async function login(
   body: { username_or_email: string; password: string },
 ): Promise<Me> {
-  return request("/account/login", { method: "POST", body: JSON.stringify(body) });
+  return request("/api/account/login", { method: "POST", body: JSON.stringify(body) });
 }
 
 export async function logout(): Promise<{ ok: boolean }> {
-  return request("/account/logout", { method: "POST" });
+  return request("/api/account/logout", { method: "POST" });
 }
 
 export async function refresh(): Promise<Me> {
-  return request("/account/refresh", { method: "POST" });
+  return request("/api/account/refresh", { method: "POST" });
 }
 
 export async function me(): Promise<Me | null> {
   try {
-    return await request<Me>("/account/me");
+    return await request<Me>("/api/account/me");
   } catch (err) {
     if (err instanceof AccountError && err.status === 401) return null;
     throw err;
@@ -82,14 +82,14 @@ export async function me(): Promise<Me | null> {
 }
 
 export async function verifyEmail(token: string): Promise<{ ok: boolean; detail?: string }> {
-  return request("/account/verify-email", {
+  return request("/api/account/verify-email", {
     method: "POST",
     body: JSON.stringify({ token }),
   });
 }
 
 export async function resendVerify(email: string): Promise<{ ok: boolean; detail?: string }> {
-  return request("/account/resend-verify", {
+  return request("/api/account/resend-verify", {
     method: "POST",
     body: JSON.stringify({ email }),
   });
