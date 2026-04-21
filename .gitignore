@@ -40,3 +40,6 @@ tmp/
 # Généré à la volée par les sessions de review (Chrome DevTools MCP,
 # Playwright, etc.). Peut être volumineux (~40 MB+), pas besoin en remote.
 .design-review/
+
+# ── Claude Code agent state (scheduled tasks, session locks) — local only
+.claude/
