@@ -85,13 +85,30 @@ export function OverlayHeader({ connStatus, viewerCount: _vc, speaking: _sp, ope
           >
             ⚙
           </button>
-          {operatorUsername && (
+          {operatorUsername ? (
+            <>
+              <Link
+                href={`/${encodeURIComponent(operatorUsername)}/account`}
+                title={`compte — ${operatorUsername}`}
+                className="hidden sm:inline text-[11px] font-semibold uppercase tracking-[0.15em] text-gray-400 hover:text-white transition-colors"
+              >
+                Account
+              </Link>
+              <Link
+                href={`/${encodeURIComponent(operatorUsername)}/admin`}
+                title={`dashboard — ${operatorUsername}`}
+                className="w-8 h-8 rounded-full border-2 border-celestial-purple flex items-center justify-center text-celestial-purple text-xs font-bold hover:glow-purple transition-all"
+              >
+                {operatorUsername.slice(0, 1).toUpperCase()}
+              </Link>
+            </>
+          ) : (
             <Link
-              href={`/${encodeURIComponent(operatorUsername)}/admin`}
-              title={`dashboard — ${operatorUsername}`}
-              className="w-8 h-8 rounded-full border-2 border-celestial-purple flex items-center justify-center text-celestial-purple text-xs font-bold hover:glow-purple transition-all"
+              href="/login"
+              title="se connecter"
+              className="text-[11px] font-semibold uppercase tracking-[0.15em] text-gray-400 hover:text-white transition-colors"
             >
-              {operatorUsername.slice(0, 1).toUpperCase()}
+              Log in
             </Link>
           )}
         </div>

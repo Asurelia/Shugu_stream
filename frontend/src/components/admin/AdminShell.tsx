@@ -4,20 +4,14 @@ import { useEffect, useState } from "react";
 import { fetchAuthStatus, logout } from "@/services/shuguClient";
 
 /**
- * Shell des pages `/[username]/admin/*` (mockups `tableau_de_bord_*`,
- * `live_control_center`, `analytics_community`, `assets_schedule`,
- * `admin_moderation`).
+ * Shell des pages `/[username]/admin/*` — iOS 26 Liquid Glass rail.
  *
- * Layout :
- *  - Sidebar gauche fixe (72px → 224px au hover desktop), `surface-container-low`
- *    + glow rose diffus. Logo "Aura AI" en haut, items de section au centre,
- *    "Start Stream" en bas + helpers (Help / Logout).
- *  - Contenu : padding large, fond `surface-dim` + nébuleuse floue radiale.
+ * Sidebar "always 224px" plus lisible que la version hover-only : le HUD
+ * viewer a déjà une densité forte, en admin on veut du calme + des labels
+ * toujours visibles. Responsivé <md : bascule en barre horizontale scrollable.
  *
  * Guard : si l'utilisateur n'est pas connecté OU que son username ne matche
- * pas `/[username]/admin/*`, redirect vers `/login`. Le match est
- * case-insensitive — on ne veut pas qu'un `/Spoukie/admin` renvoie 403 juste
- * à cause de la casse.
+ * pas `/[username]/admin/*`, redirect vers `/login`.
  */
 
 type Section =
@@ -30,12 +24,7 @@ type Section =
   | "schedule"
   | "moderation";
 
-type SidebarItem = {
-  section: Section;
-  label: string;
-  path: string;
-  icon: string;
-};
+type SidebarItem = { section: Section; label: string; path: string; icon: string };
 
 const SIDEBAR: SidebarItem[] = [
   { section: "overview",     label: "Live Control",  path: "",               icon: "◉" },
@@ -78,56 +67,45 @@ export function AdminShell({ active, title, subtitle, headerRight, children }: P
     if (!operator) { router.replace("/login"); return; }
     if (!urlUsername) return;
     if (operator.username.toLowerCase() !== urlUsername.toLowerCase()) {
-      // L'opérateur n'est pas propriétaire du dashboard demandé : on renvoie
-      // vers le sien plutôt que sur une page blanche ou un 403.
       router.replace(`/${encodeURIComponent(operator.username)}/admin`);
     }
   }, [authChecked, operator, urlUsername, router]);
 
   const handleLogout = async () => { await logout(); router.push("/"); };
 
-  const base = operator
-    ? `/${encodeURIComponent(operator.username)}/admin`
-    : "";
+  const base = operator ? `/${encodeURIComponent(operator.username)}/admin` : "";
+  const accountHref = operator ? `/${encodeURIComponent(operator.username)}/account` : "/login";
 
   return (
-    <div
-      className="font-quicksand min-h-screen text-veil-on-surface"
-      style={{
-        background:
-          "radial-gradient(ellipse at 80% 10%, rgba(224,142,254,0.12) 0%, transparent 55%)," +
-          "radial-gradient(ellipse at 15% 85%, rgba(129,236,255,0.08) 0%, transparent 55%)," +
-          "#0d0d18",
-      }}
-    >
-      {/* Sidebar ----------------------------------------------------- */}
-      <aside
-        className="fixed left-0 top-0 bottom-0 z-30 flex flex-col w-[72px] hover:w-[224px] group transition-[width] duration-200"
-        style={{
-          background:
-            "linear-gradient(180deg, rgba(18,18,30,0.95) 0%, rgba(13,13,24,0.98) 100%)",
-          backdropFilter: "blur(20px)",
-          WebkitBackdropFilter: "blur(20px)",
-          boxShadow: "inset -1px 0 0 0 rgba(224,142,254,0.08), 8px 0 40px rgba(0,0,0,0.25)",
-        }}
-      >
+    <div className="lg-page font-quicksand">
+      {/* Sidebar rail ----------------------------------------------- */}
+      <aside className="lg-rail fixed left-0 top-0 bottom-0 z-30 hidden md:flex flex-col w-[224px]">
         {/* Logo + identité */}
-        <div className="px-4 py-5 flex items-center gap-3 shrink-0">
-          <div className="w-10 h-10 rounded-xl veil-gradient-primary flex items-center justify-center shrink-0 veil-halo-pink">
-            <span className="text-white text-lg">✦</span>
+        <div className="px-4 pt-5 pb-4 flex items-center gap-3 shrink-0">
+          <div
+            className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0"
+            style={{
+              background: "linear-gradient(135deg, #e08efe 0%, #fd6c9c 100%)",
+              boxShadow: "0 10px 24px -10px rgba(224,142,254,0.6), inset 0 1px 0 rgba(255,255,255,0.3)",
+            }}
+          >
+            <span className="text-white text-lg font-bold">✦</span>
           </div>
-          <div className="min-w-0 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
-            <div className="veil-headline text-veil-on-surface text-sm tracking-tight truncate">
+          <div className="min-w-0">
+            <div className="font-comfortaa font-bold text-shugu-cream text-sm tracking-tight truncate">
               {operator?.username ?? "—"}
             </div>
-            <div className="veil-body text-[10px] text-veil-on-surface-variant tracking-[0.18em] uppercase truncate">
+            <div className="font-mono text-[10px] text-shugu-cream-dim tracking-[0.18em] uppercase">
               Celestial Veil
             </div>
           </div>
         </div>
 
         {/* Nav */}
-        <nav className="flex-1 px-2.5 py-2 flex flex-col gap-1 overflow-hidden">
+        <nav className="flex-1 px-3 py-2 flex flex-col gap-1 overflow-y-auto">
+          <div className="px-3 pb-1 text-[10px] uppercase tracking-[0.18em] text-shugu-cream-dim font-mono">
+            Dashboard
+          </div>
           {SIDEBAR.map((item) => {
             const href = `${base}${item.path}`;
             const isActive = item.section === active;
@@ -136,68 +114,97 @@ export function AdminShell({ active, title, subtitle, headerRight, children }: P
                 key={item.section}
                 href={base ? href : "#"}
                 aria-disabled={!base}
+                aria-current={isActive ? "page" : undefined}
                 className={[
-                  "flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all",
+                  "flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all text-[13px]",
                   isActive
-                    ? "veil-gradient-primary text-white veil-halo-pink"
-                    : "text-veil-on-surface-variant hover:text-veil-on-surface hover:bg-white/5",
+                    ? "text-white"
+                    : "text-shugu-cream-dim hover:text-shugu-cream hover:bg-white/[0.04]",
                 ].join(" ")}
+                style={isActive ? {
+                  background: "linear-gradient(135deg, rgba(224,142,254,0.18) 0%, rgba(253,108,156,0.14) 100%)",
+                  boxShadow: "inset 0 0 0 1px rgba(224,142,254,0.3), 0 0 18px -4px rgba(224,142,254,0.25)",
+                } : undefined}
               >
                 <span className="text-base shrink-0 w-5 text-center">{item.icon}</span>
-                <span className="veil-body text-[13px] font-semibold whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity duration-200">
-                  {item.label}
-                </span>
+                <span className="font-semibold whitespace-nowrap">{item.label}</span>
               </Link>
             );
           })}
+
+          <div className="px-3 pt-4 pb-1 text-[10px] uppercase tracking-[0.18em] text-shugu-cream-dim font-mono">
+            Compte
+          </div>
+          <Link
+            href={accountHref}
+            className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-shugu-cream-dim hover:text-shugu-cream hover:bg-white/[0.04] transition-colors text-[13px]"
+          >
+            <span className="text-base shrink-0 w-5 text-center">☼</span>
+            <span className="font-semibold">Paramètres</span>
+          </Link>
+          <Link
+            href="/"
+            className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-shugu-cream-dim hover:text-shugu-cream hover:bg-white/[0.04] transition-colors text-[13px]"
+          >
+            <span className="text-base shrink-0 w-5 text-center">⎋</span>
+            <span className="font-semibold">Retour au live</span>
+          </Link>
         </nav>
 
-        {/* CTA Start Stream */}
-        <div className="px-3 pb-3 shrink-0">
+        {/* Footer — Start Stream + Logout */}
+        <div className="px-3 pt-2 pb-4 shrink-0 border-t border-white/5">
           <Link
             href="/"
-            className="flex items-center justify-center gap-2 w-full py-2.5 rounded-xl veil-gradient-secondary text-white veil-halo-pink hover:scale-[1.02] transition-transform"
+            className="lgb lgb-primary lgb-md lgb-block mb-2"
+            style={{ textDecoration: "none" }}
           >
             <span>●</span>
-            <span className="veil-headline text-[12px] tracking-wide whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity duration-200">
-              Start Stream
-            </span>
-          </Link>
-        </div>
-
-        {/* Footer helpers */}
-        <div className="px-2.5 pb-4 flex flex-col gap-1 shrink-0">
-          <Link
-            href="/"
-            className="flex items-center gap-3 px-3 py-2 rounded-xl text-veil-on-surface-variant hover:text-veil-on-surface hover:bg-white/5 transition-colors"
-          >
-            <span className="text-base w-5 text-center">?</span>
-            <span className="veil-body text-[12px] whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity">
-              Help
-            </span>
+            <span>Start Stream</span>
           </Link>
           <button
             onClick={handleLogout}
-            className="flex items-center gap-3 px-3 py-2 rounded-xl text-veil-on-surface-variant hover:text-veil-secondary hover:bg-white/5 transition-colors text-left"
+            className="lgb lgb-subtle lgb-sm lgb-block"
           >
-            <span className="text-base w-5 text-center">⏻</span>
-            <span className="veil-body text-[12px] whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity">
-              Logout
-            </span>
+            <span>⏻</span><span>Déconnexion</span>
           </button>
         </div>
       </aside>
 
+      {/* Mobile top rail -------------------------------------------- */}
+      <nav
+        className="md:hidden fixed top-0 left-0 right-0 z-30 flex items-center gap-2 overflow-x-auto px-3 py-2 lg-rail"
+        style={{ borderRight: "0", borderBottom: "1px solid rgba(255,255,255,0.06)" }}
+      >
+        {SIDEBAR.map((item) => {
+          const href = `${base}${item.path}`;
+          const isActive = item.section === active;
+          return (
+            <Link
+              key={item.section}
+              href={base ? href : "#"}
+              className={[
+                "shrink-0 px-3 py-1.5 rounded-full text-[11px] font-semibold whitespace-nowrap transition-colors",
+                isActive
+                  ? "text-white bg-[linear-gradient(135deg,#e08efe,#d180ef)]"
+                  : "text-shugu-cream-dim border border-white/10",
+              ].join(" ")}
+            >
+              <span className="mr-1">{item.icon}</span>{item.label}
+            </Link>
+          );
+        })}
+      </nav>
+
       {/* Main -------------------------------------------------------- */}
-      <main className="pl-[72px] min-h-screen">
-        <div className="px-8 py-7 max-w-[1400px] mx-auto">
+      <main className="md:pl-[224px] pt-[52px] md:pt-0 min-h-screen">
+        <div className="px-5 sm:px-8 py-7 max-w-[1400px] mx-auto">
           <div className="flex items-end justify-between mb-6 gap-4 flex-wrap">
             <div className="min-w-0">
-              <h1 className="veil-headline text-2xl sm:text-3xl text-veil-on-surface tracking-tight">
+              <h1 className="font-comfortaa font-bold text-2xl sm:text-3xl text-shugu-cream tracking-tight">
                 {title}
               </h1>
               {subtitle && (
-                <p className="veil-body text-veil-on-surface-variant text-sm mt-1">
+                <p className="text-shugu-cream-dim text-sm mt-1">
                   {subtitle}
                 </p>
               )}
@@ -206,7 +213,7 @@ export function AdminShell({ active, title, subtitle, headerRight, children }: P
           </div>
 
           {authChecked && operator ? children : (
-            <div className="veil-body text-veil-on-surface-variant text-sm py-20 text-center">
+            <div className="text-shugu-cream-dim text-sm py-20 text-center">
               chargement…
             </div>
           )}
