@@ -103,11 +103,52 @@ if (-not (Test-Path $CloudflaredExe)) {
         -PassThru
 }
 
+# --- 4) LiveKit server (optionnel, VIP voice room) ---------------------------
+$LiveKitExe      = "C:\Users\rafai\livekit\livekit-server.exe"
+$LiveKitConfig   = Join-Path $Root "ops\livekit\config.yaml"
+$LiveKit = $null
+if (-not (Test-Path $LiveKitExe)) {
+    Write-Warning "livekit-server.exe introuvable à $LiveKitExe — skip (VIP room désactivée)"
+} elseif (-not (Test-Path $LiveKitConfig)) {
+    Write-Warning "config.yaml LiveKit introuvable à $LiveKitConfig — skip"
+} elseif (-not $env:LIVEKIT_API_KEY -or -not $env:LIVEKIT_API_SECRET) {
+    Write-Warning "LIVEKIT_API_KEY/SECRET absents de .env — skip LiveKit server"
+} else {
+    Write-Host ">> Starting livekit-server..." -ForegroundColor Cyan
+    $LiveKitKeys = "$($env:LIVEKIT_API_KEY): $($env:LIVEKIT_API_SECRET)"
+    $LiveKit = Start-Process -FilePath $LiveKitExe `
+        -ArgumentList @("--config", $LiveKitConfig, "--keys", $LiveKitKeys) `
+        -WindowStyle Hidden `
+        -RedirectStandardOutput (Join-Path $LogDir "livekit.log") `
+        -RedirectStandardError  (Join-Path $LogDir "livekit.err") `
+        -PassThru
+}
+
+# --- 5) VIP agent Worker (optionnel, nécessite LiveKit + MiniMax) ----------
+$VIPAgent = $null
+if (-not $LiveKit) {
+    Write-Warning "livekit-server pas démarré — skip VIP agent Worker"
+} elseif (-not $env:MINIMAX_API_KEY) {
+    Write-Warning "MINIMAX_API_KEY absent — skip VIP agent Worker"
+} else {
+    Write-Host ">> Starting VIP agent Worker..." -ForegroundColor Cyan
+    Start-Sleep -Seconds 2  # laisse livekit-server démarrer avant
+    $VIPAgent = Start-Process -FilePath $PythonExe `
+        -ArgumentList @("-m", "shugu.adapters.vip_agent", "start") `
+        -WorkingDirectory $BackendDir `
+        -WindowStyle Hidden `
+        -RedirectStandardOutput (Join-Path $LogDir "vip-agent.log") `
+        -RedirectStandardError  (Join-Path $LogDir "vip-agent.err") `
+        -PassThru
+}
+
 # --- Save PIDs ---------------------------------------------------------------
 $Pids = @{
     backend     = $Backend.Id
     frontend    = $Frontend.Id
-    cloudflared = if ($Tunnel) { $Tunnel.Id } else { $null }
+    cloudflared = if ($Tunnel)   { $Tunnel.Id }   else { $null }
+    livekit     = if ($LiveKit)  { $LiveKit.Id }  else { $null }
+    vip_agent   = if ($VIPAgent) { $VIPAgent.Id } else { $null }
     mode        = if ($Prod) { "prod" } else { "dev" }
     started_at  = (Get-Date).ToString("o")
 }
@@ -122,6 +163,16 @@ if ($Tunnel) {
     Write-Host ("  cloudflared PID {0,-6}  logs: {1}\cloudflared.{{log,err}}" -f $Tunnel.Id, $LogDir)
 } else {
     Write-Host "  cloudflared SKIP       (voir warnings ci-dessus)" -ForegroundColor DarkYellow
+}
+if ($LiveKit) {
+    Write-Host ("  livekit     PID {0,-6}  logs: {1}\livekit.{{log,err}}" -f $LiveKit.Id, $LogDir)
+} else {
+    Write-Host "  livekit     SKIP       (voir warnings ci-dessus)" -ForegroundColor DarkYellow
+}
+if ($VIPAgent) {
+    Write-Host ("  vip-agent   PID {0,-6}  logs: {1}\vip-agent.{{log,err}}" -f $VIPAgent.Id, $LogDir)
+} else {
+    Write-Host "  vip-agent   SKIP       (voir warnings ci-dessus)" -ForegroundColor DarkYellow
 }
 Write-Host ""
 Write-Host "Local  : http://127.0.0.1:3005" -ForegroundColor White

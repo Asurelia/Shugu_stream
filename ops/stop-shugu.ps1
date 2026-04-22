@@ -18,7 +18,7 @@ if (-not (Test-Path $PidFile)) {
 $Pids = Get-Content $PidFile -Raw | ConvertFrom-Json
 
 $stopped = 0
-foreach ($name in "backend", "frontend", "cloudflared") {
+foreach ($name in "backend", "frontend", "cloudflared", "livekit", "vip_agent") {
     $pid = $Pids.$name
     if (-not $pid) { continue }
     # taskkill /T tue aussi les process enfants (npm.cmd -> node)
