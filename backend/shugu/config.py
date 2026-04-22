@@ -4,10 +4,10 @@ from __future__ import annotations
 import os
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
-
 
 # Resolve the env file path in a portable way:
 #   1. SHUGU_ENV_FILE env var override (explicit)
@@ -44,12 +44,29 @@ class Settings(BaseSettings):
     shugu_host: str = "127.0.0.1"
     shugu_port: int = 8701
 
-    # Auth
+    # Auth operator
     shugu_jwt_secret: str = Field(default="", description="HS256 secret for operator JWT")
     operator_username: str = ""
     operator_password_hash: str = ""
     jwt_access_ttl_s: int = 1800       # 30 min
     jwt_refresh_ttl_s: int = 604800    # 7 days
+
+    # Auth user (self-service: member / vip) — v4 Phase 1
+    # Secret séparé du JWT opérateur pour cloisonnement des surfaces d'attaque.
+    user_jwt_secret: str = Field(default="", description="HS256 secret for user JWT (member/vip)")
+    user_access_ttl_s: int = 3600      # 1 h
+    user_refresh_ttl_s: int = 2592000  # 30 j
+
+    # Email (Resend) — envoi des mails de vérification et notifications VIP.
+    resend_api_key: str = ""
+    email_from: str = "shugu@spoukie.uk"
+    public_site_url: str = "https://shugu.spoukie.uk"
+
+    # LiveKit — v4 Phase 3a. Si vide, le VIP voice agent est désactivé
+    # (la route /api/livekit/token renverra 503).
+    livekit_url: str = ""           # wss://livekit.spoukie.uk
+    livekit_api_key: str = ""       # LK API key (dashboard LiveKit/self-hosted)
+    livekit_api_secret: str = ""    # LK API secret
 
     # LLM (Shugu + FilterBrain share the MiniMax account; can diverge later)
     minimax_api_key: str = ""
@@ -60,7 +77,7 @@ class Settings(BaseSettings):
     minimax_plan: str = "max"
     # MiniMax TTS (speech-2.8-hd, included in max-highspeed plan)
     minimax_tts_model: str = "speech-2.8-hd"
-    minimax_voice_id: str = "French_MovieLeadFemale"
+    minimax_voice_id: str = "French_Female_Speech_New"
     minimax_tts_speed: float = 1.0
 
     # TTS
@@ -90,6 +107,36 @@ class Settings(BaseSettings):
     # Storage
     shugu_postgres_dsn: str = "postgresql+asyncpg://openclaw@localhost/shugu"
     shugu_redis_url: str = "redis://localhost:6379/1"
+
+    # Event bus — v4 Phase 1 (brique 1.1). Mode `"inproc"` = bus asyncio
+    # in-memory, identique au MVP pré-phase 1 (single worker). Mode `"redis"`
+    # active le fanout cross-process via Redis pub/sub pour les topics listés
+    # dans `DEFAULT_BROADCAST_TOPICS` (voir `core/event_bus_factory.py`).
+    # À basculer sur `"redis"` avant d'ajouter la VIP bridge (brique 1.2) ou
+    # un worker Mémoire long-terme hors-process.
+    event_bus_mode: Literal["inproc", "redis"] = "inproc"
+    event_bus_redis_prefix: str = "shugu:bus:"
+
+    # Mémoire long-terme — v4 Phase 1 Brique 1.3. `memory_enabled=False` tant
+    # que l'embedder et l'extraction LLM ne sont pas branchés (Phase 2). Le
+    # skeleton pose les tables, l'agent, et le hook optionnel dans les brains ;
+    # basculer sur True nécessite que Phase 2 soit livrée.
+    memory_enabled: bool = False
+    memory_embed_dim: int = 1024
+
+    # VIP bridge — v4 Phase 1 Brique 1.2. `vip_agent` (Worker LiveKit Agents,
+    # process séparé) communique avec le backend FastAPI via HTTP localhost
+    # signé. `vip_internal_url` est l'endpoint backend (typiquement
+    # http://127.0.0.1:<shugu_port>) ; `vip_internal_secret` est le secret
+    # partagé (header `X-Internal-Secret`, comparé via hmac.compare_digest).
+    # Si le secret est vide, toutes les requêtes /internal/vip/* retournent 401
+    # (fail closed — pas d'endpoint ouvert en prod par accident).
+    vip_internal_url: str = "http://127.0.0.1:8701"
+    vip_internal_secret: str = Field(
+        default="",
+        description="Secret HMAC partagé entre backend et process vip_agent. "
+                    "Généré via `python -c \"import secrets; print(secrets.token_hex(32))\"`.",
+    )
 
     # Crypto
     ip_hash_salt: str = ""

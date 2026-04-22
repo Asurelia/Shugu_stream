@@ -321,6 +321,23 @@ class DesktopHideHermesStateCall(BaseModel):
     name: Literal["desktop.hide_hermes_state"] = "desktop.hide_hermes_state"
 
 
+# ─── Chat (texte curé v4 Phase 1) ────────────────────────────────────────────
+# Shugu appelle chat.post() uniquement quand elle veut afficher un message
+# TEXTE dans le chat visiteur : rappels, liens, sponsors. Pas pour sous-titrer
+# sa voix — le canal oral reste le canal principal.
+
+
+class ChatPostCall(BaseModel):
+    """Publie un message texte dans le chat visiteur, côté Shugu.
+
+    NE PAS utiliser pour transcrire ce qu'elle dit oralement — la voix reste
+    le canal principal. Utiliser pour les rappels, liens cliquables, noms de
+    sponsors, CTAs. 500 chars max (même borne que body.say).
+    """
+    name: Literal["chat.post"] = "chat.post"
+    text: str = Field(min_length=1, max_length=500)
+
+
 BodyControlCall = Annotated[
     Union[
         BodySayCall,
@@ -338,6 +355,7 @@ BodyControlCall = Annotated[
         DesktopArrangeCall,
         DesktopShowHermesStateCall,
         DesktopHideHermesStateCall,
+        ChatPostCall,
     ],
     Field(discriminator="name"),
 ]
@@ -349,6 +367,7 @@ KNOWN_NAMES: frozenset[str] = frozenset({
     "desktop.open_file", "desktop.edit_file", "desktop.close_file",
     "desktop.show_image", "desktop.arrange",
     "desktop.show_hermes_state", "desktop.hide_hermes_state",
+    "chat.post",
 })
 
 
@@ -380,6 +399,7 @@ def parse_call(name: str, args: dict) -> BodyControlCall:
         "desktop.arrange":           DesktopArrangeCall,
         "desktop.show_hermes_state": DesktopShowHermesStateCall,
         "desktop.hide_hermes_state": DesktopHideHermesStateCall,
+        "chat.post":                 ChatPostCall,
     }
     return mapping[name].model_validate(payload)
 
@@ -425,7 +445,10 @@ async def parse_call_async(
 
 # ─── OpenAI-style tools schema for the brain to send to MiniMax ──────────────
 
-async def openai_tools_schema(registry: Optional["Registry"] = None) -> list[dict]:
+async def openai_tools_schema(
+    registry: Optional["Registry"] = None,
+    allowed_names: Optional[frozenset[str]] = None,
+) -> list[dict]:
     """Return the tool declarations to send as `tools=[...]` in the chat call.
 
     MiniMax M2/M2.7 accept the standard OpenAI tool-calling shape and translate
@@ -436,6 +459,12 @@ async def openai_tools_schema(registry: Optional["Registry"] = None) -> list[dic
     construits depuis la DB `asset_registry` au lieu du frozenset fallback.
     Permet d'ajouter un gesture via l'admin UI et Hermes le verra au prochain
     appel, sans redéploiement.
+
+    `allowed_names` optionnel (v4 Phase 3a) : si fourni, la liste retournée
+    est filtrée pour ne contenir QUE les tools dont le `function.name` est
+    dans `allowed_names`. Utilisé pour les sessions VIP (`VIP_TOOLS`) —
+    le LLM voit un schema réduit, il ne sait même pas que `body.scene` existe.
+    Voir `core/vip_toolset.py`.
     """
     # ─── Enums dynamiques (registry → fallback frozenset si non-init ou vide)
     if registry is not None:
@@ -452,7 +481,7 @@ async def openai_tools_schema(registry: Optional["Registry"] = None) -> list[dic
         emote_enum   = sorted(EMOTES)
         shot_enum    = sorted(SHOTS)
 
-    return [
+    tools: list[dict] = [
         {
             "type": "function",
             "function": {
@@ -678,4 +707,26 @@ async def openai_tools_schema(registry: Optional["Registry"] = None) -> list[dic
                 "parameters": {"type": "object", "properties": {}},
             },
         },
+        {
+            "type": "function",
+            "function": {
+                "name": "chat.post",
+                "description": (
+                    "Post a SHORT text message in the visitor chat. "
+                    "Use SPARINGLY — this is NOT for subtitling your voice. "
+                    "Reserve for: reminders, links, sponsor names, CTAs. "
+                    "Max 500 chars."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "text": {"type": "string", "description": "What to post in the chat. 1-2 sentences, factual."},
+                    },
+                    "required": ["text"],
+                },
+            },
+        },
     ]
+    if allowed_names is not None:
+        tools = [t for t in tools if t["function"]["name"] in allowed_names]
+    return tools

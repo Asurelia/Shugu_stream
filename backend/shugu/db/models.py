@@ -9,7 +9,7 @@ from sqlalchemy import (
     String, Text, UniqueConstraint, func,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
 class Base(DeclarativeBase):
@@ -58,6 +58,72 @@ class OperatorSession(Base):
     revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     user_agent: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     ip_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+
+
+class UserAccount(Base):
+    """Compte self-service (members + VIPs) — v4 Phase 1.
+
+    Distinct de `OperatorSession` / `Visitor` : ces comptes sont créés par les
+    utilisateurs eux-mêmes via `/auth/register`, vérifient leur email, puis
+    peuvent être promus en VIP par l'opérateur (`vip_since` set, `vip_until`
+    optionnel pour expiration abonnement).
+
+    Le rôle effectif se dérive en runtime :
+      - `email_verified_at is None`                      → compte en attente
+      - `email_verified_at is not None, vip_since is None` → role = "member"
+      - `vip_since <= now < vip_until (ou None)`         → role = "vip"
+    """
+    __tablename__ = "user_accounts"
+
+    id: Mapped[str] = mapped_column(String(26), primary_key=True)  # ULID
+    # Username canonique = lowercased côté app avant insert. L'UniqueConstraint
+    # protège contre le double-register même si la normalisation client bugue.
+    username: Mapped[str] = mapped_column(String(32), nullable=False)
+    email: Mapped[str] = mapped_column(String(254), nullable=False)
+    password_hash: Mapped[str] = mapped_column(String(72), nullable=False)  # bcrypt = 60; marge
+    display_name: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+
+    email_verified_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    vip_since: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    vip_until: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    last_seen_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
+
+    sessions: Mapped[list["UserSession"]] = relationship(
+        "UserSession", back_populates="user", cascade="all, delete-orphan",
+    )
+
+    __table_args__ = (
+        UniqueConstraint("username", name="uq_user_accounts_username"),
+        UniqueConstraint("email", name="uq_user_accounts_email"),
+        Index("idx_user_vip_active", "vip_since", "vip_until"),
+        Index("idx_user_active", "is_active"),
+    )
+
+
+class UserSession(Base):
+    """Session JWT d'un `UserAccount`. Miroir de `OperatorSession` avec FK user."""
+    __tablename__ = "user_sessions"
+
+    jti: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True)
+    user_id: Mapped[str] = mapped_column(
+        String(26),
+        ForeignKey("user_accounts.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    issued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    user_agent: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    ip_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+
+    user: Mapped[UserAccount] = relationship("UserAccount", back_populates="sessions")
+
+    __table_args__ = (
+        Index("idx_user_sessions_user", "user_id", "expires_at"),
+    )
 
 
 class ModerationEvent(Base):

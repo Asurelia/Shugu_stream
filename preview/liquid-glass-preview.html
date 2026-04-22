@@ -1,0 +1,625 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Shugu · Liquid Glass — aperçu login / account / admin</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Comfortaa:wght@500;600;700&family=Quicksand:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../frontend/src/styles/liquid-glass.css">
+<style>
+  :root {
+    --font-display: "Quicksand", system-ui, sans-serif;
+    --font-body:    "Quicksand", system-ui, sans-serif;
+    --font-mono:    "JetBrains Mono", ui-monospace, monospace;
+    --on-surface: #ece8f5;
+    --on-surface-variant: #a5a0bf;
+    --on-surface-muted: #6e6a89;
+    --shugu-pink: #fd6c9c;
+    --shugu-pink-glow: #ff97b8;
+    --shugu-pink-soft: #ffb4c7;
+    --shugu-cream: #ece8f5;
+    --shugu-cream-dim: #a5a0bf;
+  }
+  html, body { margin: 0; padding: 0; font-family: var(--font-body); background: #06060d; color: var(--on-surface); }
+  *, *::before, *::after { box-sizing: border-box; }
+  .font-quicksand { font-family: "Quicksand", system-ui, sans-serif; }
+  .font-comfortaa { font-family: "Comfortaa", system-ui, sans-serif; }
+  .font-mono { font-family: var(--font-mono); }
+  .text-shugu-cream { color: var(--shugu-cream); }
+  .text-shugu-cream-dim { color: var(--shugu-cream-dim); }
+  .text-shugu-pink-soft { color: var(--shugu-pink-soft); }
+  .text-shugu-pink-glow { color: var(--shugu-pink-glow); }
+  .text-shugu-tertiary { color: #81ecff; }
+  .bg-shugu-pink { background: var(--shugu-pink); }
+  .animate-pulse { animation: lp 1.6s ease-in-out infinite; }
+  @keyframes lp { 0%,100% { opacity: 0.5 } 50% { opacity: 1 } }
+  .accent-shugu-pink { accent-color: var(--shugu-pink); }
+
+  /* Layout d'aperçu : trois colonnes, chacune un écran */
+  .preview-wrap { max-width: 1440px; margin: 0 auto; padding: 28px 24px 80px; }
+  .preview-head { text-align: center; margin-bottom: 32px; }
+  .preview-head h1 { font-family: Comfortaa; font-size: 28px; margin: 0 0 6px; color: var(--shugu-cream); }
+  .preview-head p  { font-size: 13px; color: var(--shugu-cream-dim); margin: 0; }
+  .grid { display: grid; grid-template-columns: 1fr; gap: 32px; }
+  @media (min-width: 1100px) { .grid { grid-template-columns: 440px 1fr; } }
+  .screen {
+    border-radius: 28px; overflow: hidden;
+    background: #0a0a14;
+    box-shadow: 0 40px 80px -40px rgba(0,0,0,0.6), 0 0 0 1px rgba(255,255,255,0.04);
+    position: relative;
+  }
+  .screen-label {
+    position: absolute; top: 14px; right: 14px; z-index: 10;
+    background: rgba(0,0,0,0.45); backdrop-filter: blur(8px);
+    border: 1px solid rgba(255,255,255,0.08);
+    padding: 4px 10px; border-radius: 999px;
+    font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.16em; text-transform: uppercase;
+    color: var(--shugu-cream-dim);
+  }
+  .screen iframe { border: 0; width: 100%; display: block; background: transparent; }
+
+  /* Helpers utilisés en inline */
+  .space-y-2 > * + * { margin-top: 8px; }
+  .space-y-4 > * + * { margin-top: 16px; }
+  .flex { display: flex; } .grid-c { display: grid; }
+  .items-center { align-items: center; } .items-end { align-items: flex-end; }
+  .justify-between { justify-content: space-between; } .justify-center { justify-content: center; } .justify-end { justify-content: flex-end; }
+  .gap-1 { gap: 4px; } .gap-2 { gap: 8px; } .gap-3 { gap: 12px; } .gap-4 { gap: 16px; } .gap-5 { gap: 20px; }
+  .w-full { width: 100%; } .max-w-md { max-width: 420px; } .mx-auto { margin-left: auto; margin-right: auto; }
+  .text-center { text-align: center; }
+  .mb-1 { margin-bottom: 4px; } .mb-2 { margin-bottom: 8px; } .mb-3 { margin-bottom: 12px; } .mb-4 { margin-bottom: 16px; } .mb-5 { margin-bottom: 20px; } .mb-6 { margin-bottom: 24px; }
+  .mt-1 { margin-top: 4px; } .mt-2 { margin-top: 8px; } .mt-3 { margin-top: 12px; } .mt-4 { margin-top: 16px; } .mt-5 { margin-top: 20px; }
+  .p-4 { padding: 16px; } .p-5 { padding: 20px; } .p-6 { padding: 24px; }
+  .px-6 { padding-left: 24px; padding-right: 24px; } .py-10 { padding-top: 40px; padding-bottom: 40px; }
+  .uppercase { text-transform: uppercase; } .tracking-wide { letter-spacing: 0.05em; }
+  .text-xs { font-size: 11px; } .text-sm { font-size: 13px; } .text-base { font-size: 14px; } .text-lg { font-size: 18px; } .text-xl { font-size: 22px; } .text-2xl { font-size: 26px; } .text-3xl { font-size: 30px; }
+  .font-bold { font-weight: 700; } .font-semibold { font-weight: 600; }
+  .leading-snug { line-height: 1.4; } .leading-relaxed { line-height: 1.6; }
+  .hidden { display: none; }
+  .relative { position: relative; } .absolute { position: absolute; }
+  .opacity-70 { opacity: 0.7; }
+  .rounded-full { border-radius: 999px; }
+  .rounded-2xl { border-radius: 16px; }
+  .overflow-hidden { overflow: hidden; }
+  .aspect-video { aspect-ratio: 16/9; }
+  .grid-cols-3 { grid-template-columns: repeat(3, 1fr); }
+  .grid-cols-4 { grid-template-columns: repeat(4, 1fr); }
+  .grid-cols-2 { grid-template-columns: repeat(2, 1fr); }
+  .col-sidebar { grid-template-columns: 224px 1fr; }
+  .flex-col { flex-direction: column; }
+  .flex-wrap { flex-wrap: wrap; }
+  .min-w-0 { min-width: 0; }
+  .shrink-0 { flex-shrink: 0; }
+
+  /* Sidebar look dans l'admin demo */
+  .demo-rail {
+    width: 224px; min-height: 100%;
+    padding: 16px 12px;
+    border-right: 1px solid rgba(255,255,255,0.06);
+    background: linear-gradient(180deg, rgba(18,16,30,0.72) 0%, rgba(12,10,22,0.85) 100%);
+    display: flex; flex-direction: column; gap: 6px;
+  }
+  .demo-rail .title { padding: 0 10px; font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--shugu-cream-dim); margin: 8px 0 4px; }
+  .demo-rail a { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-radius: 12px; color: var(--shugu-cream-dim); font-size: 13px; font-weight: 600; text-decoration: none; }
+  .demo-rail a.active { color: #fff; background: linear-gradient(135deg, rgba(224,142,254,0.18), rgba(253,108,156,0.14)); box-shadow: inset 0 0 0 1px rgba(224,142,254,0.3), 0 0 18px -4px rgba(224,142,254,0.25); }
+  .demo-rail a:hover:not(.active) { color: var(--shugu-cream); background: rgba(255,255,255,0.04); }
+
+  .spacer-grid { grid-template-columns: 1fr 320px; }
+  .stat-card { padding: 12px 16px; }
+
+  code { background: rgba(255,255,255,0.06); padding: 2px 6px; border-radius: 6px; font-family: var(--font-mono); font-size: 11px; }
+
+  /* Tweaks panel */
+  .tweaks {
+    position: fixed; right: 20px; bottom: 20px; z-index: 50;
+    width: 260px; display: none;
+  }
+  .tweaks.open { display: block; }
+  .tweaks .hd { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+  .tweaks label { display: flex; align-items: center; justify-content: space-between; font-size: 12px; color: var(--shugu-cream-dim); padding: 6px 0; border-top: 1px solid rgba(255,255,255,0.05); }
+  .tweaks label:first-of-type { border-top: 0; }
+  .tweaks input[type="range"] { width: 110px; accent-color: var(--shugu-pink); }
+  .tweaks select { background: rgba(10,10,18,0.5); color: var(--shugu-cream); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; padding: 4px 8px; font-size: 12px; }
+</style>
+</head>
+<body>
+
+<div class="preview-wrap">
+  <header class="preview-head">
+    <h1>Shugu · Liquid Glass</h1>
+    <p>Aperçu statique des 3 écrans utilisateurs — <code>login</code>, <code>account</code>, <code>admin</code></p>
+  </header>
+
+  <!-- ═══════════════════════════════ LOGIN ═══════════════════════════════ -->
+  <section style="margin-bottom: 48px;">
+    <div class="screen" style="height: 780px;">
+      <span class="screen-label">/login</span>
+      <div class="lg-page" style="min-height: 780px; display: flex; align-items: center; justify-content: center;">
+        <main class="relative" style="width: 100%; max-width: 420px; padding: 0 16px;">
+          <header class="text-center mb-5" style="margin-top: 32px;">
+            <div class="flex items-center justify-center gap-2" style="color: var(--shugu-cream-dim);">
+              <span class="text-shugu-pink-glow text-xl">✦</span>
+              <span class="font-comfortaa font-bold text-shugu-cream" style="font-size: 18px; letter-spacing: 0.02em;">Shugu</span>
+              <span class="text-xs uppercase" style="letter-spacing: 0.2em;">· Celestial Veil</span>
+            </div>
+          </header>
+
+          <div class="lg lg-card">
+            <span class="lg-specular"></span><span class="lg-edge"></span><span class="lg-shimmer"></span>
+            <div class="lg-content">
+              <div style="padding: 26px;">
+                <div class="flex items-center justify-center mb-5">
+                  <div class="lg-tabs">
+                    <button class="lg-tab" aria-selected="true">Sign in</button>
+                    <button class="lg-tab">Create account</button>
+                  </div>
+                </div>
+
+                <h2 class="font-comfortaa font-bold text-shugu-cream text-center" style="font-size: 20px;">Welcome back ♡</h2>
+                <p class="text-xs text-shugu-cream-dim text-center mt-1 mb-5">Accès opérateur — commandes Hermes réelles.</p>
+
+                <div class="grid-c grid-cols-3 gap-2 mb-5" style="display: grid;">
+                  <button class="lgb lgb-ghost lgb-md" style="padding: 10px;">
+                    <svg width="14" height="14" viewBox="0 0 24 24"><path fill="#ea4335" d="M12 11v3.5h5.1a5.2 5.2 0 0 1-5.1 3.9 5.9 5.9 0 1 1 3.9-10.3l2.5-2.5A9.4 9.4 0 1 0 21.3 12c0-.6 0-1.1-.1-1.6z"/><path fill="#fbbc05" d="M3.6 7.8l2.9 2.1A5.9 5.9 0 0 1 12 6.1a5.6 5.6 0 0 1 3.9 1.5l2.5-2.5A9.4 9.4 0 0 0 3.6 7.8z"/><path fill="#34a853" d="M12 21.4a9.4 9.4 0 0 0 6.5-2.5l-3-2.5a5.7 5.7 0 0 1-8.5-3l-3 2.3a9.4 9.4 0 0 0 8 5.7z"/><path fill="#4285f4" d="M21.2 10.4H12V14h5.3a4.5 4.5 0 0 1-1.8 2.4l3 2.5a9.4 9.4 0 0 0 2.7-6.7c0-.6 0-1.2-.1-1.8z"/></svg>
+                    Google
+                  </button>
+                  <button class="lgb lgb-ghost lgb-md" style="padding: 10px;">
+                    <svg width="14" height="14" viewBox="0 0 24 24"><path fill="#5865f2" d="M20 4.5A17 17 0 0 0 15.4 3l-.2.4a13 13 0 0 1 3.6 1.6 13 13 0 0 0-13.6 0A13 13 0 0 1 8.8 3.4L8.6 3A17 17 0 0 0 4 4.5C1.6 8.1.9 11.7 1.2 15.2c1.9 1.4 3.8 2.3 5.6 2.8l.5-.7a11 11 0 0 1-1.9-.9l.4-.4a11 11 0 0 0 10.4 0l.4.4a11 11 0 0 1-1.9.9l.5.7c1.8-.5 3.7-1.4 5.6-2.8.5-4.1-.5-7.7-2.8-10.7zM9 13.6c-.9 0-1.6-.8-1.6-1.9S8.1 9.9 9 9.9s1.6.8 1.6 1.9S9.9 13.6 9 13.6zm6 0c-.9 0-1.6-.8-1.6-1.9s.7-1.9 1.6-1.9 1.6.8 1.6 1.9-.7 1.9-1.6 1.9z"/></svg>
+                    Discord
+                  </button>
+                  <button class="lgb lgb-ghost lgb-md" style="padding: 10px;">
+                    <svg width="14" height="14" viewBox="0 0 24 24"><path fill="#9146ff" d="M4 3v15h5v3h3l3-3h4l5-5V3zm16 9-3 3h-5l-3 3v-3H5V5h15z"/></svg>
+                    Twitch
+                  </button>
+                </div>
+
+                <div class="flex items-center gap-3" style="margin: 16px 0;">
+                  <span style="flex: 1; height: 1px; background: rgba(255,255,255,0.1);"></span>
+                  <span class="text-xs text-shugu-cream-dim uppercase" style="letter-spacing: 0.22em; font-size: 10px;">ou avec email</span>
+                  <span style="flex: 1; height: 1px; background: rgba(255,255,255,0.1);"></span>
+                </div>
+
+                <div class="flex flex-col gap-3">
+                  <div class="lgi-group">
+                    <label class="lgi-label">Nom d'utilisateur</label>
+                    <input class="lgi" type="text" value="spoukie" />
+                  </div>
+                  <div class="lgi-group">
+                    <label class="lgi-label">Mot de passe</label>
+                    <input class="lgi" type="password" value="••••••••" />
+                  </div>
+                  <div class="flex items-center justify-between text-xs text-shugu-cream-dim mt-1">
+                    <label class="flex items-center gap-2"><input type="checkbox" class="accent-shugu-pink" checked />Rester connecté</label>
+                    <a href="#" style="color: inherit;">Mot de passe oublié ?</a>
+                  </div>
+                  <button class="lgb lgb-primary lgb-lg lgb-block mt-2">se connecter ♡</button>
+                </div>
+              </div>
+              <div style="border-top: 1px solid rgba(255,255,255,0.05); padding: 12px 24px; text-align: center;">
+                <a href="#" style="font-size: 12px; color: var(--shugu-cream-dim); text-decoration: none;">← retour au live</a>
+              </div>
+            </div>
+          </div>
+
+          <footer class="text-center" style="margin-top: 24px; font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--shugu-cream-dim);">
+            v0.1 · liquid glass build
+          </footer>
+        </main>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════════════ ACCOUNT ═══════════════════════════════ -->
+  <section style="margin-bottom: 48px;">
+    <div class="screen" style="height: 1280px;">
+      <span class="screen-label">/[username]/account</span>
+      <div class="lg-page" style="min-height: 1280px;">
+        <div style="max-width: 960px; margin: 0 auto; padding: 32px 24px;">
+          <header class="mb-6 flex items-end justify-between flex-wrap gap-4">
+            <div>
+              <a href="#" style="font-size: 11px; letter-spacing: 0.2em; text-transform: uppercase; color: var(--shugu-cream-dim); text-decoration: none;">← admin</a>
+              <h1 class="font-comfortaa font-bold text-shugu-cream" style="font-size: 30px; margin-top: 4px;">Mon compte</h1>
+              <p class="text-sm text-shugu-cream-dim mt-1">Gère ton profil, ta sécurité et tes abonnements.</p>
+            </div>
+            <div class="flex items-center gap-2">
+              <span class="lgb lgb-sm" style="color: #e08efe; border-color: rgba(224,142,254,0.3); cursor: default;">
+                <span style="width:6px;height:6px;border-radius:50%;background:currentColor;box-shadow:0 0 8px currentColor;"></span> VIP
+              </span>
+              <button class="lgb lgb-subtle lgb-sm">Se déconnecter</button>
+            </div>
+          </header>
+
+          <div class="mb-6"><div class="lg-tabs">
+            <button class="lg-tab" aria-selected="true">Profil</button>
+            <button class="lg-tab">Sécurité</button>
+            <button class="lg-tab">Abonnement</button>
+            <button class="lg-tab">Notifications</button>
+            <button class="lg-tab">Connexions</button>
+            <button class="lg-tab">Données</button>
+          </div></div>
+
+          <section class="lg-section">
+            <header class="lg-section-head">
+              <div>
+                <div class="lg-section-title">Profil public</div>
+                <div class="lg-section-sub">Ce que voient les viewers dans le chat et sur ta chaîne.</div>
+              </div>
+              <button class="lgb lgb-primary lgb-sm">Enregistrer</button>
+            </header>
+            <div class="flex items-center gap-4 mb-4">
+              <div style="width:64px;height:64px;border-radius:16px;background:linear-gradient(135deg,#e08efe,#fd6c9c);display:flex;align-items:center;justify-content:center;box-shadow:0 10px 28px -10px rgba(224,142,254,0.55),inset 0 1px 0 rgba(255,255,255,0.35);">
+                <span class="font-comfortaa font-bold" style="color:#fff;font-size:26px;">S</span>
+              </div>
+              <div style="flex:1;">
+                <div class="text-sm font-semibold text-shugu-cream">spoukie</div>
+                <div class="text-xs font-mono text-shugu-cream-dim" style="letter-spacing:0.02em;">shugu.tv/spoukie</div>
+              </div>
+              <button class="lgb lgb-ghost lgb-sm">Changer l'avatar</button>
+            </div>
+            <div class="flex flex-col gap-3">
+              <div class="lgi-group"><label class="lgi-label">Nom affiché</label><input class="lgi" value="spoukie" /></div>
+              <div class="lgi-group"><label class="lgi-label">Bio</label><input class="lgi" value="VTuber — streams Aura AI ♡" /></div>
+            </div>
+          </section>
+
+          <section class="lg-section">
+            <header class="lg-section-head">
+              <div>
+                <div class="lg-section-title">Ton tier</div>
+                <div class="lg-section-sub">Déverrouille plus de fonctionnalités et de commandes Hermes.</div>
+              </div>
+            </header>
+            <div class="grid-c grid-cols-3 gap-3" style="display: grid; margin-top: 8px;">
+
+              <div class="lg lg-card">
+                <span class="lg-specular"></span><span class="lg-edge"></span>
+                <div class="lg-content p-4">
+                  <div class="flex items-center justify-between">
+                    <div class="font-comfortaa font-bold text-shugu-cream">Free</div>
+                  </div>
+                  <div class="text-lg font-bold text-shugu-cream mt-1">0 €</div>
+                  <ul style="margin-top:12px;padding:0;list-style:none;">
+                    <li class="text-xs text-shugu-cream-dim" style="display:flex;gap:8px;align-items:center;">
+                      <span class="text-shugu-pink-soft">✓</span>Stream 720p</li>
+                    <li class="text-xs text-shugu-cream-dim mt-1" style="display:flex;gap:8px;align-items:center;">
+                      <span class="text-shugu-pink-soft">✓</span>Chat basique</li>
+                  </ul>
+                  <button class="lgb lgb-ghost lgb-sm lgb-block mt-4">downgrade</button>
+                </div>
+              </div>
+
+              <div class="lg lg-card" style="box-shadow: inset 0 0 0 1px rgba(224,142,254,0.5), 0 20px 50px -28px rgba(224,142,254,0.4);">
+                <span class="lg-specular"></span><span class="lg-edge"></span>
+                <div class="lg-content p-4">
+                  <div class="flex items-center justify-between">
+                    <div class="font-comfortaa font-bold text-shugu-cream">VIP</div>
+                    <span class="lgb lgb-sm" style="color:#e08efe;border-color:rgba(224,142,254,0.3);cursor:default;"><span style="width:6px;height:6px;border-radius:50%;background:currentColor;box-shadow:0 0 8px currentColor;"></span>actif</span>
+                  </div>
+                  <div class="text-lg font-bold text-shugu-cream mt-1">9 €/mo</div>
+                  <ul style="margin-top:12px;padding:0;list-style:none;">
+                    <li class="text-xs text-shugu-cream-dim" style="display:flex;gap:8px;align-items:center;"><span class="text-shugu-pink-soft">✓</span>1080p @ 60fps</li>
+                    <li class="text-xs text-shugu-cream-dim mt-1" style="display:flex;gap:8px;align-items:center;"><span class="text-shugu-pink-soft">✓</span>Aura expressions +</li>
+                    <li class="text-xs text-shugu-cream-dim mt-1" style="display:flex;gap:8px;align-items:center;"><span class="text-shugu-pink-soft">✓</span>Commandes Hermes</li>
+                  </ul>
+                  <button class="lgb lgb-subtle lgb-sm lgb-block mt-4" disabled>ton plan actuel</button>
+                </div>
+              </div>
+
+              <div class="lg lg-card">
+                <span class="lg-specular"></span><span class="lg-edge"></span>
+                <div class="lg-content p-4">
+                  <div class="flex items-center justify-between">
+                    <div class="font-comfortaa font-bold text-shugu-cream">Admin</div>
+                  </div>
+                  <div class="text-lg font-bold text-shugu-cream mt-1">sur demande</div>
+                  <ul style="margin-top:12px;padding:0;list-style:none;">
+                    <li class="text-xs text-shugu-cream-dim" style="display:flex;gap:8px;align-items:center;"><span class="text-shugu-pink-soft">✓</span>Multi-streams</li>
+                    <li class="text-xs text-shugu-cream-dim mt-1" style="display:flex;gap:8px;align-items:center;"><span class="text-shugu-pink-soft">✓</span>SLA prioritaire</li>
+                    <li class="text-xs text-shugu-cream-dim mt-1" style="display:flex;gap:8px;align-items:center;"><span class="text-shugu-pink-soft">✓</span>Accès tokens API</li>
+                  </ul>
+                  <button class="lgb lgb-ghost lgb-sm lgb-block lgb-tier-admin mt-4">
+                    nous contacter
+                    <span class="lg-sparkles"><span class="lg-sparkle s1">✦</span><span class="lg-sparkle s2">✧</span><span class="lg-sparkle s3">✦</span></span>
+                  </button>
+                </div>
+              </div>
+
+            </div>
+          </section>
+
+          <section class="lg-section">
+            <header class="lg-section-head"><div><div class="lg-section-title">Alertes live</div></div></header>
+            <div class="lg-row">
+              <div class="lg-row-label">Email quand un stream commence</div>
+              <button class="lg-switch" aria-checked="true"></button>
+            </div>
+            <div class="lg-row">
+              <div class="lg-row-label">Webhook Discord<div class="lg-row-sub">envoie un ping dans ton serveur</div></div>
+              <button class="lg-switch" aria-checked="true"></button>
+            </div>
+            <div class="lg-row">
+              <div class="lg-row-label">Chat browser push<div class="lg-row-sub">notifications quand un viewer te mentionne</div></div>
+              <button class="lg-switch" aria-checked="false"></button>
+            </div>
+          </section>
+
+          <section class="lg-section danger">
+            <header class="lg-section-head">
+              <div>
+                <div class="lg-section-title">Zone dangereuse</div>
+                <div class="lg-section-sub">Actions irréversibles — on te demande confirmation.</div>
+              </div>
+            </header>
+            <div class="lg-row">
+              <div class="lg-row-label">Supprimer le compte<div class="lg-row-sub">efface toutes les données associées</div></div>
+              <button class="lgb lgb-danger lgb-sm">Supprimer</button>
+            </div>
+          </section>
+
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════════════ ADMIN ═══════════════════════════════ -->
+  <section>
+    <div class="screen" style="height: 1280px;">
+      <span class="screen-label">/[username]/admin</span>
+      <div class="lg-page" style="min-height: 1280px; display:flex;">
+        <aside class="demo-rail lg-rail shrink-0">
+          <div class="flex items-center gap-3 mb-4" style="padding: 4px 8px;">
+            <div style="width:40px;height:40px;border-radius:12px;background:linear-gradient(135deg,#e08efe,#fd6c9c);display:flex;align-items:center;justify-content:center;box-shadow:0 10px 24px -10px rgba(224,142,254,0.6), inset 0 1px 0 rgba(255,255,255,0.3);">
+              <span class="text-white font-bold text-lg">✦</span>
+            </div>
+            <div>
+              <div class="font-comfortaa font-bold text-shugu-cream text-sm">spoukie</div>
+              <div class="font-mono text-shugu-cream-dim" style="font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase;">Celestial Veil</div>
+            </div>
+          </div>
+          <div class="title">Dashboard</div>
+          <a class="active" href="#"><span style="width:20px;text-align:center;">◉</span>Live Control</a>
+          <a href="#"><span style="width:20px;text-align:center;">✧</span>Creator Home</a>
+          <a href="#"><span style="width:20px;text-align:center;">◈</span>Scene Editor</a>
+          <a href="#"><span style="width:20px;text-align:center;">∿</span>Analytics</a>
+          <a href="#"><span style="width:20px;text-align:center;">✦</span>Community</a>
+          <a href="#"><span style="width:20px;text-align:center;">◇</span>Assets</a>
+          <a href="#"><span style="width:20px;text-align:center;">◷</span>Schedule</a>
+          <a href="#"><span style="width:20px;text-align:center;">⊘</span>Moderation</a>
+          <div class="title">Compte</div>
+          <a href="#"><span style="width:20px;text-align:center;">☼</span>Paramètres</a>
+          <a href="#"><span style="width:20px;text-align:center;">⎋</span>Retour au live</a>
+          <div style="margin-top:auto; padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.06);">
+            <button class="lgb lgb-primary lgb-md lgb-block" style="margin-bottom: 8px;">● Start Stream</button>
+            <button class="lgb lgb-subtle lgb-sm lgb-block">⏻ Déconnexion</button>
+          </div>
+        </aside>
+
+        <main style="flex:1; padding: 28px 32px; min-width: 0;">
+          <div class="flex items-end justify-between mb-6 flex-wrap gap-4">
+            <div>
+              <h1 class="font-comfortaa font-bold text-shugu-cream" style="font-size: 30px;">Live Control</h1>
+              <p class="text-sm text-shugu-cream-dim mt-1">Maîtrise ton flux, ton environnement et tes overrides.</p>
+            </div>
+            <div class="flex gap-2">
+              <button class="lgb lgb-ghost lgb-md">⎋ Retour au live</button>
+              <button class="lgb lgb-secondary lgb-md">● Start Stream</button>
+            </div>
+          </div>
+
+          <div class="grid-c spacer-grid gap-5" style="display: grid;">
+            <section class="flex flex-col gap-5">
+              <!-- Hero preview -->
+              <div class="lg lg-card overflow-hidden">
+                <span class="lg-specular"></span><span class="lg-edge"></span>
+                <div class="lg-content">
+                  <div class="aspect-video relative flex items-center justify-center" style="background: radial-gradient(ellipse at 30% 40%, rgba(224,142,254,0.30) 0%, transparent 55%), radial-gradient(ellipse at 80% 80%, rgba(129,236,255,0.18) 0%, transparent 55%), linear-gradient(135deg,#15152a,#0d0d18);">
+                    <div class="text-center">
+                      <div class="text-shugu-pink-glow" style="font-size: 50px; margin-bottom: 8px;">✦</div>
+                      <div class="font-mono text-shugu-cream-dim uppercase" style="font-size: 11px; letter-spacing: 0.22em;">Preview offline · connecte OBS</div>
+                    </div>
+                    <div class="absolute flex items-center gap-2" style="top:12px;left:12px;">
+                      <span class="lgb lgb-sm" style="color:#fd6c9c;border-color:rgba(253,108,156,0.3);cursor:default;"><span style="width:6px;height:6px;border-radius:50%;background:currentColor;box-shadow:0 0 8px currentColor;"></span>LIVE</span>
+                      <span class="lgb lgb-sm" style="cursor:default;">◇ 9 065</span>
+                      <span class="lgb lgb-sm" style="cursor:default;">00:41:22</span>
+                    </div>
+                    <div class="absolute lg lg-pill" style="bottom:12px;right:12px;padding:6px 12px;">
+                      <span class="lg-edge"></span>
+                      <div class="lg-content">
+                        <div class="font-mono text-shugu-cream-dim uppercase" style="font-size: 9px; letter-spacing: 0.08em;">Bitrate</div>
+                        <div class="font-comfortaa font-bold text-shugu-tertiary" style="font-size: 13px;">6,500 kbps</div>
+                      </div>
+                    </div>
+                    <div class="absolute flex items-center gap-2" style="bottom:12px;left:12px;">
+                      <button class="lgb lgb-ghost lgb-sm">Scène</button>
+                      <button class="lgb lgb-ghost lgb-sm">Caméra</button>
+                      <button class="lgb lgb-ghost lgb-sm">Micro</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Stats -->
+              <div class="grid-c grid-cols-4 gap-3" style="display: grid;">
+                <div class="lg lg-card"><span class="lg-edge"></span><div class="lg-content stat-card">
+                  <div class="font-mono text-shugu-cream-dim uppercase" style="font-size:10px;letter-spacing:0.16em;">FPS</div>
+                  <div class="font-comfortaa font-bold mt-1" style="color:#e08efe;font-size:22px;">60.0</div>
+                  <div class="font-mono text-shugu-cream-dim" style="font-size:10px;">stable</div>
+                </div></div>
+                <div class="lg lg-card"><span class="lg-edge"></span><div class="lg-content stat-card">
+                  <div class="font-mono text-shugu-cream-dim uppercase" style="font-size:10px;letter-spacing:0.16em;">Bitrate</div>
+                  <div class="font-comfortaa font-bold mt-1" style="color:#81ecff;font-size:22px;">6 500</div>
+                  <div class="font-mono text-shugu-cream-dim" style="font-size:10px;">kbps</div>
+                </div></div>
+                <div class="lg lg-card"><span class="lg-edge"></span><div class="lg-content stat-card">
+                  <div class="font-mono text-shugu-cream-dim uppercase" style="font-size:10px;letter-spacing:0.16em;">CPU</div>
+                  <div class="font-comfortaa font-bold mt-1" style="color:#e08efe;font-size:22px;">14 %</div>
+                  <div class="font-mono text-shugu-cream-dim" style="font-size:10px;">idle</div>
+                </div></div>
+                <div class="lg lg-card"><span class="lg-edge"></span><div class="lg-content stat-card">
+                  <div class="font-mono text-shugu-cream-dim uppercase" style="font-size:10px;letter-spacing:0.16em;">Dropped</div>
+                  <div class="font-comfortaa font-bold mt-1" style="color:#fd6c9c;font-size:22px;">0.0</div>
+                  <div class="font-mono text-shugu-cream-dim" style="font-size:10px;">frames</div>
+                </div></div>
+              </div>
+
+              <!-- Quick actions -->
+              <section class="lg-section">
+                <header class="lg-section-head">
+                  <div>
+                    <div class="lg-section-title">Scènes rapides</div>
+                    <div class="lg-section-sub">Bascule en un tap — raccourci global G+1…4.</div>
+                  </div>
+                </header>
+                <div class="grid-c grid-cols-4 gap-2" style="display:grid; margin-top: 4px;">
+                  <button class="lgb lgb-ghost lgb-lg flex-col" style="height:88px;border-radius:16px;"><span style="font-size:20px;">▶</span><span style="font-size:11px;">Gameplay</span></button>
+                  <button class="lgb lgb-ghost lgb-lg flex-col" style="height:88px;border-radius:16px;"><span style="font-size:20px;">✦</span><span style="font-size:11px;">Just Chatting</span></button>
+                  <button class="lgb lgb-ghost lgb-lg flex-col" style="height:88px;border-radius:16px;"><span style="font-size:20px;">◷</span><span style="font-size:11px;">BRB</span></button>
+                  <button class="lgb lgb-ghost lgb-lg flex-col" style="height:88px;border-radius:16px;"><span style="font-size:20px;">◇</span><span style="font-size:11px;">Aura (VRM)</span></button>
+                </div>
+              </section>
+
+              <!-- Events -->
+              <section class="lg-section">
+                <header class="lg-section-head"><div><div class="lg-section-title">Événements récents</div><div class="lg-section-sub">Flux temps-réel des interactions viewer.</div></div></header>
+                <div class="lg-row">
+                  <div class="lg-row-label"><strong class="text-shugu-cream">Nebula</strong> <span class="text-shugu-cream-dim">s'est abonné · tier 2</span><div class="lg-row-sub">il y a 12s</div></div>
+                  <span class="lgb lgb-sm" style="color:#e08efe;border-color:rgba(224,142,254,0.3);cursor:default;">sub</span>
+                </div>
+                <div class="lg-row">
+                  <div class="lg-row-label"><strong class="text-shugu-cream">StarDawnXO</strong> <span class="text-shugu-cream-dim">a envoyé 500 bits</span><div class="lg-row-sub">il y a 34s</div></div>
+                  <span class="lgb lgb-sm" style="color:#ffcf6b;border-color:rgba(255,207,107,0.35);cursor:default;">bits</span>
+                </div>
+                <div class="lg-row">
+                  <div class="lg-row-label"><strong class="text-shugu-cream">Stardust</strong> <span class="text-shugu-cream-dim">a suivi la chaîne</span><div class="lg-row-sub">il y a 1m</div></div>
+                  <span class="lgb lgb-sm" style="color:#81ecff;border-color:rgba(129,236,255,0.3);cursor:default;">follow</span>
+                </div>
+                <div class="lg-row">
+                  <div class="lg-row-label"><strong class="text-shugu-cream">Lumen</strong> <span class="text-shugu-cream-dim">raid · 128 viewers</span><div class="lg-row-sub">il y a 2m</div></div>
+                  <span class="lgb lgb-sm" style="color:#fd6c9c;border-color:rgba(253,108,156,0.3);cursor:default;">raid</span>
+                </div>
+              </section>
+            </section>
+
+            <aside class="flex flex-col gap-4">
+              <!-- Chat preview -->
+              <section class="lg-section">
+                <header class="lg-section-head">
+                  <div>
+                    <div class="lg-section-title">Live Chat</div>
+                    <div class="lg-section-sub">Aperçu — rail complet sur /</div>
+                  </div>
+                  <span style="width:6px;height:6px;border-radius:50%;background:var(--shugu-pink);box-shadow:0 0 8px var(--shugu-pink);animation:lp 1.6s ease-in-out infinite;"></span>
+                </header>
+                <div class="space-y-2" style="margin-top: 4px;">
+                  <div style="border-radius:12px;padding:8px 12px;background:rgba(20,20,32,0.55);box-shadow:inset 0 0 0 1px rgba(255,255,255,0.04);">
+                    <span class="text-xs font-semibold text-shugu-pink-soft" style="margin-right: 8px;">Nebula</span>
+                    <span class="text-xs text-shugu-cream">The lighting 👏</span>
+                  </div>
+                  <div style="border-radius:12px;padding:8px 12px;background:rgba(20,20,32,0.55);box-shadow:inset 0 0 0 1px rgba(255,255,255,0.04);">
+                    <span class="text-xs font-semibold text-shugu-pink-soft" style="margin-right: 8px;">StarDawnXO</span>
+                    <span class="text-xs text-shugu-cream">amazing stream</span>
+                  </div>
+                  <div style="border-radius:12px;padding:8px 12px;background:rgba(20,20,32,0.55);box-shadow:inset 0 0 0 1px rgba(255,255,255,0.04);">
+                    <span class="text-xs font-semibold text-shugu-pink-soft" style="margin-right: 8px;">Stardust</span>
+                    <span class="text-xs text-shugu-cream">What game is this?</span>
+                  </div>
+                  <div style="border-radius:12px;padding:8px 12px;background:rgba(20,20,32,0.55);box-shadow:inset 0 0 0 1px rgba(255,255,255,0.04);">
+                    <span class="text-xs font-semibold text-shugu-pink-soft" style="margin-right: 8px;">Lumen</span>
+                    <span class="text-xs text-shugu-cream">this UI is so clean 🔮</span>
+                  </div>
+                </div>
+                <a href="#" class="text-center" style="display:block; margin-top: 16px; font-size: 11px; color: var(--shugu-cream-dim); text-decoration: none;">→ ouvrir le chat complet</a>
+              </section>
+
+              <!-- Top supporters -->
+              <section class="lg-section">
+                <header class="lg-section-head"><div><div class="lg-section-title">Top supporters</div><div class="lg-section-sub">Ce mois-ci.</div></div></header>
+                <div class="lg-row">
+                  <div class="lg-row-label flex items-center gap-2">
+                    <span class="font-mono text-shugu-cream-dim text-xs" style="width:16px;">1</span>
+                    <strong class="text-shugu-cream">Nebula</strong>
+                    <span class="lgb lgb-sm lgb-tier-admin" style="cursor:default;padding:2px 8px;">
+                      <span style="width:6px;height:6px;border-radius:50%;background:currentColor;box-shadow:0 0 8px currentColor;"></span>admin
+                      <span class="lg-sparkles"><span class="lg-sparkle s1">✦</span><span class="lg-sparkle s2">✧</span><span class="lg-sparkle s3">✦</span></span>
+                    </span>
+                  </div>
+                  <div class="lg-row-value font-mono text-shugu-pink-soft">12 400 ★</div>
+                </div>
+                <div class="lg-row">
+                  <div class="lg-row-label flex items-center gap-2">
+                    <span class="font-mono text-shugu-cream-dim text-xs" style="width:16px;">2</span>
+                    <strong class="text-shugu-cream">StarDawnXO</strong>
+                    <span class="lgb lgb-sm" style="color:#e08efe;border-color:rgba(224,142,254,0.3);cursor:default;"><span style="width:6px;height:6px;border-radius:50%;background:currentColor;box-shadow:0 0 8px currentColor;"></span>vip</span>
+                  </div>
+                  <div class="lg-row-value font-mono text-shugu-pink-soft">8 100 ★</div>
+                </div>
+                <div class="lg-row">
+                  <div class="lg-row-label flex items-center gap-2">
+                    <span class="font-mono text-shugu-cream-dim text-xs" style="width:16px;">3</span>
+                    <strong class="text-shugu-cream">Lumen</strong>
+                  </div>
+                  <div class="lg-row-value font-mono text-shugu-pink-soft">5 060 ★</div>
+                </div>
+                <button class="lgb lgb-ghost lgb-sm lgb-block mt-3">voir tous les supporters →</button>
+              </section>
+            </aside>
+          </div>
+        </main>
+      </div>
+    </div>
+  </section>
+</div>
+
+<!-- Tweaks panel — expose les knobs Liquid Glass -->
+<div class="lg lg-card tweaks" id="tweaks">
+  <span class="lg-specular"></span><span class="lg-edge"></span>
+  <div class="lg-content" style="padding: 16px;">
+    <div class="hd">
+      <strong class="font-comfortaa text-shugu-cream">Tweaks</strong>
+      <button class="lgb lgb-subtle lgb-sm" onclick="document.getElementById('tweaks').classList.remove('open')">✕</button>
+    </div>
+    <label>Blur<input id="tw-blur" type="range" min="0" max="16" step="1" value="6"></label>
+    <label>Saturation<input id="tw-sat" type="range" min="100" max="260" step="10" value="180"></label>
+    <label>Tint α<input id="tw-tint" type="range" min="20" max="90" step="5" value="52"></label>
+    <label>Edge top α<input id="tw-edge" type="range" min="0" max="40" step="2" value="18"></label>
+    <label>Tier demo
+      <select id="tw-tier">
+        <option value="none">off</option>
+        <option value="vip" selected>VIP</option>
+        <option value="admin">Admin</option>
+      </select>
+    </label>
+  </div>
+</div>
+
+<script>
+  // Toggle visibility via postMessage protocol + default mount button
+  const panel = document.getElementById('tweaks');
+  window.addEventListener('message', (e) => {
+    if (!e.data || typeof e.data.type !== 'string') return;
+    if (e.data.type === '__activate_edit_mode') panel.classList.add('open');
+    if (e.data.type === '__deactivate_edit_mode') panel.classList.remove('open');
+  });
+  window.parent.postMessage({type: '__edit_mode_available'}, '*');
+
+  const r = document.documentElement;
+  const bind = (id, prop, fmt) => {
+    const el = document.getElementById(id);
+    el.addEventListener('input', () => r.style.setProperty(prop, fmt(el.value)));
+  };
+  bind('tw-blur', '--lg-blur', v => v + 'px');
+  bind('tw-sat',  '--lg-saturation', v => v + '%');
+  bind('tw-tint', '--lg-tint', v => `rgba(18,14,30,${(+v/100).toFixed(2)})`);
+  bind('tw-edge', '--lg-edge-top', v => `rgba(255,255,255,${(+v/100).toFixed(2)})`);
+  document.getElementById('tw-tier').addEventListener('change', (e) => {
+    document.querySelectorAll('.lgb-tier-vip, .lgb-tier-admin').forEach(b => {
+      b.classList.remove('lgb-tier-vip', 'lgb-tier-admin');
+      if (e.target.value !== 'none') b.classList.add('lgb-tier-' + e.target.value);
+    });
+  });
+</script>
+
+</body>
+</html>

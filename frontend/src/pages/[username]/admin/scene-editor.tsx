@@ -1,307 +1,54 @@
-/**
- * `/[username]/admin/scene-editor` — éditeur 3D Unity-like pour les scenes.
- *
- * Layout (2-col) :
- *   ┌───────────────── toolbar (Save/Preview/Revert + status) ─────────────┐
- *   ├─────────────────────────────────┬────────────────────────────────────┤
- *   │                                 │ Scene selector dropdown            │
- *   │  Mini-viewer Three.js           │ Inspector (gizmo mode, camera,     │
- *   │  (VRM + gizmo + grid + axes +   │  avatar, background, idle anim)    │
- *   │   camera frustum helper)        │                                    │
- *   │                                 │                                    │
- *   └─────────────────────────────────┴────────────────────────────────────┘
- *
- * Flow :
- *   1. Fetch `/api/admin/registry?kind=scene&include_inactive=true` au mount
- *   2. Sélection d'une scene → charge son payload dans `draft` + `original`
- *   3. Modifications via gizmo OU inspector → sync bidirectionnel via `draft`
- *   4. Save → PATCH /api/admin/registry/{id} → bust registry → ok
- *   5. Preview → POST /api/admin/registry/{id}/preview avec payload du draft
- *   6. Revert → draft := original (pas de PATCH DB)
- */
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/router";
+import { useState } from "react";
 import { Meta } from "@/components/meta";
 import { AdminShell } from "@/components/admin/AdminShell";
-import { fetchAuthStatus } from "@/services/shuguClient";
-import { buildUrl } from "@/utils/buildUrl";
-import { SceneEditorViewer, type ViewMode } from "@/features/admin/scene-editor/SceneEditorViewer";
-import { InspectorPanel } from "@/features/admin/scene-editor/InspectorPanel";
-import { SceneEditorToolbar, type Status } from "@/features/admin/scene-editor/SceneEditorToolbar";
-import { SceneLibrary } from "@/features/admin/scene-editor/SceneLibrary";
 import {
-  EMPTY_SCENE, type GizmoMode, type SceneRow, type ScenePayload, type Vec3,
-} from "@/features/admin/scene-editor/types";
+  GlassSection,
+  GlassRow,
+  GlassPill,
+  GlassButton,
+  GlassInput,
+  GlassTabs,
+  GlassSwitch,
+  GlassCard,
+} from "@/features/liquid-glass/primitives";
+
+/**
+ * `/[username]/admin/scene-editor` — Scene Editor.
+ *
+ * Page nouvelle. Structure : colonne gauche (liste de scènes), canvas
+ * central (preview), colonne droite (panel propriétés de la source
+ * sélectionnée). 100 % placeholder visuel — le bind avec OBS/Hermes viendra.
+ */
+
+type Source = {
+  id: string; name: string; kind: "cam" | "display" | "vrm" | "overlay" | "chat";
+  visible: boolean; locked: boolean;
+};
+
+const SCENES = [
+  { id: "s1", name: "Gameplay",      active: true,  sources: 5 },
+  { id: "s2", name: "Just Chatting", active: false, sources: 3 },
+  { id: "s3", name: "BRB",           active: false, sources: 2 },
+  { id: "s4", name: "Aura (VRM)",    active: false, sources: 4 },
+  { id: "s5", name: "Starting soon", active: false, sources: 3 },
+];
+
+const INITIAL_SOURCES: Source[] = [
+  { id: "src1", name: "Game capture",   kind: "display", visible: true,  locked: false },
+  { id: "src2", name: "Webcam (main)",  kind: "cam",     visible: true,  locked: false },
+  { id: "src3", name: "Aura VRM",       kind: "vrm",     visible: false, locked: false },
+  { id: "src4", name: "Overlay chat",   kind: "chat",    visible: true,  locked: true  },
+  { id: "src5", name: "Alerts overlay", kind: "overlay", visible: true,  locked: false },
+];
 
 export default function SceneEditorPage() {
-  const router = useRouter();
-  const rawUsername = router.query.username;
-  const urlUsername = Array.isArray(rawUsername) ? rawUsername[0] : rawUsername;
-  // `?preview=1` — mode démo sans auth pour itérer visuellement.
-  const previewMode = router.query.preview === "1";
-  const [operator, setOperator] = useState<{ username: string } | null>(null);
-  const [authChecked, setAuthChecked] = useState(false);
+  const [activeScene, setActiveScene] = useState("s1");
+  const [sources, setSources] = useState(INITIAL_SOURCES);
+  const [selectedId, setSelectedId] = useState("src2");
+  const selected = sources.find((s) => s.id === selectedId) ?? sources[0];
 
-  const [scenes, setScenes] = useState<SceneRow[]>([]);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [draft, setDraft] = useState<ScenePayload>(EMPTY_SCENE);
-  const [original, setOriginal] = useState<ScenePayload>(EMPTY_SCENE);
-  const [gizmoMode, setGizmoMode] = useState<GizmoMode>("translate");
-  const [viewMode, setViewMode] = useState<ViewMode>("preview");
-  const [status, setStatus] = useState<Status>({ kind: "idle" });
-
-  // Auth guard (bypass en previewMode pour iter visuellement)
-  useEffect(() => {
-    if (previewMode) { setAuthChecked(true); return; }
-    let cancelled = false;
-    fetchAuthStatus().then((me) => {
-      if (cancelled) return;
-      setOperator(me);
-      setAuthChecked(true);
-    });
-    return () => { cancelled = true; };
-  }, [previewMode]);
-
-  useEffect(() => {
-    if (previewMode) return;
-    if (!authChecked || !urlUsername) return;
-    if (!operator) { router.replace("/login"); return; }
-    if (operator.username.toLowerCase() !== urlUsername.toLowerCase()) {
-      router.replace(`/${encodeURIComponent(operator.username)}/admin/scene-editor`);
-    }
-  }, [previewMode, authChecked, operator, urlUsername, router]);
-
-  // Load scenes list
-  const loadScenes = useCallback(async () => {
-    const res = await fetch("/api/admin/registry?kind=scene&include_inactive=true", {
-      credentials: "include",
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = (await res.json()) as { items: SceneRow[] };
-    setScenes(data.items);
-    // Auto-select première scene active
-    if (data.items.length > 0 && !selectedId) {
-      const first = data.items.find((s) => s.is_active) ?? data.items[0];
-      setSelectedId(first.id);
-      setDraft(first.payload);
-      setOriginal(first.payload);
-      setStatus({ kind: "idle" });
-    }
-  }, [selectedId]);
-
-  useEffect(() => {
-    if (!authChecked) return;
-    if (!operator && !previewMode) return;
-    // En previewMode (sans auth), on peut quand même tenter le fetch — si
-    // le backend refuse (401), on reste avec scenes=[] et c'est OK visuellement.
-    void loadScenes().catch((e) => {
-      if (previewMode) {
-        // En démo, on injecte une scene factice pour voir le rendu.
-        setScenes([{
-          id: "preview-fake-id",
-          kind: "scene",
-          slug: "just_chatting",
-          display_name: "Just Chatting (demo)",
-          payload: EMPTY_SCENE,
-          is_active: true,
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        }]);
-        setSelectedId("preview-fake-id");
-        setDraft(EMPTY_SCENE);
-        setOriginal(EMPTY_SCENE);
-      } else {
-        setStatus({ kind: "error", message: String(e) });
-      }
-    });
-  }, [authChecked, operator, previewMode, loadScenes]);
-
-  // Sélection manuelle depuis le dropdown
-  const handleSelectScene = (id: string) => {
-    const row = scenes.find((s) => s.id === id);
-    if (!row) return;
-    setSelectedId(id);
-    setDraft(row.payload);
-    setOriginal(row.payload);
-    setStatus({ kind: "idle" });
-  };
-
-  // Dirty detection — shallow JSON comparison (assez pour des payloads simples)
-  const dirty = useMemo(() => JSON.stringify(draft) !== JSON.stringify(original), [draft, original]);
-  useEffect(() => {
-    if (status.kind === "saving" || status.kind === "saved" || status.kind === "preview") return;
-    setStatus({ kind: dirty ? "dirty" : "idle" });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dirty]);
-
-  // Callback viewer → inspector (quand l'admin drag le gizmo)
-  const handleAvatarTransform = useCallback((pos: Vec3, rotY: number) => {
-    setDraft((d) => {
-      // Evite re-render si valeurs identiques (le gizmo fire "change" à chaque frame)
-      if (d.avatar_position.x === pos.x && d.avatar_position.y === pos.y &&
-          d.avatar_position.z === pos.z && d.avatar_rotation_y === rotY) {
-        return d;
-      }
-      return { ...d, avatar_position: pos, avatar_rotation_y: rotY };
-    });
-  }, []);
-
-  // Actions
-  const handleSave = async () => {
-    if (!selectedId) return;
-    if (previewMode || selectedId === "preview-fake-id") {
-      setStatus({ kind: "error", message: "Mode démo — connecte-toi pour persister" });
-      return;
-    }
-    setStatus({ kind: "saving" });
-    try {
-      const res = await fetch(`/api/admin/registry/${selectedId}`, {
-        method: "PATCH",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ payload: draft }),
-      });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({} as { detail?: string }));
-        const msg = body.detail || `HTTP ${res.status} ${res.statusText}`;
-        throw new Error(msg);
-      }
-      setOriginal(draft);
-      setStatus({ kind: "saved" });
-      setTimeout(() => setStatus({ kind: "idle" }), 1800);
-      void loadScenes();
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : "save failed";
-      console.error("[scene-editor] save failed:", err);
-      setStatus({ kind: "error", message: msg });
-    }
-  };
-
-  // ─── Library actions (create / duplicate / toggle / delete) ────────
-  const handleCreateScene = async (slug: string, displayName: string) => {
-    if (previewMode) {
-      setStatus({ kind: "error", message: "Mode démo — connecte-toi pour créer" });
-      return;
-    }
-    try {
-      const res = await fetch("/api/admin/registry", {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          kind: "scene", slug, display_name: displayName,
-          payload: EMPTY_SCENE,
-        }),
-      });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({} as { detail?: string }));
-        throw new Error(body.detail || `HTTP ${res.status}`);
-      }
-      const row = (await res.json()) as SceneRow;
-      await loadScenes();
-      setSelectedId(row.id);
-      setDraft(row.payload);
-      setOriginal(row.payload);
-      setStatus({ kind: "saved" });
-      setTimeout(() => setStatus({ kind: "idle" }), 1800);
-    } catch (err) {
-      setStatus({ kind: "error", message: err instanceof Error ? err.message : "create failed" });
-    }
-  };
-
-  const handleDuplicateScene = async (id: string) => {
-    if (previewMode) {
-      setStatus({ kind: "error", message: "Mode démo — connecte-toi pour dupliquer" });
-      return;
-    }
-    const source = scenes.find((s) => s.id === id);
-    if (!source) return;
-    // Trouve un slug disponible {source.slug}_copy_N
-    let n = 1;
-    let candidate = `${source.slug}_copy`;
-    const slugs = new Set(scenes.map((s) => s.slug));
-    while (slugs.has(candidate)) {
-      n += 1;
-      candidate = `${source.slug}_copy_${n}`;
-    }
-    try {
-      const res = await fetch("/api/admin/registry", {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          kind: "scene",
-          slug: candidate,
-          display_name: `${source.display_name} (copie)`,
-          payload: source.payload,
-        }),
-      });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({} as { detail?: string }));
-        throw new Error(body.detail || `HTTP ${res.status}`);
-      }
-      const row = (await res.json()) as SceneRow;
-      await loadScenes();
-      setSelectedId(row.id);
-      setDraft(row.payload);
-      setOriginal(row.payload);
-    } catch (err) {
-      setStatus({ kind: "error", message: err instanceof Error ? err.message : "duplicate failed" });
-    }
-  };
-
-  const handleToggleActive = async (id: string) => {
-    if (previewMode) return;
-    const row = scenes.find((s) => s.id === id);
-    if (!row) return;
-    try {
-      await fetch(`/api/admin/registry/${id}`, {
-        method: "PATCH",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ is_active: !row.is_active }),
-      });
-      void loadScenes();
-    } catch (err) {
-      setStatus({ kind: "error", message: err instanceof Error ? err.message : "toggle failed" });
-    }
-  };
-
-  const handleDeleteScene = async (id: string) => {
-    if (previewMode) return;
-    if (!confirm("Soft-delete cette scene ?")) return;
-    try {
-      await fetch(`/api/admin/registry/${id}`, { method: "DELETE", credentials: "include" });
-      void loadScenes();
-    } catch (err) {
-      setStatus({ kind: "error", message: err instanceof Error ? err.message : "delete failed" });
-    }
-  };
-
-  const handlePreview = async () => {
-    if (!selectedId) return;
-    try {
-      const res = await fetch(`/api/admin/registry/${selectedId}/preview`, {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ payload: draft }),
-      });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.detail || `HTTP ${res.status}`);
-      }
-      setStatus({ kind: "preview" });
-      setTimeout(() => setStatus({ kind: dirty ? "dirty" : "idle" }), 2500);
-    } catch (err) {
-      setStatus({ kind: "error", message: err instanceof Error ? err.message : "preview failed" });
-    }
-  };
-
-  const handleRevert = () => {
-    setDraft(original);
-    setStatus({ kind: "idle" });
-  };
+  const toggleVisible = (id: string) =>
+    setSources(sources.map((s) => (s.id === id ? { ...s, visible: !s.visible } : s)));
 
   return (
     <>
@@ -309,85 +56,157 @@ export default function SceneEditorPage() {
       <AdminShell
         active="scene-editor"
         title="Scene Editor"
-        subtitle="Edit camera, avatar et décor d'une scene. Preview live avant de sauvegarder."
+        subtitle="Construis et bascule tes scènes — OBS/Hermes bridge à venir."
+        headerRight={
+          <div className="flex items-center gap-2">
+            <GlassButton variant="ghost"     size="sm">Import OBS</GlassButton>
+            <GlassButton variant="primary"   size="sm">Appliquer</GlassButton>
+          </div>
+        }
       >
-        {authChecked && (operator || previewMode) ? (
-          <div style={{ display: "flex", flexDirection: "column", gap: 12, height: "calc(100vh - 180px)" }}>
-            <SceneEditorToolbar
-              dirty={dirty}
-              status={status}
-              viewMode={viewMode}
-              onViewModeChange={setViewMode}
-              onSave={handleSave}
-              onPreview={handlePreview}
-              onRevert={handleRevert}
-            />
+        <div className="grid grid-cols-1 lg:grid-cols-[220px_1fr_280px] gap-5">
+          {/* Scenes list */}
+          <GlassSection title="Scènes" subtitle={`${SCENES.length} scènes`}>
+            <div className="flex flex-col gap-1.5">
+              {SCENES.map((s) => (
+                <button
+                  key={s.id}
+                  onClick={() => setActiveScene(s.id)}
+                  className={`flex items-center justify-between px-3 py-2 rounded-xl text-[13px] transition-colors ${
+                    s.id === activeScene
+                      ? "text-white bg-[linear-gradient(135deg,rgba(224,142,254,0.18),rgba(253,108,156,0.14))]"
+                      : "text-shugu-cream-dim hover:text-shugu-cream hover:bg-white/[0.04]"
+                  }`}
+                  style={s.id === activeScene ? {
+                    boxShadow: "inset 0 0 0 1px rgba(224,142,254,0.3), 0 0 16px -4px rgba(224,142,254,0.25)",
+                  } : undefined}
+                >
+                  <span className="font-semibold flex items-center gap-2">
+                    {s.active && <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#fd6c9c", boxShadow: "0 0 8px #fd6c9c" }} />}
+                    {s.name}
+                  </span>
+                  <span className="font-mono text-[10px] text-shugu-cream-dim">{s.sources}</span>
+                </button>
+              ))}
+              <GlassButton variant="ghost" size="sm" block className="mt-2">+ nouvelle scène</GlassButton>
+            </div>
+          </GlassSection>
 
-            {/* Library workshop — bande horizontale scrollable de cartes */}
-            <SceneLibrary
-              scenes={scenes}
-              selectedId={selectedId}
-              onSelect={handleSelectScene}
-              onCreate={handleCreateScene}
-              onDuplicate={handleDuplicateScene}
-              onToggleActive={handleToggleActive}
-              onDelete={handleDeleteScene}
-            />
+          {/* Canvas */}
+          <div className="flex flex-col gap-4">
+            <GlassCard padded={false} className="overflow-hidden">
+              <div
+                className="relative aspect-video flex items-center justify-center"
+                style={{
+                  background:
+                    "radial-gradient(ellipse at 30% 40%, rgba(224,142,254,0.30) 0%, transparent 55%)," +
+                    "radial-gradient(ellipse at 80% 80%, rgba(129,236,255,0.18) 0%, transparent 55%)," +
+                    "linear-gradient(135deg, #15152a 0%, #0d0d18 100%)",
+                }}
+              >
+                {/* Mock source frames */}
+                {sources.filter((s) => s.visible).map((s, i) => (
+                  <div
+                    key={s.id}
+                    onClick={() => setSelectedId(s.id)}
+                    className="absolute cursor-pointer transition-all"
+                    style={{
+                      width: `${30 + (i * 8) % 25}%`,
+                      height: `${22 + (i * 6) % 18}%`,
+                      top:    `${8 + (i * 18) % 60}%`,
+                      left:   `${6 + (i * 22) % 60}%`,
+                      borderRadius: 12,
+                      border: s.id === selectedId
+                        ? "2px solid #e08efe"
+                        : "1px dashed rgba(255,255,255,0.2)",
+                      background: "rgba(20,20,32,0.4)",
+                      boxShadow: s.id === selectedId
+                        ? "0 0 20px -4px rgba(224,142,254,0.6)"
+                        : "none",
+                    }}
+                  >
+                    <div className="text-[10px] text-shugu-cream-dim p-1.5 font-mono">{s.kind} · {s.name}</div>
+                  </div>
+                ))}
 
-            <div style={{
-              display: "grid",
-              gridTemplateColumns: "1fr 360px",
-              gap: 14,
-              flex: 1,
-              minHeight: 0,
-            }}>
-              {/* Viewport 3D (plus de dropdown overlay — remplacé par la library) */}
-              <div style={{
-                position: "relative",
-                borderRadius: 16,
-                overflow: "hidden",
-                background: draft.background || "#0d0d18",
-                boxShadow: "inset 0 0 0 1px rgba(71,71,84,0.3)",
-                minHeight: 0,
-              }}>
-                <SceneEditorViewer
-                  vrmUrl={buildUrl("/shugu_avatar.vrm")}
-                  viewMode={viewMode}
-                  gizmoMode={gizmoMode}
-                  avatarPosition={draft.avatar_position}
-                  avatarRotationY={draft.avatar_rotation_y}
-                  sceneCamera={draft.camera}
-                  sceneLookAt={draft.look_at}
-                  sceneFov={draft.fov}
-                  onAvatarTransformChange={handleAvatarTransform}
+                <div className="absolute bottom-3 left-3 flex items-center gap-2">
+                  <GlassPill tone="secondary" dot>LIVE</GlassPill>
+                  <GlassPill>1920×1080 · 60fps</GlassPill>
+                </div>
+              </div>
+            </GlassCard>
+
+            {/* Sources list */}
+            <GlassSection title="Sources" subtitle="Ordre z-index — glisse pour réordonner.">
+              {sources.map((s) => (
+                <GlassRow
+                  key={s.id}
+                  label={
+                    <button
+                      onClick={() => setSelectedId(s.id)}
+                      className={`flex items-center gap-2 ${s.id === selectedId ? "text-shugu-pink-glow" : "text-shugu-cream"}`}
+                    >
+                      <span className="font-mono text-[10px] text-shugu-cream-dim w-10">{s.kind}</span>
+                      <strong>{s.name}</strong>
+                      {s.locked && <span className="text-[10px] text-shugu-cream-dim">🔒</span>}
+                    </button>
+                  }
+                  trailing={
+                    <GlassSwitch
+                      checked={s.visible}
+                      onChange={() => toggleVisible(s.id)}
+                      aria-label={`Visibilité ${s.name}`}
+                    />
+                  }
+                />
+              ))}
+              <div className="mt-2">
+                <GlassButton variant="ghost" size="sm" block>+ ajouter une source</GlassButton>
+              </div>
+            </GlassSection>
+          </div>
+
+          {/* Properties panel */}
+          <GlassSection title="Propriétés" subtitle={selected.name}>
+            <div className="flex flex-col gap-3">
+              <GlassInput label="Nom" value={selected.name} readOnly />
+              <GlassInput label="Type" value={selected.kind} readOnly />
+
+              <div className="grid grid-cols-2 gap-2">
+                <GlassInput label="Position X" type="number" defaultValue={0} />
+                <GlassInput label="Position Y" type="number" defaultValue={0} />
+                <GlassInput label="Width"      type="number" defaultValue={960} />
+                <GlassInput label="Height"     type="number" defaultValue={540} />
+              </div>
+
+              <div className="mt-1 space-y-2">
+                <GlassTabs
+                  aria-label="Transform"
+                  value="transform"
+                  onChange={() => {}}
+                  tabs={[
+                    { value: "transform", label: "Transform" },
+                    { value: "filters",   label: "Filtres" },
+                    { value: "audio",     label: "Audio" },
+                  ]}
                 />
               </div>
 
-              {/* Inspector */}
-              <aside style={{
-                background: "rgba(18,18,30,0.75)",
-                borderRadius: 16,
-                padding: 18,
-                overflowY: "auto",
-                boxShadow: "inset 0 0 0 1px rgba(224,142,254,0.18)",
-                backdropFilter: "blur(20px)",
-                minHeight: 0,
-              }}>
-                <InspectorPanel
-                  draft={draft}
-                  onChange={setDraft}
-                  gizmoMode={gizmoMode}
-                  onGizmoModeChange={setGizmoMode}
-                  showGizmoControls={viewMode === "edit"}
-                />
-              </aside>
+              <GlassRow
+                label="Visible"
+                trailing={<GlassSwitch checked={selected.visible} onChange={() => toggleVisible(selected.id)} aria-label="Visible" />}
+              />
+              <GlassRow
+                label="Verrouillé"
+                trailing={<GlassSwitch checked={selected.locked} onChange={() => {}} aria-label="Lock" />}
+              />
+
+              <GlassButton variant="danger" size="sm" block className="mt-3">
+                Supprimer la source
+              </GlassButton>
             </div>
-          </div>
-        ) : (
-          <div style={{ color: "var(--on-surface-muted)", padding: 40, textAlign: "center" }}>
-            chargement…
-          </div>
-        )}
+          </GlassSection>
+        </div>
       </AdminShell>
     </>
   );

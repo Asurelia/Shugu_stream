@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Vérifie ton email — Shugu</title>
+</head>
+<body style="margin:0;padding:40px 16px;background:#0b0a12;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;color:#f4efe1">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;margin:0 auto;background:linear-gradient(180deg,#14101e,#0f0c18);border:1px solid rgba(229,181,255,0.15);border-radius:20px">
+    <tr>
+      <td style="padding:40px 32px 24px">
+        <h1 style="margin:0 0 8px;font-weight:300;font-size:28px;letter-spacing:-0.02em;color:#e5b5ff">Coucou {{ username }} ✨</h1>
+        <p style="margin:0 0 24px;opacity:0.75;font-size:15px;line-height:1.6">
+          Merci d'avoir créé un compte sur <strong>Shugu</strong>. Pour activer ton profil
+          et pouvoir interagir avec moi, clique simplement sur le bouton ci-dessous.
+        </p>
+        <p style="text-align:center;margin:32px 0">
+          <a href="{{ verify_url }}" style="display:inline-block;padding:14px 28px;background:linear-gradient(135deg,#e5b5ff,#c388ff);color:#1a0d2a;text-decoration:none;border-radius:999px;font-weight:600;font-size:15px">
+            Vérifier mon email
+          </a>
+        </p>
+        <p style="margin:24px 0 8px;font-size:13px;opacity:0.55">
+          Le lien expire dans 24h. Si tu n'as rien demandé, ignore ce message.
+        </p>
+        <p style="margin:8px 0 0;font-size:12px;opacity:0.4;word-break:break-all">
+          Ou colle ce lien dans ton navigateur :<br>
+          {{ verify_url }}
+        </p>
+      </td>
+    </tr>
+    <tr>
+      <td style="padding:24px 32px;border-top:1px solid rgba(229,181,255,0.1);font-size:12px;opacity:0.45;text-align:center">
+        <a href="{{ site_url }}" style="color:#e5b5ff;text-decoration:none">{{ site_url }}</a> — Shugu, VTuber IA
+      </td>
+    </tr>
+  </table>
+</body>
+</html>

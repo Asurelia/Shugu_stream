@@ -1,19 +1,24 @@
 import Link from "next/link";
 import { Meta } from "@/components/meta";
 import { AdminShell } from "@/components/admin/AdminShell";
+import {
+  GlassCard,
+  GlassSection,
+  GlassRow,
+  GlassButton,
+  GlassPill,
+} from "@/features/liquid-glass/primitives";
 
 /**
- * `/[username]/admin` — accueil dashboard (mockup
- * `tableau_de_bord_streamer_celestial_veil`).
+ * `/[username]/admin` — Live Control Center, redesign Liquid Glass.
  *
- * Layout :
- *  - Hero : preview stream + badges LIVE/viewers/uptime + bouton "Start Stream"
- *  - Grille : bitrate / dropped / CPU / FPS (sparkline mock)
- *  - Quick Actions : Gameplay / Just Chatting / Off / Aura (VRM)
- *  - Rail droit : Live Chat mini (preview — le vrai rail est sur `/`)
+ * Objectif : densifier sans charger visuellement. Hero preview en haut
+ * (ratio 16:9 + overlays LIVE/viewers/uptime/bitrate). Stats en grille
+ * compacte 4-col. Quick actions en rail pilule. Rail droit : chat preview
+ * + "derniers supporters" pour rappeler le lien avec le rail viewer.
  *
- * Le contenu est statique/mock pour poser le layout. Les hooks temps-réel
- * (shuguClient, viewer count, stats) seront branchés dans une passe ultérieure.
+ * Tous les chiffres sont mockés — les hooks live seront câblés quand
+ * le bridge shuguClient côté admin sera livré.
  */
 export default function AdminHome() {
   return (
@@ -25,29 +30,25 @@ export default function AdminHome() {
         subtitle="Maîtrise ton flux, ton environnement et tes overrides."
         headerRight={
           <div className="flex items-center gap-2">
-            <Link
-              href="/"
-              className="veil-glass px-4 py-2 rounded-xl veil-body text-[12px] text-veil-on-surface hover:text-veil-primary transition-colors"
-            >
+            <Link href="/" className="lgb lgb-ghost lgb-md" style={{ textDecoration: "none" }}>
               ⎋ Retour au live
             </Link>
-            <button className="veil-gradient-primary text-white px-5 py-2 rounded-xl veil-headline text-[12px] tracking-wide veil-halo-pink hover:scale-[1.02] transition-transform">
+            <button type="button" className="lgb lgb-secondary lgb-md">
               ● Start Stream
             </button>
           </div>
         }
       >
         <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-5">
-          {/* Colonne principale ------------------------------------- */}
           <section className="flex flex-col gap-5">
             <HeroPreview />
             <StatsGrid />
             <QuickActions />
+            <RecentEvents />
           </section>
-
-          {/* Rail droit : chat preview ----------------------------- */}
           <aside className="flex flex-col gap-4">
             <ChatPreview />
+            <TopSupporters />
           </aside>
         </div>
       </AdminShell>
@@ -55,34 +56,11 @@ export default function AdminHome() {
   );
 }
 
-function Card({
-  children,
-  style,
-  className = "",
-}: {
-  children: React.ReactNode;
-  style?: React.CSSProperties;
-  className?: string;
-}) {
-  return (
-    <div
-      className={`rounded-2xl ${className}`}
-      style={{
-        background: "linear-gradient(180deg, rgba(30,30,45,0.85) 0%, rgba(26,26,40,0.95) 100%)",
-        boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.04), 0 14px 40px rgba(224,142,254,0.08)",
-        ...style,
-      }}
-    >
-      {children}
-    </div>
-  );
-}
-
 function HeroPreview() {
   return (
-    <Card className="relative overflow-hidden">
+    <GlassCard padded={false} className="overflow-hidden">
       <div
-        className="aspect-video w-full flex items-center justify-center"
+        className="relative aspect-video w-full flex items-center justify-center"
         style={{
           background:
             "radial-gradient(ellipse at 30% 40%, rgba(224,142,254,0.30) 0%, transparent 55%)," +
@@ -91,66 +69,67 @@ function HeroPreview() {
         }}
       >
         <div className="text-center">
-          <div className="text-5xl mb-2 text-veil-primary animate-veil-pulse-glow inline-block rounded-full px-2">
-            ✦
-          </div>
-          <div className="veil-headline text-veil-on-surface-variant text-xs tracking-[0.22em] uppercase">
-            Preview offline
+          <div className="text-5xl mb-2 text-shugu-pink-glow inline-block">✦</div>
+          <div className="font-mono text-shugu-cream-dim text-[11px] tracking-[0.22em] uppercase">
+            Preview offline · connecte OBS
           </div>
         </div>
 
-        {/* Badges en haut gauche */}
+        {/* Overlays top-left */}
         <div className="absolute top-3 left-3 flex items-center gap-2">
-          <span className="veil-gradient-secondary text-white veil-body text-[10px] font-bold px-2.5 py-1 rounded-full veil-halo-pink tracking-wide">
-            ● LIVE
-          </span>
-          <span className="veil-glass text-veil-on-surface veil-body text-[10px] font-semibold px-2.5 py-1 rounded-full">
-            ◇ 9,065
-          </span>
-          <span className="veil-glass text-veil-on-surface-variant veil-body text-[10px] font-semibold px-2.5 py-1 rounded-full">
-            00:41:22
-          </span>
+          <GlassPill tone="secondary" dot>LIVE</GlassPill>
+          <GlassPill>◇ 9 065</GlassPill>
+          <GlassPill>00:41:22</GlassPill>
         </div>
 
-        {/* Bitrate overlay bas droite */}
-        <div className="absolute bottom-3 right-3 veil-glass px-3 py-1.5 rounded-lg">
-          <div className="veil-body text-[9px] text-veil-on-surface-variant tracking-wide uppercase">
-            Bitrate
+        {/* Bitrate overlay */}
+        <div className="absolute bottom-3 right-3 lg lg-pill px-3 py-1.5">
+          <div className="lg-content">
+            <div className="font-mono text-[9px] text-shugu-cream-dim uppercase tracking-wide">Bitrate</div>
+            <div className="font-comfortaa font-bold text-shugu-tertiary text-[13px]">6,500 kbps</div>
           </div>
-          <div className="veil-headline text-veil-tertiary text-[13px]">6,500 kbps</div>
+        </div>
+
+        {/* Action bar */}
+        <div className="absolute bottom-3 left-3 flex items-center gap-2">
+          <button className="lgb lgb-ghost lgb-sm" type="button">Scène</button>
+          <button className="lgb lgb-ghost lgb-sm" type="button">Caméra</button>
+          <button className="lgb lgb-ghost lgb-sm" type="button">Micro</button>
         </div>
       </div>
-    </Card>
+    </GlassCard>
   );
 }
 
 function StatsGrid() {
   const stats = [
-    { label: "FPS",       value: "60.0", sub: "stable",  tint: "primary" as const },
-    { label: "Bitrate",   value: "6,500", sub: "kbps",   tint: "tertiary" as const },
-    { label: "CPU usage", value: "14%",   sub: "idle",   tint: "primary" as const },
-    { label: "Dropped",   value: "0.0",   sub: "frames", tint: "secondary" as const },
+    { label: "FPS",       value: "60.0",  sub: "stable",  tone: "primary"   as const },
+    { label: "Bitrate",   value: "6 500", sub: "kbps",    tone: "tertiary"  as const },
+    { label: "CPU",       value: "14 %",  sub: "idle",    tone: "primary"   as const },
+    { label: "Dropped",   value: "0.0",   sub: "frames",  tone: "secondary" as const },
   ];
   return (
     <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
       {stats.map((s) => (
-        <Card key={s.label} className="px-4 py-3">
-          <div className="veil-body text-[10px] text-veil-on-surface-variant uppercase tracking-[0.16em]">
-            {s.label}
+        <GlassCard key={s.label} padded={false}>
+          <div className="px-4 py-3">
+            <div className="font-mono text-[10px] text-shugu-cream-dim uppercase tracking-[0.16em]">
+              {s.label}
+            </div>
+            <div
+              className="font-comfortaa font-bold text-xl mt-1"
+              style={{
+                color:
+                  s.tone === "primary"   ? "#e08efe"
+                : s.tone === "tertiary"  ? "#81ecff"
+                :                          "#fd6c9c",
+              }}
+            >
+              {s.value}
+            </div>
+            <div className="font-mono text-[10px] text-shugu-cream-dim">{s.sub}</div>
           </div>
-          <div
-            className={`veil-headline text-xl mt-1 ${
-              s.tint === "primary" ? "text-veil-primary"
-                : s.tint === "tertiary" ? "text-veil-tertiary"
-                : "text-veil-secondary"
-            }`}
-          >
-            {s.value}
-          </div>
-          <div className="veil-body text-[10px] text-veil-on-surface-variant">
-            {s.sub}
-          </div>
-        </Card>
+        </GlassCard>
       ))}
     </div>
   );
@@ -158,67 +137,114 @@ function StatsGrid() {
 
 function QuickActions() {
   const actions = [
-    { label: "Gameplay",     icon: "▶" },
+    { label: "Gameplay",      icon: "▶" },
     { label: "Just Chatting", icon: "✦" },
-    { label: "BRB",          icon: "◷" },
+    { label: "BRB",           icon: "◷" },
     { label: "Aura (VRM)",    icon: "◇" },
   ];
   return (
-    <Card className="p-4">
-      <div className="flex items-center justify-between mb-3">
-        <div>
-          <div className="veil-headline text-veil-on-surface text-[13px] tracking-wide">
-            Quick Actions &amp; Scenes
-          </div>
-          <div className="veil-body text-[11px] text-veil-on-surface-variant">
-            bascule en un tap
-          </div>
-        </div>
-      </div>
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5">
+    <GlassSection
+      title="Scènes rapides"
+      subtitle="Bascule en un tap — raccourci global G+1…4."
+    >
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5 mt-1">
         {actions.map((a) => (
           <button
             key={a.label}
-            className="flex flex-col items-center gap-1.5 py-3 rounded-xl veil-glass text-veil-on-surface hover:text-veil-primary hover:veil-halo-pink transition-all"
+            type="button"
+            className="lgb lgb-ghost lgb-lg flex-col !rounded-2xl !h-[88px]"
           >
-            <span className="text-lg">{a.icon}</span>
-            <span className="veil-body text-[11px] font-semibold">{a.label}</span>
+            <span className="text-xl">{a.icon}</span>
+            <span className="text-[11px] font-semibold">{a.label}</span>
           </button>
         ))}
       </div>
-    </Card>
+    </GlassSection>
+  );
+}
+
+function RecentEvents() {
+  const events = [
+    { who: "Nebula",     what: "s'est abonné · tier 2", t: "il y a 12s",  tone: "primary"   as const },
+    { who: "StarDawnXO", what: "a envoyé 500 bits",       t: "il y a 34s",  tone: "warn"      as const },
+    { who: "Stardust",   what: "a suivi la chaîne",       t: "il y a 1m",   tone: "tertiary"  as const },
+    { who: "Lumen",      what: "raid · 128 viewers",      t: "il y a 2m",   tone: "secondary" as const },
+  ];
+  return (
+    <GlassSection title="Événements récents" subtitle="Flux temps-réel des interactions viewer.">
+      {events.map((e, i) => (
+        <GlassRow
+          key={i}
+          label={<span><strong className="text-shugu-cream">{e.who}</strong> <span className="text-shugu-cream-dim">{e.what}</span></span>}
+          sub={e.t}
+          trailing={<GlassPill tone={e.tone}>{e.tone === "warn" ? "bits" : e.tone === "primary" ? "sub" : e.tone === "secondary" ? "raid" : "follow"}</GlassPill>}
+        />
+      ))}
+    </GlassSection>
   );
 }
 
 function ChatPreview() {
   return (
-    <Card className="p-4 min-h-[300px]">
-      <div className="flex items-center gap-2 mb-3">
-        <span className="w-1.5 h-1.5 rounded-full bg-veil-primary animate-live-pulse" />
-        <span className="veil-headline text-[11px] uppercase tracking-[0.18em] text-veil-on-surface">
-          Live Chat
-        </span>
-      </div>
-      <div className="space-y-2">
-        {["Nebula — The lighting 👏", "StarDawnXO — amazing stream", "Stardust — What game is this?"].map((m, i) => (
+    <GlassSection
+      title="Live Chat"
+      subtitle="Aperçu — rail complet sur /"
+      right={<span className="w-1.5 h-1.5 rounded-full bg-shugu-pink animate-pulse" aria-hidden />}
+    >
+      <div className="space-y-2 mt-1">
+        {[
+          { u: "Nebula",     m: "The lighting 👏"       },
+          { u: "StarDawnXO", m: "amazing stream"        },
+          { u: "Stardust",   m: "What game is this?"    },
+          { u: "Lumen",      m: "this UI is so clean 🔮" },
+        ].map((x, i) => (
           <div
             key={i}
             className="rounded-xl px-3 py-2"
             style={{
-              background: "rgba(36,36,52,0.7)",
-              boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.03)",
+              background: "rgba(20,20,32,0.55)",
+              boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.04)",
             }}
           >
-            <span className="veil-body text-veil-on-surface text-[12px]">{m}</span>
+            <span className="text-[11px] font-semibold text-shugu-pink-soft mr-2">{x.u}</span>
+            <span className="text-[12px] text-shugu-cream">{x.m}</span>
           </div>
         ))}
       </div>
       <Link
         href="/"
-        className="block mt-4 text-center veil-body text-[11px] text-veil-on-surface-variant hover:text-veil-primary transition-colors"
+        className="block mt-4 text-center text-[11px] text-shugu-cream-dim hover:text-shugu-pink-soft transition-colors"
       >
         → ouvrir le chat complet
       </Link>
-    </Card>
+    </GlassSection>
+  );
+}
+
+function TopSupporters() {
+  return (
+    <GlassSection title="Top supporters" subtitle="Ce mois-ci.">
+      {[
+        { name: "Nebula",     v: "12 400 ★", tier: "admin" as const },
+        { name: "StarDawnXO", v: "8 100 ★",  tier: "vip"   as const },
+        { name: "Lumen",      v: "5 060 ★",  tier: null },
+      ].map((s, i) => (
+        <GlassRow
+          key={s.name}
+          label={<span className="flex items-center gap-2">
+            <span className="text-shugu-cream-dim font-mono text-[11px] w-4">{i + 1}</span>
+            <strong className="text-shugu-cream">{s.name}</strong>
+            {s.tier === "admin" && <GlassPill tone="warn" dot>admin</GlassPill>}
+            {s.tier === "vip"   && <GlassPill tone="primary" dot>vip</GlassPill>}
+          </span>}
+          value={<span className="font-mono text-shugu-pink-soft">{s.v}</span>}
+        />
+      ))}
+      <div className="mt-3">
+        <GlassButton variant="ghost" size="sm" block>
+          voir tous les supporters →
+        </GlassButton>
+      </div>
+    </GlassSection>
   );
 }

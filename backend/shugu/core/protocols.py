@@ -11,7 +11,6 @@ from typing import AsyncIterator, Literal, Optional, Protocol
 
 from .identity import Identity
 
-
 Emotion = Literal["neutral", "happy", "angry", "sad", "relaxed"]
 
 

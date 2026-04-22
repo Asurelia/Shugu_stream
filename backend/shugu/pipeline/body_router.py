@@ -42,6 +42,7 @@ from ..core.body_control import (
     BodySayCall,
     BodySceneCall,
     BodyShotCall,
+    ChatPostCall,
     DesktopArrangeCall,
     DesktopCloseFileCall,
     DesktopEditFileCall,
@@ -52,6 +53,7 @@ from ..core.body_control import (
 )
 from ..core.identity import Identity, OperatorIdentity
 from ..core.protocols import EventBus
+from ..core.vip_toolset import VIP_TOOLS
 from .queue import QueuedMessage, RedisQueue, new_msg_id
 from .workers import _estimate_speech_duration_ms, extract_emotion, extract_tags
 
@@ -85,9 +87,29 @@ class BodyRouter:
         priority_tier: int = 0,
     ) -> dict:
         """Dispatch a single validated call. Returns a tool_result-ready dict."""
+        name = getattr(call, "name", "?")
+
+        # Defense-in-depth VIP gating : le schema filtré côté
+        # `openai_tools_schema(allowed_names=VIP_TOOLS)` empêche déjà le LLM
+        # d'appeler un tool interdit. Ce check rattrape les cas où le modèle
+        # hallucinerait un tool non listé (par mémoire d'un prompt antérieur)
+        # ou si une future évolution du prompting leak les noms interdits.
+        if getattr(identity, "role", "") == "vip" and name not in VIP_TOOLS:
+            log.warning(
+                "body_router.vip_blocked",
+                name=name,
+                user=getattr(identity, "username", "?"),
+                user_id=getattr(identity, "user_id", "?"),
+            )
+            return {
+                "ok": False,
+                "error": "not_permitted_for_vip",
+                "tool": name,
+                "hint": "VIP sessions use a reduced toolset (no public-stage tools).",
+            }
+
         # Rate limit — surface rejections back to Hermes as a tool_result so
         # the model can back off without crashing the stream.
-        name = getattr(call, "name", "?")
         rl = self._deps.rate_limiter
         if rl is not None:
             allowed, retry_after = rl.check_and_record(name)
@@ -138,6 +160,9 @@ class BodyRouter:
                 return await self._desktop_show_hermes_state(call)
             if isinstance(call, DesktopHideHermesStateCall):
                 return await self._desktop_hide_hermes_state(call)
+            # Chat texte — publie sur le topic `stage` directement (pas de queue).
+            if isinstance(call, ChatPostCall):
+                return await self._chat_post(call)
             return {"ok": False, "error": f"unrouted call: {getattr(call, 'name', '?')}"}
         except Exception as exc:
             log.exception("body_router.dispatch_error", name=getattr(call, "name", "?"), error=str(exc))
@@ -342,6 +367,22 @@ class BodyRouter:
         })
         log.info("desktop.hide_hermes_state")
         return {"ok": True, "effect": "hermes hud closed"}
+
+    # ─── Chat (texte curé v4 Phase 1) ───────────────────────────────────────
+
+    async def _chat_post(self, call: ChatPostCall) -> dict:
+        """Publie un message texte direct sur le topic `stage` (pas de queue,
+        pas de TTS, pas de Picker). Les clients `/ws/visitor` voient l'event
+        `chat.post` et l'affichent dans le ChatFeed avec `from=shugu`.
+        """
+        await self._deps.event_bus.publish("stage", {
+            "type": "chat.post",
+            "from": "shugu",
+            "text": call.text,
+            "ts_ms": int(time.time() * 1000),
+        })
+        log.info("chat.post", text_len=len(call.text))
+        return {"ok": True, "effect": "chat broadcast", "text_len": len(call.text)}
 
     # ─── Helpers ────────────────────────────────────────────────────────────
 

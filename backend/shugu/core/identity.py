@@ -1,19 +1,25 @@
-"""Identity types — load-bearing for visitor/operator isolation.
+"""Identity types — load-bearing for visitor/member/vip/operator isolation.
 
-`OperatorIdentity` is a frozen dataclass produced ONLY by the operator JWT
-dependency. `HermesAgentBrain.__init__` takes it as a required argument.
-A visitor-path code that tries to instantiate HermesAgentBrain cannot
-produce an `OperatorIdentity` (it has no valid JWT), so the barrier is
-both runtime (router separation) and type-level (constructor signature).
+Chaque rôle est un dataclass frozen distinct produit par UNE seule dépendance
+FastAPI bien identifiée. Le type-system empêche un code "visitor-path" de
+forger une identité privilégiée puisqu'il ne peut pas construire un `*Identity`
+sans passer par la validation JWT correspondante.
+
+Rôles :
+  - `visitor`   → anonyme, identifié par IP hash (rate limit).
+  - `member`    → compte user self-service, email vérifié, pas VIP.
+  - `vip`       → membre promu (par l'opérateur ou via abonnement plus tard).
+  - `operator`  → admin originel (Spoukie), créé hors self-service.
 """
 from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass, field
-from typing import Literal
+from datetime import datetime
+from typing import Literal, Optional
 
 
-Role = Literal["visitor", "operator"]
+Role = Literal["visitor", "member", "vip", "operator"]
 
 
 def hash_ip(ip: str, salt: str) -> str:
@@ -29,6 +35,36 @@ class VisitorIdentity:
 
 
 @dataclass(frozen=True, slots=True)
+class MemberIdentity:
+    """Produced by auth.require_member — user authentifié avec email vérifié."""
+    role: Literal["member"] = "member"
+    user_id: str = ""       # ULID de UserAccount.id
+    username: str = ""
+    email: str = ""
+    jti: str = ""           # JWT ID, pour revocation
+    session_id: str = ""    # WS connection id
+    ip_hash: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class VIPIdentity:
+    """Produced by auth.require_vip — membre avec vip_since actif.
+
+    Les mêmes champs que MemberIdentity plus les dates VIP. Frozen pour
+    qu'un route handler ne puisse pas muter le rôle en vol.
+    """
+    role: Literal["vip"] = "vip"
+    user_id: str = ""
+    username: str = ""
+    email: str = ""
+    jti: str = ""
+    session_id: str = ""
+    ip_hash: str = ""
+    vip_since: Optional[datetime] = None
+    vip_until: Optional[datetime] = None   # None = VIP à vie / sans expiration
+
+
+@dataclass(frozen=True, slots=True)
 class OperatorIdentity:
     """Produced by auth.require_operator FastAPI dependency only."""
     role: Literal["operator"] = "operator"
@@ -38,4 +74,4 @@ class OperatorIdentity:
     ip_hash: str = ""
 
 
-Identity = VisitorIdentity | OperatorIdentity
+Identity = VisitorIdentity | MemberIdentity | VIPIdentity | OperatorIdentity

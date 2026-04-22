@@ -16,12 +16,9 @@ import { SpeakingRing } from "@/components/SpeakingRing";
 import { LoadingScreen } from "@/components/LoadingScreen";
 import { OperatorVoicePanel } from "@/components/OperatorVoicePanel";
 import { EmoteOverlay, EmoteOverlayHandle } from "@/components/EmoteOverlay";
-import { LiquidGlassRail, LiquidGlassFilter } from "@/components/LiquidGlassRail";
-import { CanvasGradients } from "@/components/viewer/CanvasGradients";
-import { HudTopBar } from "@/components/viewer/HudTopBar";
-import { CornerTelemetry } from "@/components/viewer/CornerTelemetry";
-import { FloatingEvents } from "@/components/viewer/FloatingEvents";
-import { BottomTitleBand } from "@/components/viewer/BottomTitleBand";
+import { LiquidGlassFilter } from "@/components/LiquidGlassRail";
+import { ViewerStage, type ChatMsg, type Target as StageTarget } from "@/components/ViewerStage";
+import { useRouter } from "next/router";
 import { Mode } from "@/components/OperatorPanel";
 import { SceneManager } from "@/features/scenes/SceneManager";
 import { VirtualDesktop } from "@/features/desktop/VirtualDesktop";
@@ -35,7 +32,7 @@ import { invalidate as invalidateRegistry } from "@/features/registry/registryCl
 import { useVoiceInput } from "@/hooks/useVoiceInput";
 import { useHmsUptime } from "@/hooks/useHmsUptime";
 import {
-  ShuguClient, ShuguEvent, PerformanceTags, base64ToArrayBuffer, fetchAuthStatus,
+  ShuguClient, ShuguEvent, PerformanceTags, base64ToArrayBuffer, fetchAuthStatus, logout,
 } from "../services/shuguClient";
 
 const quicksand = Quicksand({
@@ -100,10 +97,12 @@ export default function Home() {
   const [speaking, setSpeaking] = useState(false);
   const [debugCaptions, setDebugCaptions] = useState(false);
 
-  // V3 Immersive HUD — rail chat toggleable, uptime démarré à l'ouverture du WS.
-  const [chatOpen, setChatOpen] = useState(true);
+  // Uptime démarré à l'ouverture du WS. reactionSeed incrémenté à chaque
+  // performance.audio pour déclencher les emoji flottants dans ViewerStage.
   const [streamStartMs, setStreamStartMs] = useState<number | null>(null);
+  const [reactionSeed, setReactionSeed] = useState(0);
   const uptime = useHmsUptime(streamStartMs);
+  const router = useRouter();
   useEffect(() => {
     if (connStatus === "open" && streamStartMs === null) {
       setStreamStartMs(Date.now());
@@ -229,6 +228,7 @@ export default function Home() {
 
           if (ev.text) {
             appendLog({ role: "assistant", content: ev.text });
+            setReactionSeed((s) => s + 1);
           }
 
           // Audio source resolution: inline base64 (normal path) OR a local
@@ -279,7 +279,10 @@ export default function Home() {
               cueTimersRef.current.push(id);
             }
           }
-          if (ev.text) appendLog({ role: "assistant", content: ev.text });
+          if (ev.text) {
+            appendLog({ role: "assistant", content: ev.text });
+            setReactionSeed((s) => s + 1);
+          }
 
           // Tear down any stale player (should never happen but be safe).
           streamPlayerRef.current?.abort("new performance");
@@ -444,51 +447,48 @@ export default function Home() {
     if (target === "hermes") setPendingHermes(true);
   };
 
-  // Props communes aux deux instances ChatFeed (desktop rail + mobile overlay).
-  // Un seul state applicatif (chatLog, inputValue, voice) alimente les deux :
-  // le viewer ne voit qu'une instance à la fois selon son viewport.
-  const chatFeedProps = {
-    messages: chatLog,
-    showAssistant: !!operator && debugCaptions,
-    viewerCount,
-    inputValue,
-    onInputChange: setInputValue,
-    onSubmit: handleSubmit,
-    inputDisabled: connStatus !== "open",
-    hermesMode: !!operator && mode === "hermes",
-    voice: operator && voice.supported ? {
-      supported: voice.supported,
-      listening: voice.listening,
-      interim: voice.interim,
-      start: voice.start,
-      stop: voice.stop,
-    } : undefined,
+  // Mapping chatLog → ChatMsg[] pour ViewerStage. Les messages assistant
+  // sont marqués `stream: true` uniquement quand ils sont le DERNIER message
+  // (simule l'arrivée live). Les historiques ne streament pas.
+  const stageMessages: ChatMsg[] = chatLog.map((m, i) => {
+    const isLast = i === chatLog.length - 1;
+    if (m.role === "system") {
+      return { kind: "system", text: m.content };
+    }
+    if (m.role === "assistant") {
+      const isHermes = mode === "hermes";
+      return {
+        kind: "assistant",
+        who: isHermes ? "Hermes" : "Shugu",
+        text: m.content,
+        stream: isLast,
+        hermes: isHermes,
+      };
+    }
+    // role === "user"
+    return {
+      kind: "visitor",
+      who: operator?.username ?? "you",
+      text: m.content,
+      rank: operator ? "admin" : "guest",
+      glyph: operator ? "♚" : "",
+    };
+  });
+
+  const handleStageSend = (text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    const target: Mode = operator ? mode : "shugu";
+    const ok = clientRef.current?.sendChat(trimmed, target);
+    if (!ok) { setNotice("déconnecté, reconnexion…"); return; }
+    appendLog({ role: "user", content: (target === "hermes" ? "⚡ " : "") + trimmed });
+    setInputValue("");
+    if (target === "hermes") setPendingHermes(true);
   };
 
   return (
     <div className={`${quicksand.variable} ${comfortaa.variable} ${plusJakarta.variable} ${interFont.variable} font-quicksand`}>
       <Meta />
-      <VrmViewer
-        onLoaded={() => {
-          setAvatarLoaded(true);
-          const v = viewerRef.current;
-          if (v && !sceneManagerRef.current) {
-            const mgr = new SceneManager({
-              viewer: v,
-              onBackgroundChange: (bg) => {
-                document.body.style.background = bg;
-              },
-            });
-            sceneManagerRef.current = mgr;
-            // Applique la scene par défaut depuis le registry persistée :
-            // au reload, le VRM retrouve la dernière pose/caméra sauvegardée
-            // via le scene-editor au lieu de snapper à origine.
-            void refreshScenes().then(() => mgr.applyInitial());
-          }
-        }}
-      />
-
-      <CanvasGradients chatOpen={chatOpen} />
       <LiquidGlassFilter />
 
       <EmoteOverlay ref={emoteOverlayRef} />
@@ -496,32 +496,65 @@ export default function Home() {
 
       {!avatarLoaded && <LoadingScreen />}
 
-      <HudTopBar
-        connStatus={connStatus}
+      {/* ViewerStage — port 1:1 de preview/proto/app.jsx. Le VRM remplace la
+          scène nebula/avatar via la prop `stageSlot`. */}
+      <ViewerStage
+        stageSlot={
+          <VrmViewer
+            onLoaded={() => {
+              setAvatarLoaded(true);
+              const v = viewerRef.current;
+              if (v && !sceneManagerRef.current) {
+                const mgr = new SceneManager({
+                  viewer: v,
+                  onBackgroundChange: (bg) => {
+                    document.body.style.background = bg;
+                  },
+                });
+                sceneManagerRef.current = mgr;
+                void refreshScenes().then(() => mgr.applyInitial());
+              }
+            }}
+          />
+        }
+        messages={stageMessages}
+        session={operator ? { name: operator.username, tier: "admin" } : null}
         viewerCount={viewerCount}
-        uptime={uptime}
-        operatorUsername={operator?.username}
-        chatOpen={chatOpen}
+        uptimeLabel={`LIVE · ${uptime}`}
+        connStatus={connStatus}
+        inputValue={inputValue}
+        onInputChange={setInputValue}
+        onSend={handleStageSend}
+        inputDisabled={connStatus !== "open"}
+        target={mode as StageTarget}
+        setTarget={(t) => setMode(t as Mode)}
+        reactionSeed={reactionSeed}
+        onLogin={() => { void router.push("/login"); }}
+        onSignup={() => { void router.push("/login"); }}
+        onAccount={() => {
+          if (operator) void router.push(`/${encodeURIComponent(operator.username)}/account`);
+        }}
+        onLogout={async () => {
+          await logout();
+          setOperator(null);
+        }}
+        onAdmin={() => {
+          if (operator) void router.push(`/${encodeURIComponent(operator.username)}/admin`);
+        }}
+        voice={operator && voice.supported ? {
+          supported: voice.supported,
+          listening: voice.listening,
+          interim: voice.interim,
+          start: voice.start,
+          stop: voice.stop,
+        } : undefined}
       />
-      <CornerTelemetry connStatus={connStatus} />
-      <FloatingEvents />
-      <BottomTitleBand chatOpen={chatOpen} />
 
-      <LiquidGlassRail
-        open={chatOpen}
-        onOpen={() => setChatOpen(true)}
-        onClose={() => setChatOpen(false)}
-      >
-        <ChatFeed variant="viewer-rail" {...chatFeedProps} />
-      </LiquidGlassRail>
-
-      {/* Fallback mobile — ChatFeed en mode default (overlay plein écran + FAB). */}
-      <div className="md:hidden">
-        <ChatFeed {...chatFeedProps} />
-      </div>
-
-      {!operator && <VisitorLogin />}
-      <OperatorVoicePanel enabled={!!operator} />
+      {/* VisitorLogin + OperatorVoicePanel — retirés du viewer (absents du
+          proto). Le login est maintenant accessible via le menu déployable du
+          brand pill (HudTop → "Log in" / "Sign up"). Décommenter pour réactiver. */}
+      {/* {!operator && <VisitorLogin />} */}
+      {/* <OperatorVoicePanel enabled={!!operator} /> */}
       <VirtualDesktop />
 
       {notice && (

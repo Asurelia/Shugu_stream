@@ -47,14 +47,14 @@ log = structlog.get_logger(__name__)
 
 
 class MiniMaxTTS:
-    """Default voice = `French_MovieLeadFemale` (cinematic young adult FR).
+    """Default voice = `French_Female_Speech_New` (MiniMax system FR voice).
 
     Emotion can be set per-call via `emotion` kwarg on synthesize, but the
     TTSAdapter protocol is emotion-agnostic — we default to "calm" and let
     the avatar's blendshape carry the emotional signal.
     """
 
-    DEFAULT_VOICE = "French_MovieLeadFemale"
+    DEFAULT_VOICE = "French_Female_Speech_New"
 
     def __init__(
         self,
