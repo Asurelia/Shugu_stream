@@ -14,10 +14,10 @@ from __future__ import annotations
 import uuid
 from typing import Sequence, Union
 
-from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
+from alembic import op
 
 revision: str = "0002_asset_registry"
 down_revision: Union[str, None] = "2b7bf3181178"

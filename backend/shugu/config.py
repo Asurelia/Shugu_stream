@@ -123,6 +123,14 @@ class Settings(BaseSettings):
     # basculer sur True nécessite que Phase 2 soit livrée.
     memory_enabled: bool = False
     memory_embed_dim: int = 1024
+    # Phase 2.1 : modèle d'embedding par défaut. intfloat/multilingual-e5-large
+    # = 1024 dim (matche memory_embed_dim), ~100 langues dont FR/EN, 512 tokens max.
+    # Alternatives testées : jinaai/jina-embeddings-v3 (1024 multilingue aussi) OU
+    # BAAI/bge-large-en-v1.5 (1024 mais ENG-only, à éviter pour notre cas).
+    memory_embedder_model: str = "intfloat/multilingual-e5-large"
+    # Cache dir du modèle. None = défaut fastembed (~/.cache/fastembed).
+    # Sur VPS avec petit disque /, pointer vers /var/cache/shugu/embeddings.
+    memory_embedder_cache_dir: str = ""
 
     # VIP bridge — v4 Phase 1 Brique 1.2. `vip_agent` (Worker LiveKit Agents,
     # process séparé) communique avec le backend FastAPI via HTTP localhost
