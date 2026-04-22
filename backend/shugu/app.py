@@ -150,19 +150,28 @@ async def lifespan(app: FastAPI):
     quota = QuotaTracker(_redis, plan=settings.minimax_plan)
     _quota = quota
 
-    # MemoryAgent — Phase 1 Brique 1.3. Instancié même si `memory_enabled=False` :
-    # permet aux futurs consumers (StageDirector Phase 3, brain_shugu Phase 2)
-    # d'appeler `get_memory()` sans crash, et `recall()` peut retourner [] tant
-    # que les tables n'ont pas été peuplées. `session_scope` vient de
-    # `db.session`, utilise le même engine asyncpg que les autres modules.
+    # MemoryAgent — Phase 1 Brique 1.3 + Phase 2.2 (embedder wiring).
+    # L'agent est instancié même si `memory_enabled=False` (rétrocompat).
+    # L'embedder, lui, n'est chargé QUE si `memory_enabled=True` — le modèle
+    # ONNX (~2GB) n'est pas téléchargé sur un boot de dev qui n'utilise pas
+    # la mémoire. Quand disponible, store() auto-embed + recall() cosine.
+    embedder = None
+    if settings.memory_enabled:
+        from .memory.embedder import FastEmbedE5Large
+        embedder = FastEmbedE5Large(
+            model_name=settings.memory_embedder_model,
+            cache_dir=settings.memory_embedder_cache_dir or None,
+        )
     _memory = MemoryAgent(
         session_factory=session_scope,
+        embedder=embedder,
         embed_dim=settings.memory_embed_dim,
     )
     log.info(
         "memory_agent.ready",
         embed_dim=settings.memory_embed_dim,
         enabled=settings.memory_enabled,
+        embedder_model=settings.memory_embedder_model if settings.memory_enabled else None,
     )
 
     personality_loader = MarkdownPersonalityLoader(

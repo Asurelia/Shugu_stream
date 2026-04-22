@@ -1,22 +1,31 @@
 """`MemoryAgent` — coordinateur unique pour le sous-système mémoire.
 
-API publique (Phase 1) :
-- `await agent.store(item)`            — INSERT (UPSERT sur id conflict)
-- `await agent.recall(query)`          — SELECT (pg_trgm ILIKE Phase 1)
-- `await agent.maintenance()`          — no-op Phase 1 ; decay + dedupe Phase 2
-- `await agent.persona_get()`          — SELECT persona_state (dict vide si absent)
-- `await agent.persona_set(patch)`     — UPSERT shallow-merge sur la row singleton
+API publique :
+- `await agent.store(item)`            — INSERT (UPSERT sur id conflict).
+                                         Auto-embed via `embedder` si item.embedding
+                                         absent (Phase 2.2).
+- `await agent.recall(query)`          — SELECT.
+                                         Cosine similarity pgvector si `embedder`
+                                         fourni (Phase 2.2), sinon ILIKE + pg_trgm
+                                         (Phase 1 fallback).
+- `await agent.maintenance()`          — no-op Phase 1-2.2 ; decay + dedupe Phase 2.5.
+- `await agent.persona_get()`          — SELECT persona_state (dict vide si absent).
+- `await agent.persona_set(patch)`     — UPSERT shallow-merge sur la row singleton.
 
-Design rules (respectées strictement) :
+Design rules :
 1. **Une seule chaîne de cognition LLM** — l'agent n'appelle JAMAIS de LLM.
-   L'extraction LLM-assistée est Phase 2 via un `BrainAdapter` dédié.
+   L'extraction LLM-assistée est Phase 2.3 via un `BrainAdapter` dédié.
 2. **Agent = service, pas agent LLM** — il ne "raisonne" pas, il coordonne
    des opérations DB avec logique d'agrégation (dedup, confidence, etc.).
 3. **Session injection** — `session_factory` est passé, pas importé. Permet
    de mocker en test (fixture avec `AsyncMock`) sans installer Postgres.
+4. **Embedder optionnel** — si `embedder=None`, l'agent fonctionne en mode
+   Phase 1 (ILIKE keyword). Rétrocompat + permet de différer le download
+   du modèle (2GB) jusqu'à `memory_enabled=True`.
 """
 from __future__ import annotations
 
+import dataclasses
 from datetime import timezone
 from typing import AsyncContextManager, Callable, Optional
 
@@ -25,6 +34,7 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from .embedder import Embedder
 from .models import MEMORY_EMBED_DIM, MemoryFact, PersonaState
 from .types import MemoryItem, RecallQuery
 
@@ -41,6 +51,7 @@ class MemoryAgent:
         self,
         *,
         session_factory: SessionFactory,
+        embedder: Optional[Embedder] = None,
         embed_dim: int = MEMORY_EMBED_DIM,
     ) -> None:
         if embed_dim != MEMORY_EMBED_DIM:
@@ -50,7 +61,13 @@ class MemoryAgent:
                 "memory_agent.embed_dim_mismatch",
                 given=embed_dim, schema=MEMORY_EMBED_DIM,
             )
+        if embedder is not None and embedder.dim != embed_dim:
+            log.warning(
+                "memory_agent.embedder_dim_mismatch",
+                embedder_dim=embedder.dim, agent_dim=embed_dim,
+            )
         self._session_factory = session_factory
+        self._embedder = embedder
         self._embed_dim = embed_dim
 
     # ── store ────────────────────────────────────────────────────────────────
@@ -58,14 +75,31 @@ class MemoryAgent:
     async def store(self, item: MemoryItem) -> None:
         """Insère (ou upsert sur conflit d'id) un `MemoryItem`.
 
-        Phase 1 : pas de validation stricte du contenu. Phase 2 ajoutera la
-        secret redaction (regex sur `text`) avant écriture.
+        Phase 2.2 : si `self._embedder` est set ET `item.embedding is None` ET
+        `item.text` non vide, on calcule l'embedding automatiquement avant
+        l'INSERT. Permet aux consumers de juste appeler `store(MemoryItem(...))`
+        sans se soucier de l'embedder.
+
+        Caller qui veut bypass (ex: item déjà embeddé par un batch externe) :
+        passer `item.embedding=[...]` explicite — pas ré-embeddé.
         """
         if item.embedding is not None and len(item.embedding) != self._embed_dim:
             raise ValueError(
                 f"embedding dim mismatch: got {len(item.embedding)}, "
                 f"expected {self._embed_dim}",
             )
+
+        # Auto-embed si contexte favorable.
+        if (
+            item.embedding is None
+            and self._embedder is not None
+            and item.text
+        ):
+            vectors = await self._embedder.embed_documents([item.text])
+            # dataclasses.replace ne mute pas l'item passé par le caller —
+            # sémantique pure-functional côté public API.
+            item = dataclasses.replace(item, embedding=vectors[0])
+
         async with self._session_factory() as session:
             stmt = pg_insert(MemoryFact).values(
                 id=item.id,
@@ -97,37 +131,62 @@ class MemoryAgent:
     async def recall(self, query: RecallQuery) -> list[MemoryItem]:
         """Retourne jusqu'à `query.limit` items matchant la query.
 
-        Phase 1 : keyword ILIKE sur `text`, + filtres `subject` et `kinds`.
-        Ordre = plus récent d'abord (pas de score de pertinence — vient en
-        Phase 2 avec le cosine embedding).
+        Stratégies (par ordre de préférence) :
+        1. **Cosine vector search** (Phase 2.2) — si `self._embedder` set ET
+           `query.text` non vide. Calcule l'embedding de la query, tri par
+           cosine distance ASC (0 = identique, 2 = opposite). Filtre hors
+           les rows `embedding IS NULL` (stockées avant activation embedder).
+        2. **Keyword ILIKE** (Phase 1 fallback) — si pas d'embedder ou pas de
+           query.text. Tri par `created_at DESC`.
+
+        Le caller peut fournir `query.query_embedding` pré-calculé (batch,
+        re-use) — dans ce cas on skip l'appel embedder.
         """
         if query.limit <= 0:
             return []
+
+        # Résout le vecteur query : caller-supplied > embedder-computed > None
+        query_vec: Optional[list[float]] = query.query_embedding
+        if query_vec is None and self._embedder is not None and query.text:
+            query_vec = await self._embedder.embed_query(query.text)
+
         async with self._session_factory() as session:
             stmt = select(MemoryFact)
             if query.subject:
                 stmt = stmt.where(MemoryFact.subject == query.subject)
             if query.kinds:
                 stmt = stmt.where(MemoryFact.kind.in_(list(query.kinds)))
-            if query.text:
-                # ILIKE avec wildcards explicites. Les % / _ dans `query.text`
-                # sont interprétés comme wildcards SQL — acceptable Phase 1
-                # (trivial de taper "100% raw" et avoir une surprise, mais pas
-                # un problème de sécurité). Phase 2 passe sur embedding cosine.
+
+            if query_vec is not None:
+                # Cosine search. Filtre les rows sans embedding (stockées avant
+                # activation de l'embedder) — elles n'ont pas de similarité
+                # calculable et ne sont pas comparables au reste.
+                stmt = stmt.where(MemoryFact.embedding.is_not(None))
+                stmt = stmt.order_by(MemoryFact.embedding.cosine_distance(query_vec))
+            elif query.text:
+                # Fallback keyword — Phase 1 style. Les wildcards `%` / `_` dans
+                # query.text sont interprétés comme wildcards SQL. OK Phase 1-2
+                # (pas un enjeu sécurité, juste comportement).
                 stmt = stmt.where(MemoryFact.text.ilike(f"%{query.text}%"))
-            stmt = stmt.order_by(MemoryFact.created_at.desc()).limit(query.limit)
+                stmt = stmt.order_by(MemoryFact.created_at.desc())
+            else:
+                # Pas de filtre texte — retour des plus récents selon filtres
+                # subject/kinds (utilisé par la Régie Phase 3 pour "last seen").
+                stmt = stmt.order_by(MemoryFact.created_at.desc())
+
+            stmt = stmt.limit(query.limit)
             rows = (await session.execute(stmt)).scalars().all()
             return [_row_to_item(row) for row in rows]
 
     # ── maintenance ──────────────────────────────────────────────────────────
 
     async def maintenance(self) -> dict:
-        """No-op Phase 1 — placeholder pour le garbage collector Phase 2.
+        """No-op Phase 1-2.2 — placeholder pour le garbage collector Phase 2.5.
 
-        Phase 2 fera : decay confidence (half-life ~30j), dedupe sémantique
+        Phase 2.5 fera : decay confidence (half-life ~30j), dedupe sémantique
         (cosine > 0.95 ⇒ merge), soft-delete des items confidence < 0.1.
         Retourne un dict de stats pour que les logs puissent tracker (meme
-        si tout est à 0 Phase 1).
+        si tout est à 0 maintenant).
         """
         return {"decayed": 0, "removed": 0, "deduped": 0}
 
