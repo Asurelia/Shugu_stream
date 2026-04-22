@@ -37,8 +37,14 @@ dependencies = [
     # pgvector — Phase 1 Brique 1.3 (MemoryAgent). Intégration SQLAlchemy 2.0
     # pour le type `Vector(dim)`. Nécessite l'extension `vector` côté Postgres
     # (image Docker `pgvector/pgvector:pg16` en CI, `apt install postgresql-*-pgvector`
-    # pour la VPS Debian). Dim par défaut 1024 (bge-m3) — figé dans la migration 0005.
+    # pour la VPS Debian). Dim par défaut 1024 (e5-large) — figé dans la migration 0005.
     "pgvector>=0.2,<1.0",
+    # fastembed — Phase 2.1 Embedder. Runtime ONNX (pas de torch) pour faire
+    # tourner `intfloat/multilingual-e5-large` (1024 dim, ~100 langues FR/EN +).
+    # Lazy-loaded : l'import et le download du modèle (~2GB) n'ont lieu qu'au
+    # 1er appel à Embedder.embed_* — tant que `memory_enabled=False`, aucune
+    # pénalité au boot.
+    "fastembed>=0.3,<1.0",
 ]
 
 [project.optional-dependencies]

@@ -19,9 +19,9 @@ from __future__ import annotations
 
 from typing import Sequence, Union
 
-from alembic import op
 import sqlalchemy as sa
 
+from alembic import op
 
 revision: str = "0004_user_accounts"
 down_revision: Union[str, None] = "0003_seed_registry_kinds"

@@ -21,9 +21,9 @@ import json as _json
 import uuid
 from typing import Sequence, Union
 
-from alembic import op
 import sqlalchemy as sa
 
+from alembic import op
 
 revision: str = "0003_seed_registry_kinds"
 down_revision: Union[str, None] = "0002_asset_registry"
