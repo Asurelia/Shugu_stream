@@ -57,7 +57,6 @@ from ..core.vip_toolset import VIP_TOOLS
 from .queue import QueuedMessage, RedisQueue, new_msg_id
 from .workers import _estimate_speech_duration_ms, extract_emotion, extract_tags
 
-
 log = structlog.get_logger(__name__)
 
 

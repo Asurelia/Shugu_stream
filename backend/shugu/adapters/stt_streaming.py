@@ -23,7 +23,6 @@ from typing import Optional
 
 import structlog
 
-
 log = structlog.get_logger(__name__)
 
 

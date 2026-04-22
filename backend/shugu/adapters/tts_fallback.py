@@ -15,13 +15,12 @@ chunk; any failure before that triggers the secondary's full synthesis.
 from __future__ import annotations
 
 import contextlib
-from typing import AsyncIterator, Optional
+from typing import AsyncIterator
 
 import structlog
 
 from ..core.errors import TTSError
 from ..core.protocols import TTSAdapter, TTSChunk, TTSResult
-
 
 log = structlog.get_logger(__name__)
 

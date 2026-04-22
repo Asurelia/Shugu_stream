@@ -15,7 +15,6 @@ from ..config import Settings, get_settings
 from ..core.errors import AuthError
 from ..core.identity import OperatorIdentity, hash_ip
 
-
 router = APIRouter(prefix="/auth", tags=["auth"])
 log = structlog.get_logger(__name__)
 
@@ -71,9 +70,10 @@ async def login(body: LoginBody, request: Request, response: Response,
 
     access, refresh, jti = jwt_tokens.issue_pair(settings, body.username)
 
-    from ..db.session import session_scope
-    from ..db.models import OperatorSession
     from datetime import datetime, timedelta, timezone
+
+    from ..db.models import OperatorSession
+    from ..db.session import session_scope
     ip = request.client.host if request.client else "unknown"
     try:
         async with session_scope() as db:

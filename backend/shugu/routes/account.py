@@ -21,21 +21,23 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import structlog
-from fastapi import APIRouter, Cookie, Depends, HTTPException, Query, Request, Response
+from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import select
 from ulid import ULID
 
-from ..auth import email_verify, password as password_utils, user_tokens
+from ..auth import email_verify, user_tokens
+from ..auth import password as password_utils
 from ..auth.dependencies import (
-    USER_ACCESS_COOKIE, USER_REFRESH_COOKIE, require_member,
+    USER_ACCESS_COOKIE,
+    USER_REFRESH_COOKIE,
+    require_member,
 )
 from ..config import Settings, get_settings
 from ..core.errors import AuthError
 from ..core.identity import MemberIdentity, VIPIdentity, hash_ip
 from ..db.models import UserAccount, UserSession
 from ..db.session import session_scope
-
 
 router = APIRouter(prefix="/api/account", tags=["account"])
 log = structlog.get_logger(__name__)
@@ -183,7 +185,7 @@ async def register(
         (side-channel énumération). On log côté serveur, le client voit 201.
       - bcrypt rounds=12 (~200 ms hash).
     """
-    from ..app import get_redis, get_email_sender  # lazy
+    from ..app import get_email_sender, get_redis  # lazy
     redis = get_redis()
     ip = request.client.host if request.client else "unknown"
     ip_h = hash_ip(ip, settings.ip_hash_salt)
@@ -283,7 +285,7 @@ async def resend_verify(
     settings: Settings = Depends(get_settings),
 ):
     """Re-envoie l'email de vérification. Rate-limited 3/h/user."""
-    from ..app import get_redis, get_email_sender
+    from ..app import get_email_sender, get_redis
     redis = get_redis()
     email = body.email.lower().strip()
 

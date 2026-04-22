@@ -27,32 +27,43 @@ Le backend FastAPI interagit avec le Worker uniquement via :
 - Greeting automatique au join du participant
 - Barge-in natif LiveKit
 
-## TODO Phase 3a.1
+## État Phase 1 fondation (autonomous streamer)
 
-- Câbler les `function_tool` qui délèguent à `BodyRouter` (pour que Shugu
-  puisse `body.gesture` / `body.emote` / `chat.post` pendant la VIP call).
-  Nécessite d'instancier `body_router` depuis le process Worker, qui n'a
-  pas les mêmes deps que le backend (Redis/Postgres). Option : le Worker
-  appelle une route HTTP interne du backend pour chaque tool call.
+- ✅ **Bridge events one-way** via `VipBridgeClient` → `/internal/vip/event`
+  (HTTP localhost signé). Émissions : `participant_joined`, `session_started`,
+  `session_ended`. La future Régie Phase 3 subscribe au topic `vip.events`
+  pour arbitrer entre VIP voice / chat public / ambient.
 
-- Mémoire contextuelle : charger `vip/<username>.md` depuis le Vault
-  Obsidian (Phase 3b) et l'injecter dans `instructions`.
+## TODO (Phase 2+)
+
+- Câbler les `function_tool` qui délèguent à `BodyRouter` via
+  `VipBridgeClient.invoke_tool("body.gesture", ...)`. Le backend côté
+  `/internal/vip/tool` retourne déjà 501 pour `body.*` — Phase 2 branchera.
+
+- Mémoire contextuelle : charger `vip/<username>.md` depuis la table
+  `memory_facts` via `MemoryAgent.recall(subject="vip:<username>")` — Phase 2
+  quand `memory_enabled=True`.
 
 - Session log (`vip_session_log` table) — Phase 5.
 """
 from __future__ import annotations
 
 import asyncio
+import time
 
+import httpx
 import structlog
 from livekit import agents
 from livekit.agents import Agent, AgentSession, JobContext, WorkerOptions, cli
-from livekit.plugins import minimax as lk_minimax, openai as lk_openai, silero
+from livekit.plugins import minimax as lk_minimax
+from livekit.plugins import openai as lk_openai
+from livekit.plugins import silero
 
 from ..config import get_settings
+from ..core.vip_bridge import VipEventIn
 from .stt_livekit_adapter import ShuguWhisperSTT
 from .stt_streaming import FasterWhisperSTT, STTSettings
-
+from .vip_bridge_client import VipBridgeClient
 
 log = structlog.get_logger(__name__)
 
@@ -75,58 +86,127 @@ interlocuteur.
 """
 
 
+async def _safe_emit(bridge: VipBridgeClient, event: VipEventIn) -> None:
+    """Émet un event au backend en swallow-mode : on ne veut JAMAIS qu'un
+    backend KO interrompe la conversation VIP en cours.
+
+    Log-only sur échec. Le client fait déjà 3 retries avec backoff ; arrivé
+    ici avec exception, on accepte qu'on a perdu cet event et on continue.
+    """
+    try:
+        await bridge.emit_event(event)
+    except Exception as exc:
+        log.warning(
+            "vip_agent.bridge_emit_failed",
+            kind=event.kind, room=event.room, error=str(exc),
+        )
+
+
 async def _entrypoint(ctx: JobContext) -> None:
-    """Appelé par le Worker pour chaque room où un VIP se connecte."""
+    """Appelé par le Worker pour chaque room où un VIP se connecte.
+
+    Flow Phase 1 :
+    1. Connecter à la room LiveKit.
+    2. Attendre le participant (timeout 60s).
+    3. Émettre `participant_joined` au backend (bridge HTTP).
+    4. Setup STT/LLM/TTS + Agent + AgentSession.
+    5. Émettre `session_started` après `session.start()`.
+    6. Générer le greeting initial.
+    7. **Finally** : émettre `session_ended` + close httpx client, quel que
+       soit le chemin (timeout, exception, disconnect normal).
+
+    Les émissions bridge sont en mode swallow-on-error — si le backend est
+    down, le VIP peut continuer à parler avec Shugu, on loggue simplement.
+    """
     settings = get_settings()
 
+    # Client HTTP pour le bridge backend. Une instance par room — on la
+    # referme en finally pour éviter les sockets orphelins sur long run.
+    http_for_bridge = httpx.AsyncClient()
+    bridge = VipBridgeClient(
+        base_url=settings.vip_internal_url,
+        secret=settings.vip_internal_secret,
+        http=http_for_bridge,
+    )
+
     await ctx.connect()
-    log.info("vip_agent.room_connected", room=ctx.room.name)
+    room_name = ctx.room.name
+    vip_username = "unknown"
+    log.info("vip_agent.room_connected", room=room_name)
 
     try:
-        participant = await ctx.wait_for_participant(timeout=60.0)
-    except asyncio.TimeoutError:
-        log.warning("vip_agent.no_participant_timeout", room=ctx.room.name)
-        return
-    vip_username = participant.identity or "unknown"
-    log.info("vip_agent.participant_joined", room=ctx.room.name, user=vip_username)
+        try:
+            participant = await ctx.wait_for_participant(timeout=60.0)
+        except asyncio.TimeoutError:
+            log.warning("vip_agent.no_participant_timeout", room=room_name)
+            return
 
-    whisper = FasterWhisperSTT(STTSettings(
-        model_name=settings.stt_model,
-        compute_type=settings.stt_compute_type,
-        device=settings.stt_device,
-        language=settings.stt_language,
-    ))
+        vip_username = participant.identity or "unknown"
+        log.info("vip_agent.participant_joined", room=room_name, user=vip_username)
 
-    vad = silero.VAD.load()
+        # Notify backend : `vip.events` topic → la Régie Phase 3 pourra
+        # arbitrer entre VIP voice / chat public / ambient.
+        await _safe_emit(bridge, VipEventIn(
+            kind="participant_joined",
+            room=room_name,
+            user=vip_username,
+            ts_ns=time.time_ns(),
+        ))
 
-    session = AgentSession(
-        vad=vad,
-        stt=agents.stt.StreamAdapter(
-            stt=ShuguWhisperSTT(whisper, language=settings.stt_language),
+        whisper = FasterWhisperSTT(STTSettings(
+            model_name=settings.stt_model,
+            compute_type=settings.stt_compute_type,
+            device=settings.stt_device,
+            language=settings.stt_language,
+        ))
+
+        vad = silero.VAD.load()
+
+        session = AgentSession(
             vad=vad,
-        ),
-        llm=lk_openai.LLM(
-            api_key=settings.minimax_api_key,
-            base_url=settings.minimax_base_url,
-            model=settings.minimax_model,
-        ),
-        tts=lk_minimax.TTS(
-            api_key=settings.minimax_api_key,
-            voice_id=settings.minimax_voice_id,
-            model=settings.minimax_tts_model,
-        ),
-    )
+            stt=agents.stt.StreamAdapter(
+                stt=ShuguWhisperSTT(whisper, language=settings.stt_language),
+                vad=vad,
+            ),
+            llm=lk_openai.LLM(
+                api_key=settings.minimax_api_key,
+                base_url=settings.minimax_base_url,
+                model=settings.minimax_model,
+            ),
+            tts=lk_minimax.TTS(
+                api_key=settings.minimax_api_key,
+                voice_id=settings.minimax_voice_id,
+                model=settings.minimax_tts_model,
+            ),
+        )
 
-    agent = Agent(instructions=VIP_SYSTEM_PROMPT)
+        agent = Agent(instructions=VIP_SYSTEM_PROMPT)
 
-    await session.start(room=ctx.room, agent=agent)
-    log.info("vip_agent.session_started", room=ctx.room.name, user=vip_username)
+        await session.start(room=ctx.room, agent=agent)
+        log.info("vip_agent.session_started", room=room_name, user=vip_username)
+        await _safe_emit(bridge, VipEventIn(
+            kind="session_started",
+            room=room_name,
+            user=vip_username,
+            ts_ns=time.time_ns(),
+        ))
 
-    # Greeting : le LLM compose une phrase d'accueil, le TTS la joue.
-    await session.generate_reply(
-        instructions=f"Dis bonjour à {vip_username} chaleureusement en UNE phrase. "
-                     "Puis pose-lui une question ouverte pour qu'il se lance.",
-    )
+        # Greeting : le LLM compose une phrase d'accueil, le TTS la joue.
+        await session.generate_reply(
+            instructions=f"Dis bonjour à {vip_username} chaleureusement en UNE phrase. "
+                         "Puis pose-lui une question ouverte pour qu'il se lance.",
+        )
+    finally:
+        # `session_ended` est TOUJOURS émis — même sur timeout/exception/disconnect.
+        # Permet à la Régie Phase 3 de savoir que la room est dispo pour
+        # re-balance les priorités (ex: faire remonter l'ambient au tier idle).
+        await _safe_emit(bridge, VipEventIn(
+            kind="session_ended",
+            room=room_name,
+            user=vip_username,
+            ts_ns=time.time_ns(),
+        ))
+        await http_for_bridge.aclose()
 
 
 def _build_worker_options() -> WorkerOptions:

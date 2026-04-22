@@ -35,7 +35,6 @@ from ..core.registry import get_registry
 from ..db.models import AssetRegistry
 from ..db.session import session_scope
 
-
 # Event bus référencé par le lifespan (app.py). On importe tardivement pour
 # casser la dépendance circulaire ; None tant que l'app n'a pas démarré.
 _event_bus: Optional[InProcessEventBus] = None

@@ -36,7 +36,6 @@ from typing import Any, Literal, Optional
 
 import structlog
 
-
 log = structlog.get_logger(__name__)
 
 

@@ -15,7 +15,6 @@ from ..core.identity import Identity, VisitorIdentity
 from ..core.protocols import ModerationLayer, ModerationVerdict
 from .injection_detector import aggregate_weight, scan
 
-
 _MAX_TEXT_LEN = 500
 _INJECTION_HARD_BAN_SCORE = 10   # ≥10 = temporary ban (1h)
 
@@ -79,9 +78,10 @@ class BasicModeration(ModerationLayer):
             return ModerationVerdict(allowed=False, reason="accès temporairement suspendu", detector="ban")
         # Postgres persisted ban — best-effort, cached in Redis for 60s after hit
         try:
-            from ..db.session import session_scope
-            from ..db.models import Visitor
             from sqlalchemy import select
+
+            from ..db.models import Visitor
+            from ..db.session import session_scope
             async with session_scope() as session:
                 row = (await session.execute(
                     select(Visitor.ban_until).where(Visitor.ip_hash == ip_hash)
@@ -101,10 +101,12 @@ class BasicModeration(ModerationLayer):
         ttl = hours * 3600
         try:
             await self._redis.set(f"shugu:ban:{ip_hash}", "1", ex=ttl)
-            from ..db.session import session_scope
-            from ..db.models import Visitor
             from datetime import datetime, timedelta, timezone
+
             from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+            from ..db.models import Visitor
+            from ..db.session import session_scope
             ban_until = datetime.now(tz=timezone.utc) + timedelta(seconds=ttl)
             async with session_scope() as session:
                 stmt = pg_insert(Visitor).values(

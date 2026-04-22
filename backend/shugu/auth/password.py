@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import bcrypt
 
-
 BCRYPT_ROUNDS = 12
 
 

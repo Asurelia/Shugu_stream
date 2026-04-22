@@ -17,7 +17,6 @@ from ..core.identity import Identity
 from ..core.protocols import BrainDelta, PersonalityLoader, Turn
 from .brain_shugu import strip_think
 
-
 _THINK_XML_RE = re.compile(r"<think>.*?</think>|<thinking>.*?</thinking>", re.DOTALL | re.IGNORECASE)
 _TOOL_CALL_RE = re.compile(r"<tool_use>.*?</tool_use>|<tool_call>.*?</tool_call>", re.DOTALL | re.IGNORECASE)
 

@@ -7,6 +7,7 @@ Accepts visitor chat.send format with an optional `target: "shugu"|"hermes"`.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from dataclasses import dataclass
@@ -23,7 +24,6 @@ from ..core.identity import OperatorIdentity, hash_ip
 from ..core.protocols import EventBus, ModerationLayer
 from ..pipeline.queue import QueuedMessage, RedisQueue, new_msg_id
 
-
 router = APIRouter()
 log = structlog.get_logger(__name__)
 
@@ -33,7 +33,6 @@ _bg_tasks: set["asyncio.Task"] = set()
 
 
 def _spawn_bg(coro, *, name: str) -> None:
-    import asyncio
     task = asyncio.create_task(coro, name=name)
     _bg_tasks.add(task)
     task.add_done_callback(_bg_tasks.discard)

@@ -43,8 +43,7 @@ from typing import Awaitable, Callable, Optional
 
 import structlog
 
-from ..adapters.stt_streaming import FasterWhisperSTT, VAD_FRAME_BYTES
-
+from ..adapters.stt_streaming import VAD_FRAME_BYTES, FasterWhisperSTT
 
 log = structlog.get_logger(__name__)
 

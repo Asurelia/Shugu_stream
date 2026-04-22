@@ -18,7 +18,6 @@ from ..adapters.hermes_state import HermesStateReader
 from ..auth.dependencies import require_operator
 from ..core.identity import OperatorIdentity
 
-
 router = APIRouter(prefix="/api/hermes", tags=["hermes"])
 log = structlog.get_logger(__name__)
 

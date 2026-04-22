@@ -5,20 +5,16 @@ Concurrency = config. If brain/tts latency spikes, pending queue acts as buffer.
 """
 from __future__ import annotations
 
-import asyncio
 import re
-import time
-from typing import Literal
 
 import structlog
 
-from ..config import Settings
-from ..core.errors import BrainError, ModerationReject, TTSError
-from ..core.identity import Identity, OperatorIdentity, VisitorIdentity
 from ..adapters.brain_shugu import strip_think
+from ..config import Settings
+from ..core.errors import TTSError
+from ..core.identity import Identity, VisitorIdentity
 from ..core.protocols import BrainAdapter, ModerationLayer, TTSAdapter, Turn
 from .queue import QueuedMessage, RedisQueue
-
 
 _EMOTION_RE = re.compile(r"^\[(neutral|happy|angry|sad|relaxed)\]\s*", re.IGNORECASE)
 

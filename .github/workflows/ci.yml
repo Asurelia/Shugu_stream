@@ -94,42 +94,14 @@ jobs:
           pip install -e '.[dev]'
 
       - name: Ruff lint
-        # Phase 1 — scope progressif : on lint les dossiers/fichiers qu'on a
-        # fait passer "clean" pendant les briques, en évitant les ~90 violations
-        # pré-existantes de l'ancien code. Chaque nouvelle brique élargit la
-        # liste ci-dessous à mesure qu'elle touche/nettoie des fichiers.
+        # Phase 1 résiduel : les 90 erreurs pré-existantes ont été nettoyées
+        # (75 auto-fix + 15 manuelles dont 1 F821 qui était un vrai bug —
+        # `asyncio` référencé en annotation sans import module-level dans
+        # `routes/operator_ws.py`).
         #
-        # Scope actuel (Phase 1.1 + 1.2 + 1.3) :
-        #   - backend/tests/                       — tout le code de tests
-        #   - backend/shugu/app.py                 — lifespan + wiring
-        #   - backend/shugu/config.py              — settings nouvelles briques
-        #   - backend/shugu/core/event_bus.py      — InProcessEventBus (clean)
-        #   - backend/shugu/core/event_bus_redis.py      — RedisEventBus (1.1)
-        #   - backend/shugu/core/event_bus_factory.py    — factory (1.1)
-        #   - backend/shugu/core/protocols.py      — contrat EventBus
-        #   - backend/shugu/core/vip_bridge.py     — types VIP bridge (1.2)
-        #   - backend/shugu/routes/internal_vip.py — router /internal/vip (1.2)
-        #   - backend/shugu/adapters/vip_bridge_client.py  — client httpx (1.2)
-        #   - backend/shugu/memory/                — MemoryAgent skeleton (1.3)
-        #   - backend/alembic/env.py               — register memory ORM
-        #   - backend/alembic/versions/0005_memory_agent.py  — migration pgvector
-        #
-        # Voir tâche "Cleanup ruff errors in backend/shugu/" pour le reste.
-        run: |
-          ruff check \
-            backend/tests \
-            backend/shugu/app.py \
-            backend/shugu/config.py \
-            backend/shugu/core/event_bus.py \
-            backend/shugu/core/event_bus_redis.py \
-            backend/shugu/core/event_bus_factory.py \
-            backend/shugu/core/protocols.py \
-            backend/shugu/core/vip_bridge.py \
-            backend/shugu/routes/internal_vip.py \
-            backend/shugu/adapters/vip_bridge_client.py \
-            backend/shugu/memory \
-            backend/alembic/env.py \
-            backend/alembic/versions/0005_memory_agent.py
+        # Scope étendu à `backend/shugu/` complet + tests + alembic. Les
+        # nouveaux fichiers sont automatiquement lintés.
+        run: ruff check backend/shugu backend/tests backend/alembic
 
       - name: Run alembic migrations
         working-directory: backend

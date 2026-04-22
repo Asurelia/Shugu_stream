@@ -26,7 +26,6 @@ from typing import Optional
 
 from .body_control import openai_tools_schema
 
-
 # Tools autorisés en session VIP. Ajouter à cette frozenset pour accorder
 # une permission — ne jamais la manipuler dynamiquement en runtime, la
 # valeur doit rester inspectable au démarrage.
