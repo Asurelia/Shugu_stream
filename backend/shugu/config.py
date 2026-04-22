@@ -62,6 +62,12 @@ class Settings(BaseSettings):
     email_from: str = "shugu@spoukie.uk"
     public_site_url: str = "https://shugu.spoukie.uk"
 
+    # LiveKit — v4 Phase 3a. Si vide, le VIP voice agent est désactivé
+    # (la route /api/livekit/token renverra 503).
+    livekit_url: str = ""           # wss://livekit.spoukie.uk
+    livekit_api_key: str = ""       # LK API key (dashboard LiveKit/self-hosted)
+    livekit_api_secret: str = ""    # LK API secret
+
     # LLM (Shugu + FilterBrain share the MiniMax account; can diverge later)
     minimax_api_key: str = ""
     minimax_base_url: str = "https://api.minimax.io/v1"

@@ -35,8 +35,8 @@ from .pipeline.picker import Picker
 from .pipeline.queue import RedisQueue
 from .pipeline.workers import PrepWorker
 from .routes import (
-    account, admin, admin_users, auth, health, hermes_state_api, registry_api,
-    operator_voice_ws, operator_ws, visitor_ws,
+    account, admin, admin_users, auth, health, hermes_state_api, livekit_api,
+    registry_api, operator_voice_ws, operator_ws, visitor_ws,
 )
 
 
@@ -220,6 +220,7 @@ def create_app() -> FastAPI:
     app.include_router(account.router)       # /account/* — self-service user auth (v4 Phase 1)
     app.include_router(admin.router)
     app.include_router(admin_users.router)   # /api/admin/users — VIP promote/revoke
+    app.include_router(livekit_api.router)   # /api/livekit/token — VIP voice room (Phase 3a)
     app.include_router(registry_api.public_router)
     app.include_router(registry_api.admin_router)
     app.include_router(hermes_state_api.router)

@@ -1,0 +1,173 @@
+import { useEffect, useState } from "react";
+import { useRouter } from "next/router";
+import { Meta } from "@/components/meta";
+import {
+  GlassCard,
+  GlassButton,
+  GlassPill,
+} from "@/features/liquid-glass/primitives";
+import {
+  LiveKitRoom,
+  RoomAudioRenderer,
+  VoiceAssistantControlBar,
+  useVoiceAssistant,
+  BarVisualizer,
+  useLocalParticipant,
+} from "@livekit/components-react";
+import "@livekit/components-styles";
+import { mintVIPToken, LiveKitError } from "@/services/livekitClient";
+import { me as fetchMe, type Me } from "@/services/accountClient";
+
+
+type Status = "checking" | "connecting" | "connected" | "error" | "not_vip";
+
+
+function RoomStage() {
+  const { state } = useVoiceAssistant();
+  const { localParticipant } = useLocalParticipant();
+  const label = state === "speaking" ? "Shugu parle" :
+                state === "listening" ? "Shugu t'écoute" :
+                state === "thinking"  ? "Shugu réfléchit" :
+                state === "connecting" ? "Connexion…" : "—";
+  return (
+    <div className="flex flex-col items-center justify-center gap-6 py-8">
+      <GlassPill tone="primary" dot>{label}</GlassPill>
+      <div className="w-[220px] h-[80px]">
+        <BarVisualizer state={state} barCount={24} />
+      </div>
+      <p className="text-xs opacity-50">
+        connecté en tant que {localParticipant?.identity ?? "…"}
+      </p>
+    </div>
+  );
+}
+
+
+export default function VIPRoomPage() {
+  const router = useRouter();
+  const [status, setStatus] = useState<Status>("checking");
+  const [errorDetail, setErrorDetail] = useState<string>("");
+  const [me, setMe] = useState<Me | null>(null);
+  const [token, setToken] = useState<string | null>(null);
+  const [serverUrl, setServerUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const current = await fetchMe().catch(() => null);
+      if (cancelled) return;
+      if (!current) { router.replace("/account/login"); return; }
+      setMe(current);
+      if (!current.vip_active) { setStatus("not_vip"); return; }
+
+      setStatus("connecting");
+      try {
+        const { token, url } = await mintVIPToken();
+        if (cancelled) return;
+        setToken(token);
+        setServerUrl(url);
+        setStatus("connected");
+      } catch (err) {
+        if (cancelled) return;
+        setStatus("error");
+        if (err instanceof LiveKitError) setErrorDetail(err.detail);
+        else setErrorDetail("Erreur réseau inattendue");
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [router]);
+
+  const leave = () => router.push("/account/profile");
+
+  if (status === "checking" || status === "connecting") {
+    return (
+      <div className="lg-page min-h-screen flex items-center justify-center p-6">
+        <Meta title="VIP Room — Shugu" />
+        <GlassCard padded className="max-w-md w-full text-center">
+          <h1 className="text-xl font-light tracking-tight text-shugu-cream mb-2">
+            {status === "checking" ? "Vérification…" : "Connexion au salon VIP…"}
+          </h1>
+          <p className="text-sm opacity-60">Ça prend quelques secondes.</p>
+        </GlassCard>
+      </div>
+    );
+  }
+
+  if (status === "not_vip") {
+    return (
+      <div className="lg-page min-h-screen flex items-center justify-center p-6">
+        <Meta title="VIP Room — Shugu" />
+        <GlassCard padded className="max-w-md w-full text-center">
+          <h1 className="text-xl font-light tracking-tight text-shugu-cream mb-2">
+            Accès réservé aux VIPs
+          </h1>
+          <p className="text-sm opacity-60 mb-6">
+            Tu es connecté en tant que <strong>{me?.username}</strong>,
+            mais ton compte n'a pas (encore) l'accès VIP.
+          </p>
+          <GlassButton onClick={() => router.replace("/account/profile")}>
+            Retour au profil
+          </GlassButton>
+        </GlassCard>
+      </div>
+    );
+  }
+
+  if (status === "error" || !token || !serverUrl) {
+    return (
+      <div className="lg-page min-h-screen flex items-center justify-center p-6">
+        <Meta title="VIP Room — Shugu" />
+        <GlassCard padded className="max-w-md w-full text-center">
+          <h1 className="text-xl font-light tracking-tight text-shugu-cream mb-2">
+            Impossible de rejoindre
+          </h1>
+          <p className="text-sm opacity-60 mb-2">
+            {errorDetail || "Le tunnel LiveKit n'est peut-être pas encore actif sur le serveur."}
+          </p>
+          <p className="text-xs opacity-50 mb-6">
+            Vérifie que <code>LIVEKIT_URL</code> / <code>LIVEKIT_API_KEY</code> /
+            <code>LIVEKIT_API_SECRET</code> sont dans <code>.env</code> et que
+            <code>livekit-server</code> tourne.
+          </p>
+          <GlassButton onClick={() => router.replace("/account/profile")}>
+            Retour au profil
+          </GlassButton>
+        </GlassCard>
+      </div>
+    );
+  }
+
+  return (
+    <div className="lg-page min-h-screen flex items-center justify-center p-6">
+      <Meta title="VIP Room — Shugu" />
+      <LiveKitRoom
+        token={token}
+        serverUrl={serverUrl}
+        connect
+        audio
+        video={false}
+        onDisconnected={leave}
+        style={{ width: "100%", maxWidth: 480 }}
+      >
+        <GlassCard padded className="w-full">
+          <RoomAudioRenderer />
+          <div className="flex items-center justify-between mb-2">
+            <h1 className="text-xl font-light tracking-tight text-shugu-cream">
+              Salon VIP
+            </h1>
+            <GlassButton variant="subtle" size="sm" onClick={leave}>
+              Quitter
+            </GlassButton>
+          </div>
+          <p className="text-xs opacity-60 mb-4">
+            Conversation privée avec Shugu. Parle, écoute, coupe-la si tu veux.
+          </p>
+          <RoomStage />
+          <div className="pt-4">
+            <VoiceAssistantControlBar />
+          </div>
+        </GlassCard>
+      </LiveKitRoom>
+    </div>
+  );
+}
