@@ -7,7 +7,9 @@ dependencies = [
     "fastapi>=0.115,<1.0",
     "uvicorn[standard]>=0.30,<1.0",
     "websockets>=13.0,<14.0",
-    "pydantic>=2.7,<3.0",
+    # `[email]` extra pulls email-validator, requis par Pydantic dès qu'on
+    # utilise `EmailStr` (user_accounts signup + verify-email flow).
+    "pydantic[email]>=2.7,<3.0",
     "pydantic-settings>=2.3,<3.0",
     "httpx>=0.27,<1.0",
     "redis>=5.0,<6.0",
@@ -25,10 +27,36 @@ dependencies = [
     "faster-whisper>=1.0,<2.0",
     "webrtcvad-wheels>=2.0,<3.0",
     "numpy>=1.26,<3.0",
+    # Templates email (adapters/smtp_resend.py → verify-email + VIP grant).
+    # Déclaration explicite : pas transitif via FastAPI/Starlette.
+    "jinja2>=3.1,<4.0",
+    # LiveKit server SDK — routes/livekit_api.py mint les tokens VIP.
+    # Le Worker VIP (adapters/vip_agent.py) lui utilise `livekit-agents` en
+    # sus, à installer séparément car plus lourd.
+    "livekit-api>=1.0,<2.0",
+    # pgvector — Phase 1 Brique 1.3 (MemoryAgent). Intégration SQLAlchemy 2.0
+    # pour le type `Vector(dim)`. Nécessite l'extension `vector` côté Postgres
+    # (image Docker `pgvector/pgvector:pg16` en CI, `apt install postgresql-*-pgvector`
+    # pour la VPS Debian). Dim par défaut 1024 (bge-m3) — figé dans la migration 0005.
+    "pgvector>=0.2,<1.0",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "ruff>=0.5"]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.5",
+    # Bootstrap Phase 1 — Brique 1.4.
+    #
+    # fakeredis fournit un fake async client Redis (pub/sub inclus depuis 2.23)
+    # pour les tests unit: évite une dépendance hard sur un Redis réel dans CI
+    # pour les briques 1.1 (RedisEventBus) et 1.3 (MemoryAgent).
+    #
+    # respx mocke les réponses httpx out-going — nécessaire pour la brique 1.2
+    # (VipBridgeClient utilise httpx.AsyncClient).
+    "fakeredis>=2.23",
+    "respx>=0.21",
+]
 
 [build-system]
 requires = ["hatchling"]
@@ -36,3 +64,39 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["shugu"]
+
+# Test harness — Brique 1.4 bootstrap.
+#
+# `asyncio_mode = "auto"` est CRITIQUE : sans lui, pytest traite les `async def
+# test_...` comme des fonctions rendant une coroutine, logue un warning, et le
+# test passe sans jamais s'exécuter. Le test `test_sanity_async_mode_active`
+# dans `tests/unit/test_sanity.py` verrouille ce comportement.
+#
+# Marker `integration` gate les tests qui dépendent de vrais services (Redis +
+# Postgres). Utiliser `pytest -m "not integration"` pour dev rapide.
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+markers = [
+    "integration: requires real Redis/Postgres services",
+]
+filterwarnings = [
+    # Pydantic v2 + third-party deps logent beaucoup de DeprecationWarning hors
+    # de notre contrôle. On les ignore pour garder l'output pytest lisible.
+    "ignore::DeprecationWarning",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+# Phase 1 — règles progressives. On n'active PAS `N` (naming) ou `D` (docstring)
+# pour éviter qu'une PR phase 1 soit noyée sous des corrections cosmétiques.
+#   E/W : erreurs pycodestyle + warnings
+#   F   : pyflakes (unused imports, undefined vars, etc.)
+#   I   : isort (ordre imports)
+select = ["E", "F", "W", "I"]
+# Ligne trop longue sur certains prompts markdown et docstrings multilignes —
+# on choisit de ne pas les couper artificiellement.
+ignore = ["E501"]

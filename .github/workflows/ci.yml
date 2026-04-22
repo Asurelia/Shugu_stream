@@ -1,0 +1,154 @@
+name: CI
+
+# Déclencheurs — on lance sur push de toutes les branches feat/* + main, et
+# sur PR ciblant main. Les branches hotfix/* y seraient également soumises si
+# on en créait : `**` capture tous les motifs. Volontairement restrictif sur
+# les PR : le lint + les tests unit tournent sur la branche source avant merge,
+# pas besoin de re-run sur main si on fast-forward.
+on:
+  push:
+    branches:
+      - main
+      - 'feat/**'
+      - 'hotfix/**'
+  pull_request:
+    branches:
+      - main
+
+# Concurrency : si un push arrive pendant qu'un run est en cours sur la même
+# branche, on cancel l'ancien. Économise des minutes CI sur les itérations
+# rapides (commit → fix → commit → fix).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint-and-test:
+    name: Lint + tests (unit + integration)
+    runs-on: ubuntu-latest
+    # Timeout raisonnable : ~5-8 min pour l'install Python (faster-whisper +
+    # torch sont lourds), 2 min pour services Docker + migration + tests.
+    # 20 min laisse de la marge sur cache froid, fail-fast au-delà.
+    timeout-minutes: 20
+
+    # Services Docker — lancés par GitHub Actions avant le 1er `run:`, avec
+    # healthchecks pour que le job attende qu'ils soient prêts. Brique 1.4
+    # finalisation — les tests d'intégration peuvent enfin tourner en CI.
+    services:
+      postgres:
+        # Image `pgvector/pgvector:pg16` = Postgres 16 officiel + extension
+        # pgvector précompilée + pg_trgm core. Évite d'avoir à compiler
+        # l'extension dans le workflow.
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: shugu
+          POSTGRES_PASSWORD: shugu
+          POSTGRES_DB: shugu_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    # Variables d'env partagées par TOUS les steps — migrations alembic +
+    # pytest y piochent. `VIP_INTERNAL_SECRET` fake pour que les tests
+    # d'intégration du router VIP (s'il y en avait) ne retournent pas 401.
+    env:
+      SHUGU_POSTGRES_DSN: postgresql+asyncpg://shugu:shugu@localhost:5432/shugu_test
+      SHUGU_REDIS_URL: redis://localhost:6379/0
+      # Les tests d'intégration lisent `TEST_DATABASE_URL` > `DATABASE_URL`.
+      # DATABASE_URL reste standard pour compat avec les outils CI tiers.
+      DATABASE_URL: postgresql+asyncpg://shugu:shugu@localhost:5432/shugu_test
+      VIP_INTERNAL_SECRET: ci-test-secret-not-real
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: 'backend/pyproject.toml'
+
+      - name: Install backend + dev deps
+        working-directory: backend
+        # On installe le package en editable (-e) pour que `import shugu.*`
+        # marche depuis `backend/tests/`. Les extras [dev] amènent pytest +
+        # pytest-asyncio + fakeredis + respx + ruff.
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[dev]'
+
+      - name: Ruff lint
+        # Phase 1 — scope progressif : on lint les dossiers/fichiers qu'on a
+        # fait passer "clean" pendant les briques, en évitant les ~90 violations
+        # pré-existantes de l'ancien code. Chaque nouvelle brique élargit la
+        # liste ci-dessous à mesure qu'elle touche/nettoie des fichiers.
+        #
+        # Scope actuel (Phase 1.1 + 1.2 + 1.3) :
+        #   - backend/tests/                       — tout le code de tests
+        #   - backend/shugu/app.py                 — lifespan + wiring
+        #   - backend/shugu/config.py              — settings nouvelles briques
+        #   - backend/shugu/core/event_bus.py      — InProcessEventBus (clean)
+        #   - backend/shugu/core/event_bus_redis.py      — RedisEventBus (1.1)
+        #   - backend/shugu/core/event_bus_factory.py    — factory (1.1)
+        #   - backend/shugu/core/protocols.py      — contrat EventBus
+        #   - backend/shugu/core/vip_bridge.py     — types VIP bridge (1.2)
+        #   - backend/shugu/routes/internal_vip.py — router /internal/vip (1.2)
+        #   - backend/shugu/adapters/vip_bridge_client.py  — client httpx (1.2)
+        #   - backend/shugu/memory/                — MemoryAgent skeleton (1.3)
+        #   - backend/alembic/env.py               — register memory ORM
+        #   - backend/alembic/versions/0005_memory_agent.py  — migration pgvector
+        #
+        # Voir tâche "Cleanup ruff errors in backend/shugu/" pour le reste.
+        run: |
+          ruff check \
+            backend/tests \
+            backend/shugu/app.py \
+            backend/shugu/config.py \
+            backend/shugu/core/event_bus.py \
+            backend/shugu/core/event_bus_redis.py \
+            backend/shugu/core/event_bus_factory.py \
+            backend/shugu/core/protocols.py \
+            backend/shugu/core/vip_bridge.py \
+            backend/shugu/routes/internal_vip.py \
+            backend/shugu/adapters/vip_bridge_client.py \
+            backend/shugu/memory \
+            backend/alembic/env.py \
+            backend/alembic/versions/0005_memory_agent.py
+
+      - name: Run alembic migrations
+        working-directory: backend
+        # Crée les tables `shugu_test` + extensions pgvector/pg_trgm
+        # (via la migration 0005_memory_agent). Sans ce step, les tests
+        # d'intégration `test_memory_*` crasheraient au 1er SELECT.
+        run: alembic upgrade head
+
+      - name: Pytest — tests unit (rapides, sans services)
+        working-directory: backend
+        # `-m "not integration"` est défensif : tests/unit/ ne contient pas
+        # de marker `integration`, mais on garde la consigne par clarté et
+        # pour que le dev puisse runner pareil en local sans DB.
+        run: pytest tests/unit/ -v -m "not integration"
+
+      - name: Pytest — tests integration (services Docker requis)
+        working-directory: backend
+        # tests/integration/test_memory_agent_db.py a un `pytestmark = integration`
+        # module-level — pas besoin de `-m integration` pour les inclure via path.
+        # Les tests qui dépendent vraiment de pgvector/pg_trgm vérifieront leur
+        # existence (extensions chargées par migration 0005 ci-dessus).
+        run: pytest tests/integration/ -v

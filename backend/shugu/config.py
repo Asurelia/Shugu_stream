@@ -4,10 +4,10 @@ from __future__ import annotations
 import os
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
-
 
 # Resolve the env file path in a portable way:
 #   1. SHUGU_ENV_FILE env var override (explicit)
@@ -107,6 +107,36 @@ class Settings(BaseSettings):
     # Storage
     shugu_postgres_dsn: str = "postgresql+asyncpg://openclaw@localhost/shugu"
     shugu_redis_url: str = "redis://localhost:6379/1"
+
+    # Event bus — v4 Phase 1 (brique 1.1). Mode `"inproc"` = bus asyncio
+    # in-memory, identique au MVP pré-phase 1 (single worker). Mode `"redis"`
+    # active le fanout cross-process via Redis pub/sub pour les topics listés
+    # dans `DEFAULT_BROADCAST_TOPICS` (voir `core/event_bus_factory.py`).
+    # À basculer sur `"redis"` avant d'ajouter la VIP bridge (brique 1.2) ou
+    # un worker Mémoire long-terme hors-process.
+    event_bus_mode: Literal["inproc", "redis"] = "inproc"
+    event_bus_redis_prefix: str = "shugu:bus:"
+
+    # Mémoire long-terme — v4 Phase 1 Brique 1.3. `memory_enabled=False` tant
+    # que l'embedder et l'extraction LLM ne sont pas branchés (Phase 2). Le
+    # skeleton pose les tables, l'agent, et le hook optionnel dans les brains ;
+    # basculer sur True nécessite que Phase 2 soit livrée.
+    memory_enabled: bool = False
+    memory_embed_dim: int = 1024
+
+    # VIP bridge — v4 Phase 1 Brique 1.2. `vip_agent` (Worker LiveKit Agents,
+    # process séparé) communique avec le backend FastAPI via HTTP localhost
+    # signé. `vip_internal_url` est l'endpoint backend (typiquement
+    # http://127.0.0.1:<shugu_port>) ; `vip_internal_secret` est le secret
+    # partagé (header `X-Internal-Secret`, comparé via hmac.compare_digest).
+    # Si le secret est vide, toutes les requêtes /internal/vip/* retournent 401
+    # (fail closed — pas d'endpoint ouvert en prod par accident).
+    vip_internal_url: str = "http://127.0.0.1:8701"
+    vip_internal_secret: str = Field(
+        default="",
+        description="Secret HMAC partagé entre backend et process vip_agent. "
+                    "Généré via `python -c \"import secrets; print(secrets.token_hex(32))\"`.",
+    )
 
     # Crypto
     ip_hash_salt: str = ""

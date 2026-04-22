@@ -4,12 +4,16 @@ from __future__ import annotations
 import asyncio
 from logging.config import fileConfig
 
-from alembic import context
 from sqlalchemy.ext.asyncio import create_async_engine
 
+# Importer les modules qui déclarent des ORM additionnels pour que leurs
+# tables soient visibles dans Base.metadata (critique pour alembic upgrade +
+# autogenerate). Le side-effect de l'import suffit ; on n'utilise pas les
+# classes directement ici, d'où le pragma ruff sur la ligne.
+import shugu.memory.models  # noqa: F401
+from alembic import context
 from shugu.config import get_settings
 from shugu.db.models import Base
-
 
 config = context.config
 if config.config_file_name is not None:

@@ -1,0 +1,145 @@
+"""Router `/internal/vip/*` — Phase 1 Brique 1.2.
+
+Expose deux endpoints côté backend FastAPI, réservés au process `vip_agent`
+(Worker LiveKit Agents). Auth via shared secret HMAC dans header
+`X-Internal-Secret`.
+
+Déploiement ops : ces routes ne doivent PAS être exposées depuis l'extérieur.
+Deux garde-fous en défense en profondeur :
+1. Le backend écoute par défaut sur `127.0.0.1:8701` (voir `settings.shugu_host`).
+2. Ajouter dans `ops/nginx/` un bloc qui refuse tout path `/internal/*` en
+   provenance du reverse proxy public (Phase 1.4 si pas déjà fait).
+
+Deps injectées via `set_deps(InternalVipDeps)` depuis `app.py` lifespan —
+même pattern que `visitor_ws`, `operator_ws`, etc.
+"""
+from __future__ import annotations
+
+import hmac
+import time
+from dataclasses import dataclass
+from typing import Optional
+
+import structlog
+from fastapi import APIRouter, Header, HTTPException, status
+
+from ..config import Settings
+from ..core.protocols import EventBus
+from ..core.vip_bridge import VipEventIn, VipToolCall, VipToolResult
+from ..pipeline.queue import QueuedMessage, RedisQueue, new_msg_id
+
+log = structlog.get_logger(__name__)
+
+
+@dataclass(slots=True)
+class InternalVipDeps:
+    event_bus: EventBus
+    queue: RedisQueue
+    settings: Settings
+
+
+_deps: Optional[InternalVipDeps] = None
+
+
+def set_deps(deps: InternalVipDeps) -> None:
+    """Injecte les deps du router depuis le lifespan. Fail-closed si
+    `settings.vip_internal_secret` est vide (on n'active pas le router sans
+    secret configuré)."""
+    if not deps.settings.vip_internal_secret:
+        # Fail closed : on log un warning mais on set quand même les deps,
+        # puisque les routes vont refuser 401 sur toute requête (compare_digest
+        # retournera False avec un secret vide). Ça permet de booter le backend
+        # en dev sans VIP bridge, mais il est clairement non-opérationnel.
+        log.warning(
+            "internal_vip.no_secret_configured",
+            note="VIP_INTERNAL_SECRET absent — toutes les requêtes retourneront 401",
+        )
+    global _deps
+    _deps = deps
+
+
+router = APIRouter(prefix="/internal/vip", tags=["internal"])
+
+
+def _require_secret(x_internal_secret: str) -> InternalVipDeps:
+    """Valide le secret + retourne les deps. Lève 401 si mismatch.
+
+    hmac.compare_digest protège contre les timing attacks — un naif `==`
+    fait une comparaison shortcut dès qu'un char diffère, ce qui permet de
+    deviner le secret en mesurant le temps de réponse.
+    """
+    if _deps is None:
+        # Developer error : le router est monté avant que `set_deps` ne soit
+        # appelé depuis le lifespan. On log + 500 (pas 401 — 401 mentirait).
+        log.error("internal_vip.deps_not_set")
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "internal deps missing")
+
+    expected = _deps.settings.vip_internal_secret
+    if not expected or not hmac.compare_digest(x_internal_secret, expected):
+        # Log volontairement minimaliste : ne pas fuiter l'expected vs given.
+        log.info("internal_vip.auth_failed")
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid internal secret")
+
+    return _deps
+
+
+@router.post("/event", response_model=dict)
+async def post_event(
+    event: VipEventIn,
+    x_internal_secret: str = Header(..., alias="X-Internal-Secret"),
+) -> dict:
+    """Reçoit un event du vip_agent, le republie sur `"vip.events"` topic bus.
+
+    Phase 1 : le backend est aussi subscriber (future StageDirector Phase 3).
+    Si `event_bus_mode="redis"`, l'event fan out vers d'autres instances via
+    pub/sub — mais Phase 1 on tourne en single-instance, donc c'est local.
+    """
+    deps = _require_secret(x_internal_secret)
+    payload = event.model_dump()
+    await deps.event_bus.publish("vip.events", payload)
+    log.debug("internal_vip.event_published", kind=event.kind, room=event.room)
+    return {"ok": True}
+
+
+@router.post("/tool", response_model=VipToolResult)
+async def post_tool(
+    call: VipToolCall,
+    x_internal_secret: str = Header(..., alias="X-Internal-Secret"),
+) -> VipToolResult:
+    """Dispatche un tool call du vip_agent.
+
+    Phase 1 : seul `chat.post` est implémenté — il enqueue un message dans la
+    priority queue (tier=1 comme un visiteur public), respectant l'invariant
+    "toute production scénique passe par le Picker". Les autres kinds
+    (`body.*`, `mood.*`) retournent 501 — Phase 2 les branchera au BodyRouter.
+    """
+    deps = _require_secret(x_internal_secret)
+
+    if call.kind == "chat.post":
+        text = str(call.args.get("text", "")).strip()
+        if not text:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST, "chat.post requires non-empty text",
+            )
+        session_id = str(call.args.get("session_id", "vip"))
+        msg = QueuedMessage(
+            msg_id=new_msg_id(),
+            route="shugu_persona",
+            text=text,
+            author_role="visitor",          # VIP viewer dans la queue = visitor tier
+            author_ip_hash=None,
+            session_id=session_id,
+            nonce="",
+            received_ns=time.time_ns(),
+            priority_tier=1,                # 0=operator, 1=visitor — on traite VIP comme visitor
+        )
+        await deps.queue.enqueue_ready(msg)
+        log.info("internal_vip.chat_post_enqueued", msg_id=msg.msg_id, session_id=session_id)
+        return VipToolResult(ok=True, msg_id=msg.msg_id)
+
+    # Kinds réservés Phase 2 — 501 Not Implemented, pas 404 : le route existe,
+    # la capability n'est juste pas wired-up yet.
+    raise HTTPException(
+        status.HTTP_501_NOT_IMPLEMENTED,
+        f"tool kind '{call.kind}' not implemented in Phase 1",
+    )
