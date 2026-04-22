@@ -30,7 +30,6 @@ from ..db.models import Performance
 from ..db.session import session_scope
 from .queue import QueuedMessage, RedisQueue
 
-
 log = structlog.get_logger(__name__)
 
 

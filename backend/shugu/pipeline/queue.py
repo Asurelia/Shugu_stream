@@ -6,7 +6,6 @@ Lower score = picked first. Operator priority tier = 0, visitor = 1.
 from __future__ import annotations
 
 import json
-import time
 from dataclasses import asdict, dataclass, field
 from typing import Literal, Optional
 

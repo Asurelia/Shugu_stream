@@ -24,7 +24,6 @@ from ..auth.dependencies import require_vip
 from ..config import Settings, get_settings
 from ..core.identity import VIPIdentity
 
-
 router = APIRouter(prefix="/api/livekit", tags=["livekit"])
 log = structlog.get_logger(__name__)
 

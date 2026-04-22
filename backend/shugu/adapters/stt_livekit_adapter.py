@@ -28,8 +28,6 @@ streaming_stt = stt.StreamAdapter(stt=lk_stt, vad=vad)
 """
 from __future__ import annotations
 
-from typing import Optional
-
 import structlog
 from livekit.agents import stt, utils
 from livekit.agents.stt import (
@@ -40,7 +38,6 @@ from livekit.agents.stt import (
 )
 
 from .stt_streaming import FasterWhisperSTT
-
 
 log = structlog.get_logger(__name__)
 

@@ -33,7 +33,6 @@ from ..core.errors import AuthError
 from ..core.identity import OperatorIdentity, hash_ip
 from ..pipeline.voice_duplex import VoiceDuplex, VoiceEvent
 
-
 router = APIRouter()
 log = structlog.get_logger(__name__)
 

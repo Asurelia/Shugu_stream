@@ -22,7 +22,6 @@ import jwt
 from ..config import Settings
 from ..core.errors import AuthError
 
-
 ALGO = "HS256"
 ISSUER = "shugu.spoukie.uk"
 PURPOSE_VERIFY_EMAIL = "verify_email"

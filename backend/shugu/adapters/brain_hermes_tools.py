@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Optional
 
 import httpx
 import structlog
@@ -30,11 +29,10 @@ from ..config import Settings
 from ..core.body_control import openai_tools_schema, parse_call_async
 from ..core.errors import BrainError
 from ..core.identity import OperatorIdentity
-from ..core.protocols import PersonalityLoader, Turn
+from ..core.protocols import PersonalityLoader
 from ..core.registry import get_registry
 from ..pipeline.body_router import BodyRouter
 from .brain_shugu import strip_think
-
 
 log = structlog.get_logger(__name__)
 

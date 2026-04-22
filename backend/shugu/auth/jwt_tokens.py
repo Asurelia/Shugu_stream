@@ -7,14 +7,13 @@ from __future__ import annotations
 import time
 import uuid
 from dataclasses import dataclass
-from typing import Literal, Optional
+from typing import Literal
 
 import jwt
 import redis.asyncio as aioredis
 
 from ..config import Settings
 from ..core.errors import AuthError
-
 
 ALGO = "HS256"
 ISSUER = "shugu.spoukie.uk"

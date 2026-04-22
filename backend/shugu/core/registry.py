@@ -35,7 +35,6 @@ from ..db.models import AssetRegistry
 from ..db.session import SessionLocal
 from .event_bus import InProcessEventBus
 
-
 # ─── Dataclasses exposées ────────────────────────────────────────────────────
 
 @dataclass(frozen=True)

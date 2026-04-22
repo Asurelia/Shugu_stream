@@ -25,11 +25,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Literal, Optional
+from typing import Literal
 
 import redis.asyncio as aioredis
 import structlog
-
 
 log = structlog.get_logger(__name__)
 

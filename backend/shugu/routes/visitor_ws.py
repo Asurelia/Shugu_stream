@@ -14,14 +14,13 @@ from dataclasses import dataclass
 from typing import Optional
 
 import structlog
-from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from ulid import ULID
 
-from ..config import Settings, get_settings
+from ..config import Settings
 from ..core.identity import VisitorIdentity, hash_ip
 from ..core.protocols import EventBus, ModerationLayer
 from ..pipeline.queue import QueuedMessage, RedisQueue, new_msg_id
-
 
 # Visitor `!action` commands: short-circuit the LLM + TTS and broadcast a
 # gesture-only performance. Each command emits an animation tag AND a fallback

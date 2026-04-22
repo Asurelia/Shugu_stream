@@ -12,7 +12,6 @@ from __future__ import annotations
 from .ambient_scene import AmbientCue, AmbientScene
 from .mood import MoodState
 
-
 # ─── Silent scenes (work without any audio asset) ────────────────────────────
 
 MORNING_STRETCH = AmbientScene(

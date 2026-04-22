@@ -25,7 +25,6 @@ from ..core.identity import OperatorIdentity
 from ..db.models import UserAccount
 from ..db.session import session_scope
 
-
 router = APIRouter(prefix="/api/admin/users", tags=["admin-users"])
 log = structlog.get_logger(__name__)
 

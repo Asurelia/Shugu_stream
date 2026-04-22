@@ -24,7 +24,6 @@ from ..core.errors import BrainError
 from ..core.identity import Identity
 from ..core.protocols import BrainAdapter, BrainDelta, PersonalityLoader, Turn
 
-
 _THINK_RE = re.compile(r"<think>.*?</think>\s*", re.DOTALL)
 
 

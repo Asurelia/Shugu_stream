@@ -12,9 +12,8 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from ..auth.dependencies import require_operator
 from ..core.identity import OperatorIdentity
-from ..db.models import ModerationEvent, Performance, Visitor
+from ..db.models import Performance, Visitor
 from ..db.session import session_scope
-
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 log = structlog.get_logger(__name__)
@@ -120,7 +119,7 @@ async def unban_ip(ip_hash: str, identity: OperatorIdentity = Depends(require_op
 
 @router.get("/stats")
 async def stats(_: OperatorIdentity = Depends(require_operator)):
-    from ..app import get_redis, get_quota
+    from ..app import get_quota, get_redis
     redis = get_redis()
     pending = await redis.llen("shugu:queue:pending")
     ready = await redis.zcard("shugu:queue:ready")

@@ -13,21 +13,18 @@ Visitors only see the ACK + the filtered result. They NEVER see:
 """
 from __future__ import annotations
 
-import asyncio
 import time
-from typing import Literal
 
 import structlog
 
+from ..adapters.brain_filter import FilterBrain
+from ..adapters.brain_hermes import HermesAgentBrain
 from ..config import Settings
 from ..core.errors import BrainError, TTSError
 from ..core.identity import OperatorIdentity
 from ..core.protocols import TTSAdapter
-from ..adapters.brain_filter import FilterBrain
-from ..adapters.brain_hermes import HermesAgentBrain
 from .queue import QueuedMessage, RedisQueue, new_msg_id
 from .workers import extract_emotion
-
 
 log = structlog.get_logger(__name__)
 

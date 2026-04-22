@@ -19,7 +19,7 @@ from __future__ import annotations
 import asyncio
 import random
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 import structlog
@@ -31,7 +31,6 @@ from ..core.mood import Mood, MoodState
 from ..core.protocols import EventBus
 from ..core.viewer_count import ViewerCounter
 from .queue import QueuedMessage, RedisQueue, new_msg_id
-
 
 log = structlog.get_logger(__name__)
 
@@ -251,24 +250,34 @@ class AmbientDaemon:
     @staticmethod
     def _mood_bump(mood: MoodState, tags: dict) -> float:
         if mood == MoodState.SLEEPY:
-            if tags.get("scene") == "idle_sleepy": return 4.0
-            if "action" in tags: return 0.3
+            if tags.get("scene") == "idle_sleepy":
+                return 4.0
+            if "action" in tags:
+                return 0.3
             return 1.2
         if mood == MoodState.PLAYFUL:
-            if tags.get("action") in ("peek", "stretch"): return 2.5
-            if "emote" in tags: return 2.0
+            if tags.get("action") in ("peek", "stretch"):
+                return 2.5
+            if "emote" in tags:
+                return 2.0
             return 1.0
         if mood == MoodState.BORED:
-            if tags.get("action") == "shrug": return 3.0
-            if tags.get("scene") == "reading_chat": return 2.0
+            if tags.get("action") == "shrug":
+                return 3.0
+            if tags.get("scene") == "reading_chat":
+                return 2.0
             return 1.0
         if mood == MoodState.FOCUSED:
-            if tags.get("scene") == "reading_chat": return 2.5
-            if not tags: return 2.0
+            if tags.get("scene") == "reading_chat":
+                return 2.5
+            if not tags:
+                return 2.0
             return 0.6
         # CHEERFUL / default
-        if "emote" in tags: return 2.0
-        if "action" in tags: return 1.5
+        if "emote" in tags:
+            return 2.0
+        if "action" in tags:
+            return 1.5
         return 1.0
 
     @staticmethod

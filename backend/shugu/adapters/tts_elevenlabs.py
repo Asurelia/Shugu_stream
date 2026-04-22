@@ -19,21 +19,16 @@ def _estimate_mp3_duration_ms(mp3: bytes) -> int:
     for i in range(len(mp3) - 3):
         if mp3[i] == 0xFF and (mp3[i+1] & 0xE0) == 0xE0:
             header = int.from_bytes(mp3[i:i+4], "big")
-            # version_id (bits 19-20), layer (17-18), bitrate_idx (12-15), sample_rate_idx (10-11)
-            version_id = (header >> 19) & 0x3
-            layer = (header >> 17) & 0x3
+            # On lit uniquement bitrate et sample_rate_idx (pour le check de
+            # validité < 3). version_id et layer parsés-puis-jetés dans les
+            # versions précédentes : on les omet — le calcul de duration
+            # n'utilise que le bitrate, pas la sample rate.
             bitrate_idx = (header >> 12) & 0xF
             sample_rate_idx = (header >> 10) & 0x3
             if bitrate_idx == 0 or bitrate_idx == 0xF or sample_rate_idx == 0x3:
                 continue
             # MPEG 1 Layer III bitrate table
             bitrate_table = [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320]
-            sample_rate_table_v1 = [44100, 48000, 32000]
-            sample_rate_table_v2 = [22050, 24000, 16000]
-            if version_id == 3:       # MPEG 1
-                sample_rate = sample_rate_table_v1[sample_rate_idx]
-            else:
-                sample_rate = sample_rate_table_v2[sample_rate_idx]
             bitrate_kbps = bitrate_table[bitrate_idx]
             if bitrate_kbps == 0:
                 continue

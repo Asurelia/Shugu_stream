@@ -18,7 +18,6 @@ from ..core.errors import AuthError
 from ..core.identity import MemberIdentity, OperatorIdentity, VIPIdentity, hash_ip
 from . import jwt_tokens, user_tokens
 
-
 ACCESS_COOKIE = "shugu_access"
 REFRESH_COOKIE = "shugu_refresh"
 

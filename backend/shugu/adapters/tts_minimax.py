@@ -42,7 +42,6 @@ from ..core.protocols import TTSChunk, TTSResult
 from ..core.quota import QuotaTracker
 from .tts_elevenlabs import _estimate_mp3_duration_ms
 
-
 log = structlog.get_logger(__name__)
 
 

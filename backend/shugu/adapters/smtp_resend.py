@@ -17,12 +17,10 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Protocol
 
 import httpx
 import jinja2
 import structlog
-
 
 log = structlog.get_logger(__name__)
 
