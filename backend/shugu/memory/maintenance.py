@@ -40,10 +40,13 @@ Risque isolation :
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timedelta, timezone
 from typing import Final
 
-from sqlalchemy import text
+from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from .models import MemoryFact
 
 _logger = logging.getLogger(__name__)
 
@@ -149,21 +152,32 @@ async def semantic_dedupe(
         {"value": str(ef)},
     )
 
-    # Fetch candidates : embedding NOT NULL + plus vieux que min_age.
-    # Tri : subject / kind / confidence DESC / created_at ASC -> winner
-    # encountered first dans la boucle, loser-to-delete encountered ensuite.
-    candidates = (await session.execute(
-        text(
-            """
-            SELECT id, subject, kind, confidence, last_used_at, embedding
-            FROM memory_facts
-            WHERE embedding IS NOT NULL
-              AND created_at < NOW() - make_interval(hours => :min_age_hours)
-            ORDER BY subject, kind, confidence DESC, created_at ASC
-            """
-        ),
-        {"min_age_hours": float(min_age_hours)},
-    )).all()
+    # Fetch candidates via ORM : `MemoryFact.embedding` est typee `Vector(1024)`
+    # donc pgvector/SQLAlchemy sait serialiser/deserialiser correctement.
+    # Passer par `text()` + bind param sur un CAST AS vector casserait car
+    # asyncpg ne sait pas encoder `list[float]` en literal pgvector.
+    # Tri : subject / kind / confidence DESC / created_at ASC -> le gagnant
+    # est encountered avant les perdants dans la boucle.
+    min_age_cutoff = datetime.now(timezone.utc) - timedelta(hours=float(min_age_hours))
+    candidates_stmt = (
+        select(
+            MemoryFact.id,
+            MemoryFact.subject,
+            MemoryFact.kind,
+            MemoryFact.confidence,
+            MemoryFact.last_used_at,
+            MemoryFact.embedding,
+        )
+        .where(MemoryFact.embedding.is_not(None))
+        .where(MemoryFact.created_at < min_age_cutoff)
+        .order_by(
+            MemoryFact.subject,
+            MemoryFact.kind,
+            MemoryFact.confidence.desc(),
+            MemoryFact.created_at.asc(),
+        )
+    )
+    candidates = (await session.execute(candidates_stmt)).all()
 
     deleted: set[str] = set()
     clusters: set[tuple[str, str]] = set()
@@ -174,29 +188,19 @@ async def semantic_dedupe(
         if row_id in deleted:
             continue
 
-        nearest = (await session.execute(
-            text(
-                """
-                SELECT id, last_used_at, (embedding <=> CAST(:vec AS vector)) AS cos_dist
-                FROM memory_facts
-                WHERE subject = :subject
-                  AND kind = :kind
-                  AND id <> :self_id
-                  AND embedding IS NOT NULL
-                ORDER BY embedding <=> CAST(:vec AS vector)
-                LIMIT 10
-                """
-            ),
-            {
-                "vec": list(embedding),
-                "subject": subject,
-                "kind": kind,
-                "self_id": row_id,
-            },
-        )).all()
+        cos_dist = MemoryFact.embedding.cosine_distance(embedding)
+        nearest_stmt = (
+            select(MemoryFact.id, MemoryFact.last_used_at, cos_dist.label("cos_dist"))
+            .where(MemoryFact.subject == subject)
+            .where(MemoryFact.kind == kind)
+            .where(MemoryFact.id != row_id)
+            .where(MemoryFact.embedding.is_not(None))
+            .order_by(cos_dist)
+            .limit(10)
+        )
+        nearest = (await session.execute(nearest_stmt)).all()
 
-        for n in nearest:
-            n_id, n_last_used, n_dist = n
+        for n_id, n_last_used, n_dist in nearest:
             # Ordre ASC sur cos_dist -> premiere row >= threshold -> tout
             # ce qui suit est forcement >= aussi, on peut break.
             if n_dist is None or n_dist >= distance_max:
@@ -204,19 +208,18 @@ async def semantic_dedupe(
             if n_id in deleted:
                 continue
 
-            # Merge last_used_at sur le gagnant (row).
+            # Merge last_used_at sur le gagnant via GREATEST (NULL-safe en
+            # Postgres). ORM update_statement evite les surprises f-string.
             await session.execute(
-                text(
-                    "UPDATE memory_facts "
-                    "SET last_used_at = GREATEST(last_used_at, :other) "
-                    "WHERE id = :winner"
-                ),
-                {"other": n_last_used, "winner": row_id},
+                update(MemoryFact)
+                .where(MemoryFact.id == row_id)
+                .values(
+                    last_used_at=func.greatest(MemoryFact.last_used_at, n_last_used)
+                )
             )
             # DELETE la perdante.
             await session.execute(
-                text("DELETE FROM memory_facts WHERE id = :loser"),
-                {"loser": n_id},
+                delete(MemoryFact).where(MemoryFact.id == n_id)
             )
             deleted.add(n_id)
             clusters.add((subject, kind))
