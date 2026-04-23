@@ -35,6 +35,17 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .embedder import Embedder
+from .maintenance import (
+    DECAY_FLOOR_DEFAULT,
+    DEDUPE_DISTANCE_MAX_DEFAULT,
+    DEDUPE_EF_SEARCH_DEFAULT,
+    DEDUPE_MIN_AGE_HOURS_DEFAULT,
+    DELETE_THRESHOLD_DEFAULT,
+    HALF_LIFE_DAYS_DEFAULT,
+    decay_confidence,
+    hard_delete_below_floor,
+    semantic_dedupe,
+)
 from .models import MEMORY_EMBED_DIM, MemoryFact, PersonaState
 from .query_expansion import build_expanded_terms
 from .redaction import redact
@@ -224,15 +235,85 @@ class MemoryAgent:
 
     # ── maintenance ──────────────────────────────────────────────────────────
 
-    async def maintenance(self) -> dict:
-        """No-op Phase 1-2.2 — placeholder pour le garbage collector Phase 2.5.
+    async def maintenance(
+        self,
+        *,
+        half_life_days: float = HALF_LIFE_DAYS_DEFAULT,
+        decay_floor: float = DECAY_FLOOR_DEFAULT,
+        delete_threshold: float = DELETE_THRESHOLD_DEFAULT,
+        dedupe_distance_max: float = DEDUPE_DISTANCE_MAX_DEFAULT,
+        dedupe_ef_search: int = DEDUPE_EF_SEARCH_DEFAULT,
+        dedupe_min_age_hours: float = DEDUPE_MIN_AGE_HOURS_DEFAULT,
+        skip_decay: bool = False,
+        skip_delete: bool = False,
+        skip_dedupe: bool = False,
+    ) -> dict:
+        """GC cron Phase 2.7 : decay -> hard-delete sous seuil -> dedupe semantique.
 
-        Phase 2.5 fera : decay confidence (half-life ~30j), dedupe sémantique
-        (cosine > 0.95 ⇒ merge), soft-delete des items confidence < 0.1.
-        Retourne un dict de stats pour que les logs puissent tracker (meme
-        si tout est à 0 maintenant).
+        Toutes les operations dans UNE session/tx pour que `SET LOCAL` reste
+        valide pendant le dedupe.
+
+        Parametres :
+          - `half_life_days` (30.0) : half-life du decay exponentiel.
+          - `decay_floor` (0.001) : ne touche pas les items deja sous ce seuil.
+          - `delete_threshold` (0.1) : DELETE les items sous ce seuil post-decay.
+          - `dedupe_distance_max` (0.05) : cosine distance seuil pour considerer
+            deux items comme doublons semantiques.
+          - `dedupe_ef_search` (100) : `hnsw.ef_search` pour le dedupe.
+          - `dedupe_min_age_hours` (1.0) : skip les facts crees recemment
+            (evite de tuer un batch d'extraction).
+          - `skip_decay` / `skip_delete` / `skip_dedupe` : flags de controle
+            pour les tests et les rollouts progressifs.
+
+        Retour :
+          {
+            "decayed": int,          # rows UPDATEs par decay
+            "removed": int,          # rows DELETEs par hard_delete_below_floor
+            "deduped": int,          # pairs collapses par dedupe
+            "dedupe_clusters": int,  # nb de (subject, kind) touches
+          }
+
+        Retrocompat : les clefs historiques `decayed` / `removed` / `deduped`
+        sont preservees. `dedupe_clusters` est additif non-breaking.
         """
-        return {"decayed": 0, "removed": 0, "deduped": 0}
+        decayed = 0
+        removed = 0
+        deduped = 0
+        clusters = 0
+
+        async with self._session_factory() as session:
+            if not skip_decay:
+                decayed = await decay_confidence(
+                    session,
+                    half_life_days=half_life_days,
+                    floor=decay_floor,
+                )
+            if not skip_delete:
+                removed = await hard_delete_below_floor(
+                    session,
+                    threshold=delete_threshold,
+                )
+            if not skip_dedupe:
+                deduped, clusters = await semantic_dedupe(
+                    session,
+                    distance_max=dedupe_distance_max,
+                    ef_search=dedupe_ef_search,
+                    min_age_hours=dedupe_min_age_hours,
+                )
+
+        log.info(
+            "memory_agent.maintenance_done",
+            decayed=decayed,
+            removed=removed,
+            deduped=deduped,
+            dedupe_clusters=clusters,
+        )
+        return {
+            "decayed": decayed,
+            "removed": removed,
+            "deduped": deduped,
+            "dedupe_clusters": clusters,
+        }
 
     # ── persona ──────────────────────────────────────────────────────────────
 
