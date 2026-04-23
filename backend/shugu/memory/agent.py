@@ -37,6 +37,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .embedder import Embedder
 from .models import MEMORY_EMBED_DIM, MemoryFact, PersonaState
 from .query_expansion import build_expanded_terms
+from .redaction import redact
 from .types import MemoryItem, RecallQuery
 
 log = structlog.get_logger(__name__)
@@ -55,6 +56,7 @@ class MemoryAgent:
         embedder: Optional[Embedder] = None,
         embed_dim: int = MEMORY_EMBED_DIM,
         enable_query_expansion: bool = True,
+        enable_redaction: bool = True,
     ) -> None:
         if embed_dim != MEMORY_EMBED_DIM:
             # On n'empêche pas à la construction (les tests pourraient avoir une
@@ -75,6 +77,10 @@ class MemoryAgent:
         # Default ON pour beneficier du recall bilingue FR/EN. Desactivable
         # en test ou quand on veut exact match strict (perf / debug).
         self._enable_query_expansion = enable_query_expansion
+        # Phase 2.6 — secret redaction avant store. Default ON pour la
+        # securite. Desactivable uniquement pour les chemins qui ont deja
+        # redacte (evite le double-pass) ou pour des tests specifiques.
+        self._enable_redaction = enable_redaction
 
     # ── store ────────────────────────────────────────────────────────────────
 
@@ -94,6 +100,21 @@ class MemoryAgent:
                 f"embedding dim mismatch: got {len(item.embedding)}, "
                 f"expected {self._embed_dim}",
             )
+
+        # Phase 2.6 — redaction des secrets AVANT embedding + INSERT.
+        # On redige sur item.text ; si des secrets ont ete detectes, on log
+        # WARNING avec les CATEGORIES UNIQUEMENT (jamais le secret lui-meme).
+        # L'embedding qui suit se calcule sur le texte nettoye.
+        if self._enable_redaction and item.text:
+            clean_text, categories = redact(item.text)
+            if categories:
+                log.warning(
+                    "memory_agent.redacted_secrets",
+                    subject=item.subject,
+                    categories=categories,
+                    item_id=item.id,
+                )
+                item = dataclasses.replace(item, text=clean_text)
 
         # Auto-embed si contexte favorable.
         if (
