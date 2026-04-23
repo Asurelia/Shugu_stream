@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from ulid import ULID
 
 from shugu.memory.agent import MemoryAgent
+from shugu.memory.models import MemoryFact
 
 pytestmark = pytest.mark.integration
 
@@ -65,29 +66,27 @@ async def _insert_fact(
     text_value: str = "item",
     embedding: list[float] | None = None,
 ) -> str:
-    row_id = str(ULID())
-    await session.execute(
-        text(
-            """
-            INSERT INTO memory_facts
-              (id, kind, subject, text, confidence, source, created_at, last_used_at, embedding)
-            VALUES
-              (:id, :kind, :subject, :text, :conf, :source, :created, :last, CAST(:emb AS vector))
-            """
-        ),
-        {
-            "id": row_id,
-            "kind": kind,
-            "subject": subject,
-            "text": text_value,
-            "conf": confidence,
-            "source": "manual",
-            "created": created_at,
-            "last": last_used_at,
-            "emb": list(embedding) if embedding is not None else None,
-        },
+    """Seed un MemoryFact directement via l'ORM.
+
+    On passe par `MemoryFact` (pgvector.sqlalchemy.Vector) plutot qu'un raw
+    INSERT parce qu'asyncpg n'auto-convertit pas `list[float]` en pgvector
+    literal quand on passe par un bind param d'un text() SQL. L'ORM sait
+    serialiser via le TypeDecorator.
+    """
+    row = MemoryFact(
+        id=str(ULID()),
+        kind=kind,
+        subject=subject,
+        text=text_value,
+        confidence=confidence,
+        source="manual",
+        created_at=created_at,
+        last_used_at=last_used_at,
+        embedding=embedding,
     )
-    return row_id
+    session.add(row)
+    await session.flush()
+    return row.id
 
 
 async def test_maintenance_decay_reduces_confidence_of_old_facts(
