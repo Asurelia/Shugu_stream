@@ -86,14 +86,21 @@ async def test_memory_agent_store_accepts_none_embedding() -> None:
 
 
 async def test_memory_agent_maintenance_returns_zero_stats() -> None:
-    """Phase 1 maintenance est un no-op — mais DOIT retourner un dict de stats
-    pour que les logs puissent tracker (signature stable vers Phase 2)."""
+    """Phase 2.7 : maintenance retourne le dict de stats meme quand tout
+    est skippe (equivalent au no-op Phase 1). Les 3 clefs historiques
+    `decayed` / `removed` / `deduped` sont preservees ; Phase 2.7 ajoute
+    `dedupe_clusters` (additif non-breaking)."""
     factory, _session = _mock_session_factory()
     agent = MemoryAgent(session_factory=factory)
 
-    result = await agent.maintenance()
+    result = await agent.maintenance(
+        skip_decay=True, skip_delete=True, skip_dedupe=True,
+    )
 
-    assert result == {"decayed": 0, "removed": 0, "deduped": 0}
+    assert result["decayed"] == 0
+    assert result["removed"] == 0
+    assert result["deduped"] == 0
+    assert result["dedupe_clusters"] == 0
 
 
 async def test_memory_agent_persona_set_rejects_non_dict() -> None:
