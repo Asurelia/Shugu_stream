@@ -30,12 +30,13 @@ from datetime import timezone
 from typing import AsyncContextManager, Callable, Optional
 
 import structlog
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .embedder import Embedder
 from .models import MEMORY_EMBED_DIM, MemoryFact, PersonaState
+from .query_expansion import build_expanded_terms
 from .types import MemoryItem, RecallQuery
 
 log = structlog.get_logger(__name__)
@@ -53,6 +54,7 @@ class MemoryAgent:
         session_factory: SessionFactory,
         embedder: Optional[Embedder] = None,
         embed_dim: int = MEMORY_EMBED_DIM,
+        enable_query_expansion: bool = True,
     ) -> None:
         if embed_dim != MEMORY_EMBED_DIM:
             # On n'empêche pas à la construction (les tests pourraient avoir une
@@ -69,6 +71,10 @@ class MemoryAgent:
         self._session_factory = session_factory
         self._embedder = embedder
         self._embed_dim = embed_dim
+        # Phase 2.4 — expansion bilingue de la query ILIKE (regex + term groups).
+        # Default ON pour beneficier du recall bilingue FR/EN. Desactivable
+        # en test ou quand on veut exact match strict (perf / debug).
+        self._enable_query_expansion = enable_query_expansion
 
     # ── store ────────────────────────────────────────────────────────────────
 
@@ -164,10 +170,27 @@ class MemoryAgent:
                 stmt = stmt.where(MemoryFact.embedding.is_not(None))
                 stmt = stmt.order_by(MemoryFact.embedding.cosine_distance(query_vec))
             elif query.text:
-                # Fallback keyword — Phase 1 style. Les wildcards `%` / `_` dans
-                # query.text sont interprétés comme wildcards SQL. OK Phase 1-2
-                # (pas un enjeu sécurité, juste comportement).
-                stmt = stmt.where(MemoryFact.text.ilike(f"%{query.text}%"))
+                # Fallback keyword — Phase 1 style + Phase 2.4 expansion bilingue.
+                # Quand `enable_query_expansion` est actif, on tokenize la query
+                # + on ajoute les termes des `BILINGUAL_TERM_GROUPS` qui matchent,
+                # puis on OR-combine les `ILIKE %term%`. Ca permet de matcher
+                # "cafe matcha" pour une query "coffee" etc.
+                # Les wildcards `%` / `_` dans query.text sont interpretes comme
+                # wildcards SQL (OK Phase 1-2, pas un enjeu securite).
+                expanded = (
+                    build_expanded_terms(query.text)
+                    if self._enable_query_expansion
+                    else set()
+                )
+                if expanded:
+                    conditions = [
+                        MemoryFact.text.ilike(f"%{term}%") for term in expanded
+                    ]
+                    stmt = stmt.where(or_(*conditions))
+                else:
+                    # Expansion desactivee OU tokens tous filtres (query vide /
+                    # stopwords only) -> comportement Phase 1 strict.
+                    stmt = stmt.where(MemoryFact.text.ilike(f"%{query.text}%"))
                 stmt = stmt.order_by(MemoryFact.created_at.desc())
             else:
                 # Pas de filtre texte — retour des plus récents selon filtres
