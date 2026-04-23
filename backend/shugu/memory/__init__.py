@@ -15,8 +15,12 @@ Usage Phase 1 (skeleton) :
                                    source="manual", created_at=datetime.utcnow()))
     hits = await memory.recall(RecallQuery(text="matcha", limit=3))
 
-Phase 2 ajoutera : embedder, extraction regex→LLM, query expansion bilingue,
-hnsw index, redaction de secrets, maintenance periodic.
+Phase 2 — état :
+  - 2.1 Embedder (fastembed + e5-large) — shipped (7726fa3)
+  - 2.2 Auto-embed + cosine recall dans MemoryAgent — shipped (f3db780)
+  - 2.3 Extraction regex + fallback LLM — shipped (voir `extractors/`)
+  - 2.4+ query expansion bilingue, hnsw index, redaction secrets, maintenance
+    periodic — TODO.
 """
 from __future__ import annotations
 
