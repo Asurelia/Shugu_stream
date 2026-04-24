@@ -27,7 +27,7 @@ from typing import AsyncIterator
 import pytest
 import pytest_asyncio
 from fastapi import FastAPI
-from fastapi.testclient import TestClient
+from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
@@ -170,7 +170,19 @@ def _override_session_scope(factory):
 
 
 @pytest_asyncio.fixture
-async def client(session_factory, seed, monkeypatch) -> AsyncIterator[TestClient]:
+async def client(session_factory, seed, monkeypatch) -> AsyncIterator[AsyncClient]:
+    """AsyncClient httpx + ASGITransport — requis au lieu de fastapi.TestClient.
+
+    TestClient sync passe par `anyio.from_thread.BlockingPortal` qui ouvre une
+    boucle asyncio séparée de celle de pytest-asyncio. Les connexions asyncpg
+    attachées au pool via nos fixtures session vivent dans la boucle pytest ;
+    quand le handler FastAPI ré-acquiert une connection via `session_scope`,
+    asyncpg crash avec `got Future pending attached to a different loop`.
+
+    AsyncClient + ASGITransport reste dans la même boucle event que les
+    fixtures → pas de mismatch, pas de cross-loop Future. Pattern standard
+    FastAPI pour tests ASGI async.
+    """
     scoped = _override_session_scope(session_factory)
     monkeypatch.setattr(
         "shugu.routes.scene_editor_api.session_scope", scoped,
@@ -188,11 +200,12 @@ async def client(session_factory, seed, monkeypatch) -> AsyncIterator[TestClient
             ip_hash="",
         )
     app.dependency_overrides[require_operator] = _operator
-    c = TestClient(app)
-    try:
-        yield c
-    finally:
-        app.dependency_overrides.clear()
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as c:
+        try:
+            yield c
+        finally:
+            app.dependency_overrides.clear()
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -200,51 +213,51 @@ async def client(session_factory, seed, monkeypatch) -> AsyncIterator[TestClient
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-def test_integration_draft_full_cycle_create_list_delete(
-    client: TestClient, seed: dict[str, str],
+async def test_integration_draft_full_cycle_create_list_delete(
+    client: AsyncClient, seed: dict[str, str],
 ) -> None:
     """3 drafts → list desc → delete v2 → list 2 rows restants dans l'ordre."""
     scene_id = seed["scene_id"]
     # Create 3 versions
     for i in range(3):
-        r = client.post(
+        r = await client.post(
             f"/api/scene-editor/scenes/{scene_id}/drafts",
             json={"payload": {"iter": i}, "comment": f"v{i + 1}"},
         )
         assert r.status_code == 201
 
     # List desc
-    r = client.get(f"/api/scene-editor/scenes/{scene_id}/drafts")
+    r = await client.get(f"/api/scene-editor/scenes/{scene_id}/drafts")
     assert r.status_code == 200
     assert [d["version"] for d in r.json()] == [3, 2, 1]
 
     # Delete v2
-    r = client.delete(f"/api/scene-editor/scenes/{scene_id}/drafts/2")
+    r = await client.delete(f"/api/scene-editor/scenes/{scene_id}/drafts/2")
     assert r.status_code == 204
 
     # List now [3, 1]
-    r = client.get(f"/api/scene-editor/scenes/{scene_id}/drafts")
+    r = await client.get(f"/api/scene-editor/scenes/{scene_id}/drafts")
     assert [d["version"] for d in r.json()] == [3, 1]
 
 
-def test_integration_draft_latest_endpoint(
-    client: TestClient, seed: dict[str, str],
+async def test_integration_draft_latest_endpoint(
+    client: AsyncClient, seed: dict[str, str],
 ) -> None:
     scene_id = seed["scene_id"]
     # Empty → 404
-    r = client.get(f"/api/scene-editor/scenes/{scene_id}/drafts/latest")
+    r = await client.get(f"/api/scene-editor/scenes/{scene_id}/drafts/latest")
     assert r.status_code == 404
     # Create 2 drafts
-    client.post(f"/api/scene-editor/scenes/{scene_id}/drafts", json={"payload": {"v": 1}})
-    client.post(f"/api/scene-editor/scenes/{scene_id}/drafts", json={"payload": {"v": 2}})
-    r = client.get(f"/api/scene-editor/scenes/{scene_id}/drafts/latest")
+    await client.post(f"/api/scene-editor/scenes/{scene_id}/drafts", json={"payload": {"v": 1}})
+    await client.post(f"/api/scene-editor/scenes/{scene_id}/drafts", json={"payload": {"v": 2}})
+    r = await client.get(f"/api/scene-editor/scenes/{scene_id}/drafts/latest")
     assert r.status_code == 200
     assert r.json()["version"] == 2
     assert r.json()["payload"] == {"v": 2}
 
 
-def test_integration_draft_jsonb_roundtrip(
-    client: TestClient, seed: dict[str, str],
+async def test_integration_draft_jsonb_roundtrip(
+    client: AsyncClient, seed: dict[str, str],
 ) -> None:
     """Complex nested JSONB roundtrip — camera/look_at/background CSS."""
     scene_id = seed["scene_id"]
@@ -257,7 +270,7 @@ def test_integration_draft_jsonb_roundtrip(
         "avatar_position": {"x": 0.0, "y": 0.0, "z": 0.0},
         "avatar_rotation_y": 3.14,
     }
-    r = client.post(
+    r = await client.post(
         f"/api/scene-editor/scenes/{scene_id}/drafts",
         json={"payload": full_payload, "comment": "full scene"},
     )
@@ -266,11 +279,11 @@ def test_integration_draft_jsonb_roundtrip(
     assert out["payload"] == full_payload
 
 
-def test_integration_pattern_full_cycle(
-    client: TestClient, seed: dict[str, str],
+async def test_integration_pattern_full_cycle(
+    client: AsyncClient, seed: dict[str, str],
 ) -> None:
     # Create
-    r = client.post(
+    r = await client.post(
         "/api/scene-editor/patterns",
         json={
             "name": "integ_wave",
@@ -284,22 +297,22 @@ def test_integration_pattern_full_cycle(
     pattern_id = r.json()["id"]
 
     # List shows it
-    r = client.get("/api/scene-editor/patterns")
+    r = await client.get("/api/scene-editor/patterns")
     names = [p["name"] for p in r.json()]
     assert "integ_wave" in names
 
     # Delete
-    r = client.delete(f"/api/scene-editor/patterns/{pattern_id}")
+    r = await client.delete(f"/api/scene-editor/patterns/{pattern_id}")
     assert r.status_code == 204
 
     # List no longer has it
-    r = client.get("/api/scene-editor/patterns")
+    r = await client.get("/api/scene-editor/patterns")
     names = [p["name"] for p in r.json()]
     assert "integ_wave" not in names
 
 
-def test_integration_pattern_duplicate_name_409(
-    client: TestClient, seed: dict[str, str],
+async def test_integration_pattern_duplicate_name_409(
+    client: AsyncClient, seed: dict[str, str],
 ) -> None:
     payload = {
         "name": "integ_dup",
@@ -308,23 +321,23 @@ def test_integration_pattern_duplicate_name_409(
         "duration_ms": 1000,
         "actions": [],
     }
-    r1 = client.post("/api/scene-editor/patterns", json=payload)
+    r1 = await client.post("/api/scene-editor/patterns", json=payload)
     assert r1.status_code == 201
-    r2 = client.post("/api/scene-editor/patterns", json=payload)
+    r2 = await client.post("/api/scene-editor/patterns", json=payload)
     assert r2.status_code == 409
 
 
-def test_integration_layout_upsert_behavior(
-    client: TestClient, seed: dict[str, str],
+async def test_integration_layout_upsert_behavior(
+    client: AsyncClient, seed: dict[str, str],
 ) -> None:
     """Le meme POST avec le meme name → update, pas duplicate row."""
-    r1 = client.post(
+    r1 = await client.post(
         "/api/scene-editor/layouts",
         json={"name": "integ_default", "payload": {"v": 1}},
     )
     assert r1.status_code == 200
 
-    r2 = client.post(
+    r2 = await client.post(
         "/api/scene-editor/layouts",
         json={"name": "integ_default", "payload": {"v": 2}},
     )
@@ -332,23 +345,23 @@ def test_integration_layout_upsert_behavior(
     # Le id n'est pas expose cote OUT mais le payload est MAJ.
     assert r2.json()["payload"] == {"v": 2}
 
-    r_get = client.get("/api/scene-editor/layouts/integ_default")
+    r_get = await client.get("/api/scene-editor/layouts/integ_default")
     assert r_get.status_code == 200
     assert r_get.json()["payload"] == {"v": 2}
 
     # Cleanup
-    client.delete("/api/scene-editor/layouts/integ_default")
+    await client.delete("/api/scene-editor/layouts/integ_default")
 
 
-def test_integration_layout_get_404_when_absent(
-    client: TestClient, seed: dict[str, str],
+async def test_integration_layout_get_404_when_absent(
+    client: AsyncClient, seed: dict[str, str],
 ) -> None:
-    r = client.get(f"/api/scene-editor/layouts/integ_nonexistent_{uuid.uuid4().hex[:6]}")
+    r = await client.get(f"/api/scene-editor/layouts/integ_nonexistent_{uuid.uuid4().hex[:6]}")
     assert r.status_code == 404
 
 
-def test_integration_timeline_full_cycle(
-    client: TestClient, seed: dict[str, str],
+async def test_integration_timeline_full_cycle(
+    client: AsyncClient, seed: dict[str, str],
 ) -> None:
     scene_id = seed["scene_id"]
 
@@ -359,33 +372,33 @@ def test_integration_timeline_full_cycle(
         {"track_name": "alt", "start_sec": 1.0, "end_sec": 4.0, "label": "c"},
     ]
     for clip in clips:
-        r = client.post(
+        r = await client.post(
             f"/api/scene-editor/scenes/{scene_id}/timeline", json=clip,
         )
         assert r.status_code == 201
 
     # List sorted : (alt:c), (main:a), (main:b)
-    r = client.get(f"/api/scene-editor/scenes/{scene_id}/timeline")
+    r = await client.get(f"/api/scene-editor/scenes/{scene_id}/timeline")
     assert r.status_code == 200
     labels = [c["label"] for c in r.json()]
     assert labels == ["c", "a", "b"]
 
     # Delete one
     clip_id = r.json()[1]["id"]  # "a"
-    r = client.delete(f"/api/scene-editor/scenes/{scene_id}/timeline/{clip_id}")
+    r = await client.delete(f"/api/scene-editor/scenes/{scene_id}/timeline/{clip_id}")
     assert r.status_code == 204
 
     # List now [c, b]
-    r = client.get(f"/api/scene-editor/scenes/{scene_id}/timeline")
+    r = await client.get(f"/api/scene-editor/scenes/{scene_id}/timeline")
     assert [c["label"] for c in r.json()] == ["c", "b"]
 
 
-def test_integration_timeline_end_le_start_rejected(
-    client: TestClient, seed: dict[str, str],
+async def test_integration_timeline_end_le_start_rejected(
+    client: AsyncClient, seed: dict[str, str],
 ) -> None:
     """Pydantic rejette → 422 avant meme le CHECK DB."""
     scene_id = seed["scene_id"]
-    r = client.post(
+    r = await client.post(
         f"/api/scene-editor/scenes/{scene_id}/timeline",
         json={"track_name": "bad", "start_sec": 5.0, "end_sec": 5.0},
     )
@@ -393,7 +406,7 @@ def test_integration_timeline_end_le_start_rejected(
 
 
 async def test_integration_cascade_delete_scene_removes_drafts_and_clips(
-    session_factory, seed: dict[str, str], cleanup, client: TestClient,
+    session_factory, seed: dict[str, str], cleanup, client: AsyncClient,
 ) -> None:
     """CASCADE FK : quand une scene est supprimee, drafts + clips disparaissent.
 
@@ -406,12 +419,12 @@ async def test_integration_cascade_delete_scene_removes_drafts_and_clips(
 
     scene_id = seed["scene_id"]
     # Create draft + clip via API
-    r = client.post(
+    r = await client.post(
         f"/api/scene-editor/scenes/{scene_id}/drafts",
         json={"payload": {}, "comment": "to-cascade"},
     )
     assert r.status_code == 201
-    r = client.post(
+    r = await client.post(
         f"/api/scene-editor/scenes/{scene_id}/timeline",
         json={"track_name": "m", "start_sec": 0.0, "end_sec": 2.0},
     )
@@ -440,7 +453,7 @@ async def test_integration_cascade_delete_scene_removes_drafts_and_clips(
 
 
 async def test_integration_draft_version_unique_constraint(
-    session_factory, seed: dict[str, str], client: TestClient,
+    session_factory, seed: dict[str, str], client: AsyncClient,
 ) -> None:
     """Le UniqueConstraint (scene_id, version) empeche les doublons.
 
@@ -453,7 +466,7 @@ async def test_integration_draft_version_unique_constraint(
 
     scene_id = seed["scene_id"]
     # Create v1 via API
-    r = client.post(
+    r = await client.post(
         f"/api/scene-editor/scenes/{scene_id}/drafts",
         json={"payload": {}},
     )
