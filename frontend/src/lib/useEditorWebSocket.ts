@@ -28,6 +28,12 @@ import { useEffect, useRef } from "react";
 import { EditorWebSocket, type EditorServerEvent } from "./editorWebSocket";
 import { useSceneEditorStore } from "@/stores/useSceneEditorStore";
 
+// Fix review Phase D H-1 : ref mutable partagée qui suit `sceneId`. Permet
+// au callback `onOpen` du WebSocket (appelé aussi après chaque reconnect)
+// de re-issuer un `subscribe()` sans dépendre de la re-exécution du
+// second useEffect — lequel n'observe que `sceneId`/`enabled`, pas les
+// transitions de statut de la WS elle-même.
+
 export type UseEditorWebSocketOptions = {
   /**
    * URL WS optionnelle (utile pour les tests Playwright qui redirigent vers
@@ -53,6 +59,10 @@ export function useEditorWebSocket(
 ): { clientRef: React.MutableRefObject<EditorWebSocket | null> } {
   const { url, enabled = true } = options;
   const clientRef = useRef<EditorWebSocket | null>(null);
+  // Fix H-1 : ref qui reflète toujours le dernier `sceneId` reçu par le
+  // hook. Utilisée par `onOpen` pour re-subscribe après reconnect.
+  const sceneIdRef = useRef<string | null>(sceneId);
+  sceneIdRef.current = sceneId;
 
   // Les actions Zustand sont stables (Zustand garantit l'identité tant que
   // le store n'est pas recréé) → on peut les accéder via getState() sans
@@ -107,7 +117,19 @@ export function useEditorWebSocket(
       }
     };
 
-    const ws = new EditorWebSocket({ url, onEvent });
+    // Fix H-1 : `onOpen` fire à la connexion initiale ET après chaque
+    // reconnect exponentiel. Si un `sceneId` est actif, on re-subscribe
+    // automatiquement — sinon le collab reste invisiblement cassé après
+    // le moindre restart backend (le hook ne re-run pas sur les WS state
+    // transitions, seulement sur les props).
+    const onOpen = () => {
+      const currentScene = sceneIdRef.current;
+      if (currentScene && ws.isOpen()) {
+        ws.subscribe(currentScene);
+      }
+    };
+
+    const ws = new EditorWebSocket({ url, onEvent, onOpen });
     clientRef.current = ws;
 
     return () => {

@@ -90,6 +90,10 @@ BROADCAST_TOPIC = "editor:broadcast"
 STAGE_TOPIC = "stage"          # relay du preview.push pour les visiteurs
 HEARTBEAT_INTERVAL_S = 20.0    # server -> client ping cadence
 HEARTBEAT_TIMEOUT_S = 40.0     # si pas de pong dans cette fenetre -> close
+# Fix review Phase D H-2 : garde-fou taille de frame cote serveur. Les
+# deltas live et preview.push restent typiquement < 4 KB. 32 KB laisse de
+# la marge pour des scene payloads riches sans ouvrir de surface DoS.
+_MAX_FRAME_BYTES = 32 * 1024
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -244,7 +248,35 @@ async def editor_ws(
 
     try:
         while True:
-            raw = await ws.receive_text()
+            # Fix review Phase D H-4 : `receive_text()` lève RuntimeError si le
+            # client envoie une binary frame. On wrap dans un try pour émettre
+            # un `error` frame proprement + continuer (plutôt que faire
+            # remonter l'exception à l'ASGI et polluer les logs en 500).
+            try:
+                raw = await ws.receive_text()
+            except RuntimeError:
+                # Binary frame, protocol mismatch, etc. — on refuse sans
+                # fermer ; le client peut corriger et continuer en texte.
+                await _send_error(
+                    ws,
+                    code="invalid_payload",
+                    message="only text frames are supported",
+                )
+                continue
+
+            # Fix review Phase D H-2 : garde-fou taille de frame. Les deltas
+            # live et preview.push sont très petits (~KB) ; tout > 32KB est
+            # suspect (DoS / payload attack). Aligne avec le pattern
+            # `operator_ws.py:149` (2000 chars pour chat). 32 KB laisse de
+            # la marge pour des payloads de scene riches.
+            if len(raw) > _MAX_FRAME_BYTES:
+                await _send_error(
+                    ws,
+                    code="invalid_payload",
+                    message=f"frame too large (>{_MAX_FRAME_BYTES} bytes)",
+                )
+                continue
+
             try:
                 msg = json.loads(raw)
             except json.JSONDecodeError:
