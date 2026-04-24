@@ -2,6 +2,11 @@ import "@/styles/globals.css";
 import "@/styles/celestial-veil-tokens.css";
 import "@/styles/liquid-glass.css";
 import "@/styles/viewer-proto.css";
+// Scene Editor Unity-style (Phase A) : CSS global chargé ici car Next 13
+// pages router interdit l'import de CSS global hors de `_app.tsx`. Les
+// classes `.ide-*` sont scoped sous `.ide-root` donc n'interfèrent pas
+// avec les autres pages.
+import "@/styles/scene-editor.css";
 import type { AppProps } from "next/app";
 import "@charcoal-ui/icons";
 import { Quicksand, Comfortaa, Plus_Jakarta_Sans, Inter, JetBrains_Mono } from "next/font/google";
