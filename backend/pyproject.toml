@@ -62,6 +62,11 @@ dev = [
     # (VipBridgeClient utilise httpx.AsyncClient).
     "fakeredis>=2.23",
     "respx>=0.21",
+    # Phase C (Scene Editor backend CRUD) — les tests unit utilisent un
+    # SQLite in-memory via `sqlite+aiosqlite:///:memory:` pour isoler les
+    # suites sans tourner Postgres. Sans `aiosqlite` le runner CI fait
+    # `ModuleNotFoundError` à l'import de `create_async_engine`.
+    "aiosqlite>=0.19",
 ]
 
 [build-system]
