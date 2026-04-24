@@ -71,6 +71,11 @@ import {
   type LayoutPreset,
 } from "@/stores/useSceneEditorStore";
 import { useDockLayoutStore } from "@/stores/useDockLayoutStore";
+// Phase D : on monte `useEditorWebSocket(currentScene)` une fois le store
+// lu. Le hook gère son propre cycle de vie (connect / subscribe / cleanup)
+// et ne dépend d'aucune prop passée ici — c'est intentionnel pour que la
+// démo verbatim Phase A reste agnostique du backend.
+import { useEditorWebSocket } from "@/lib/useEditorWebSocket";
 
 /* ─────────────────────────── MENU DEFINITION ─────────────────────────── */
 
@@ -609,6 +614,12 @@ export function SceneEditorApp({ onExit }: SceneEditorAppProps) {
   const layoutPreset = useSceneEditorStore(selectLayoutPreset);
   const setLayoutPresetRaw = useSceneEditorStore((s) => s.setLayoutPreset);
   const currentScene = useSceneEditorStore(selectCurrentScene);
+
+  // Phase D — branche la WS `/ws/editor` au store. Le hook ouvre la WS au
+  // mount, appelle subscribe(currentScene) dès que c'est OPEN, et cleanup
+  // au unmount. Les peers et remoteDraftDeltas sont mis à jour dans le
+  // store via les actions addPeer / applyRemoteDraftUpdate.
+  useEditorWebSocket(currentScene);
 
   // Phase B (fix H-1 review) : `LayoutPreset` est aligné verbatim sur les 4
   // options du Select MainToolbar ("Streaming" | "Editing" | "Performance"

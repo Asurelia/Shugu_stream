@@ -41,6 +41,7 @@ from .routes import (
     admin,
     admin_users,
     auth,
+    editor_ws,
     health,
     hermes_state_api,
     internal_vip,
@@ -250,6 +251,12 @@ async def lifespan(app: FastAPI):
         viewer_counter=viewer_counter, ambient=ambient,
         body_router=body_router, hermes_embodied=hermes_embodied,
     ))
+    # Scene Editor WS — Phase D. Broadcast-only collab (pas de persistence
+    # nouvelle : les drafts passent toujours par `/api/scene-editor/scenes/
+    # {id}/drafts`). Voir `routes/editor_ws.py` pour le contract.
+    editor_ws.set_deps(editor_ws.EditorWSDeps(
+        event_bus=event_bus, settings=settings, redis=_redis,
+    ))
     if stt is not None:
         operator_voice_ws.set_deps(operator_voice_ws.VoiceWSDeps(
             settings=settings, redis=_redis, picker=picker,
@@ -288,6 +295,7 @@ def create_app() -> FastAPI:
     app.include_router(hermes_state_api.router)
     app.include_router(visitor_ws.router)
     app.include_router(operator_ws.router)
+    app.include_router(editor_ws.router)   # /ws/editor — Phase D collab
     # Only mount the voice-duplex route when the feature is enabled, otherwise
     # the route would accept WS upgrades but the handler's `_deps` would still
     # be None → assertion crash on first connect. Cleaner to 404 the upgrade.

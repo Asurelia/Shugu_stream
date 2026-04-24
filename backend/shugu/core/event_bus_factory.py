@@ -30,7 +30,17 @@ from .protocols import EventBus
 log = structlog.get_logger(__name__)
 
 
-DEFAULT_BROADCAST_TOPICS: frozenset[str] = frozenset({"vip.events", "mood.change"})
+DEFAULT_BROADCAST_TOPICS: frozenset[str] = frozenset(
+    {"vip.events", "mood.change", "editor:broadcast"}
+)
+# `editor:broadcast` — Phase D Scene Editor WebSocket. Topic unique partage
+# entre toutes les scenes : les subscribers filtrent localement par
+# `scene_id` present dans l'enveloppe de l'event (cf. `routes/editor_ws.py`).
+# On ne peut pas enumerer des topics dynamiques par scene (UUID = infini), et
+# ajouter un mecanisme de prefix-match dans `RedisEventBus` serait un coup
+# d'ampleur demesure pour ce besoin. Le cout = chaque operator process recoit
+# tous les events editor et filtre, mais le volume reste tres faible (~drag
+# avatar + sliders).
 
 
 async def make_event_bus(

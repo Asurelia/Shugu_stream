@@ -104,6 +104,26 @@ export interface SceneEditorState {
   patterns: PatternItem[];
   timeline: TimelineData;
 
+  /* ---- Phase D — WS collaboration state (éphémère, reset au unmount) ---- */
+  /**
+   * Liste des autres operators actuellement subscribed à la même scène via
+   * `/ws/editor`. Ne contient jamais l'operator courant. Mise à jour par
+   * `useEditorWebSocket` au fil des events `subscribed` / `peer.joined` /
+   * `peer.left`. Utile pour afficher un avatar-ring "X personnes éditent"
+   * dans la menubar (implémentation UI réservée Phase F).
+   */
+  peers: string[];
+
+  /**
+   * Deltas de draft reçus via `/ws/editor` (d'autres operators qui bougent
+   * un avatar, changent un FOV, etc.). Stocké comme un simple blob JSON
+   * par clé du delta, via shallow merge — Phase F élargira à un vrai
+   * patch-apply contre la scène active. Pour Phase D le contenu est
+   * observable par les panels mais AUCUNE transformation visuelle n'est
+   * câblée ; c'est intentionnel (pas de régression de l'éditeur local).
+   */
+  remoteDraftDeltas: Record<string, unknown>;
+
   /* ---- UI actions ---- */
   setCurrentScene: (id: string) => void;
   setSelectedId: (id: string | null) => void;
@@ -120,6 +140,22 @@ export interface SceneEditorState {
 
   /** Toggle lock d'un node (verrouillage édition). */
   toggleNodeLock: (nodeId: string) => void;
+
+  /* ---- Phase D — WS collab actions ---- */
+  /** Remplace la liste des peers (appelé par `useEditorWebSocket` au `subscribed`). */
+  setPeers: (peers: string[]) => void;
+  /** Ajoute un peer (peer.joined). No-op si déjà présent. */
+  addPeer: (operator: string) => void;
+  /** Retire un peer (peer.left). No-op si absent. */
+  removePeer: (operator: string) => void;
+
+  /**
+   * Applique un delta distant reçu via WS. Shallow-merge dans
+   * `remoteDraftDeltas`. Pas de re-broadcast — c'est par définition l'input,
+   * pas l'output (évite les boucles infinies quand la Phase F branchera le
+   * vrai write-back des gestes live).
+   */
+  applyRemoteDraftUpdate: (delta: Record<string, unknown>) => void;
 
   /** Réinitialise l'état UI (utile pour tests et pour un "Close all"). */
   resetUI: () => void;
@@ -172,6 +208,11 @@ const INITIAL_UI_STATE = {
   selectedId: "shugu" as string | null,
   tool: "move" as Tool,
   layoutPreset: "Streaming" as LayoutPreset,
+  // Phase D : peers et remoteDraftDeltas sont du state de session WS
+  // (éphémère par nature) → ils rejoignent l'UI state et sont reset par
+  // `resetUI()` au même titre que les autres champs non persistés.
+  peers: [] as string[],
+  remoteDraftDeltas: {} as Record<string, unknown>,
 };
 
 /* ─────────────────────────── STORE ─────────────────────────── */
@@ -212,6 +253,23 @@ export const useSceneEditorStore = create<SceneEditorState>()(
             (n) => n.id === nodeId,
             (n) => ({ ...n, locked: !n.locked }),
           ),
+        })),
+
+      /* ─── Phase D — WS collab actions ─── */
+      setPeers: (peers) => set({ peers: [...peers] }),
+      addPeer: (operator) =>
+        set((state) =>
+          state.peers.includes(operator)
+            ? state
+            : { peers: [...state.peers, operator] },
+        ),
+      removePeer: (operator) =>
+        set((state) => ({
+          peers: state.peers.filter((p) => p !== operator),
+        })),
+      applyRemoteDraftUpdate: (delta) =>
+        set((state) => ({
+          remoteDraftDeltas: { ...state.remoteDraftDeltas, ...delta },
         })),
 
       resetUI: () => set({ ...INITIAL_UI_STATE }),
@@ -276,3 +334,8 @@ export const selectAssets = (s: SceneEditorState): AssetItem[] => s.assets;
 export const selectPatterns = (s: SceneEditorState): PatternItem[] => s.patterns;
 export const selectAudioChannels = (s: SceneEditorState): AudioChannel[] => s.audioChannels;
 export const selectTimeline = (s: SceneEditorState): TimelineData => s.timeline;
+
+/* ─── Phase D — WS collab selectors ─── */
+export const selectPeers = (s: SceneEditorState): string[] => s.peers;
+export const selectRemoteDraftDeltas = (s: SceneEditorState): Record<string, unknown> =>
+  s.remoteDraftDeltas;
