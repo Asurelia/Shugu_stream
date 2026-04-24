@@ -1,6 +1,7 @@
 import Head from "next/head";
 import { useRouter } from "next/router";
 import dynamic from "next/dynamic";
+import { AdminAuthGuard } from "@/components/admin/AdminAuthGuard";
 
 // Note Phase A : le design bundle Claude Design importait `scene-editor.css`
 // directement ici. Next.js 13 pages router interdit l'import de global CSS
@@ -10,6 +11,11 @@ import dynamic from "next/dynamic";
 // celestial-veil-tokens.css / liquid-glass.css / viewer-proto.css). Les
 // classes `.ide-*` sont scoped sous `.ide-root`, donc pas de conflit avec
 // le reste du site.
+//
+// Note Phase B : ajout de `AdminAuthGuard` pour éviter qu'un visiteur non
+// authentifié n'atteigne le Scene Editor (issue M2 du review Phase A). Le
+// guard est un wrapper auth-only qui ne rend aucun chrome propre, donc le
+// plein écran IDE est préservé tel quel une fois l'operator validé.
 
 /**
  * `/[username]/admin/scene-editor` — Scene Editor plein écran.
@@ -29,15 +35,6 @@ const SceneEditorApp = dynamic(
 
 export default function SceneEditorPage() {
   const router = useRouter();
-  const username = (router.query.username as string) || "shugu";
-
-  const handleExit = () => {
-    if (window.history.length > 1) {
-      router.back();
-    } else {
-      router.push(`/${username}/admin`);
-    }
-  };
 
   return (
     <>
@@ -45,19 +42,32 @@ export default function SceneEditorPage() {
         <title>Scene Editor · Shugu</title>
         <meta name="viewport" content="width=device-width, initial-scale=1" />
       </Head>
-      <div
-        style={{
-          position: "fixed",
-          inset: 0,
-          background: "#05050a",
-          overflow: "hidden",
-          // Neutralise le background animé du body global — le Scene Editor a
-          // son propre chrome sombre d'IDE.
-          isolation: "isolate",
+      <AdminAuthGuard>
+        {(operator) => {
+          const handleExit = () => {
+            if (window.history.length > 1) {
+              router.back();
+            } else {
+              router.push(`/${encodeURIComponent(operator.username)}/admin`);
+            }
+          };
+          return (
+            <div
+              style={{
+                position: "fixed",
+                inset: 0,
+                background: "#05050a",
+                overflow: "hidden",
+                // Neutralise le background animé du body global — le Scene
+                // Editor a son propre chrome sombre d'IDE.
+                isolation: "isolate",
+              }}
+            >
+              <SceneEditorApp onExit={handleExit} />
+            </div>
+          );
         }}
-      >
-        <SceneEditorApp onExit={handleExit} />
-      </div>
+      </AdminAuthGuard>
     </>
   );
 }

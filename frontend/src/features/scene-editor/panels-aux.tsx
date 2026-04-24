@@ -25,14 +25,18 @@ import {
   TBBtn,
   type IconName,
 } from "./primitives";
+import { type AssetKind, type AudioChannel, type AssetItem } from "./mock-data";
+// Phase B : chaque panel lit sa slice depuis le store. Les fixtures MOCK_*
+// restent dans `mock-data.ts` en tant qu'initial state du store, ce qui
+// permet aux tests Playwright Phase A de continuer à valider le contenu
+// par défaut sans toucher au store.
 import {
-  MOCK_ASSETS,
-  MOCK_AUDIO_CHANNELS,
-  MOCK_PATTERNS,
-  MOCK_TIMELINE,
-  type AssetKind,
-  type AudioChannel,
-} from "./mock-data";
+  useSceneEditorStore,
+  selectAssets,
+  selectAudioChannels,
+  selectPatterns,
+  selectTimeline,
+} from "@/stores/useSceneEditorStore";
 
 /* ═══════════════════════════════ ASSETS ═══════════════════════════════ */
 
@@ -51,8 +55,12 @@ export function AssetsPanel({ onPopout }: { onPopout?: () => void }) {
   const [filter, setFilter] = useState<AssetKind | "ALL">("ALL");
   const [query, setQuery] = useState("");
   const { setPayload, toast } = useDragDrop();
+  // Phase B : assets tirés du store. L'AssetItem typé est réexporté de
+  // mock-data, donc l'ancienne `(typeof MOCK_ASSETS)[number]` devient
+  // simplement `AssetItem`.
+  const assets = useSceneEditorStore(selectAssets);
 
-  const onAssetDragStart = (asset: (typeof MOCK_ASSETS)[number]) => (e: DragEvent<HTMLDivElement>) => {
+  const onAssetDragStart = (asset: AssetItem) => (e: DragEvent<HTMLDivElement>) => {
     setPayload({ kind: "asset", asset });
     e.dataTransfer.effectAllowed = "copy";
     e.dataTransfer.setData("text/plain", `shugu-asset:${asset.id}`);
@@ -64,7 +72,7 @@ export function AssetsPanel({ onPopout }: { onPopout?: () => void }) {
     (e.currentTarget as HTMLElement).classList.remove("dragging");
   };
 
-  const items = MOCK_ASSETS.filter(
+  const items = assets.filter(
     (a) =>
       (filter === "ALL" || a.kind === filter) &&
       (query === "" || a.label.toLowerCase().includes(query.toLowerCase())),
@@ -184,6 +192,10 @@ export function TimelinePanel({ onPopout }: { onPopout?: () => void }) {
   const [playing, setPlaying] = useState(false);
   const [time, setTime] = useState(3.4);
   const rafRef = useRef<number | null>(null);
+  // Phase B : timeline data lue depuis le store. Laisse la porte ouverte
+  // pour qu'un pattern recording mute `timeline.tracks` / `timeline.clips`
+  // en Phase E via des actions dédiées.
+  const timeline = useSceneEditorStore(selectTimeline);
 
   useEffect(() => {
     if (!playing) return;
@@ -191,16 +203,16 @@ export function TimelinePanel({ onPopout }: { onPopout?: () => void }) {
     const tick = (now: number) => {
       const dt = (now - last) / 1000;
       last = now;
-      setTime((t) => (t + dt > MOCK_TIMELINE.duration ? 0 : t + dt));
+      setTime((t) => (t + dt > timeline.duration ? 0 : t + dt));
       rafRef.current = requestAnimationFrame(tick);
     };
     rafRef.current = requestAnimationFrame(tick);
     return () => {
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
     };
-  }, [playing]);
+  }, [playing, timeline.duration]);
 
-  const pct = (time / MOCK_TIMELINE.duration) * 100;
+  const pct = (time / timeline.duration) * 100;
 
   return (
     <Panel
@@ -216,7 +228,7 @@ export function TimelinePanel({ onPopout }: { onPopout?: () => void }) {
             padding: "0 6px",
           }}
         >
-          {time.toFixed(2)} / {MOCK_TIMELINE.duration.toFixed(2)}s
+          {time.toFixed(2)} / {timeline.duration.toFixed(2)}s
         </span>
       }
     >
@@ -251,11 +263,11 @@ export function TimelinePanel({ onPopout }: { onPopout?: () => void }) {
 
       <div className="ide-timeline">
         <div className="ide-timeline-ruler">
-          {Array.from({ length: Math.ceil(MOCK_TIMELINE.duration) + 1 }, (_, i) => (
+          {Array.from({ length: Math.ceil(timeline.duration) + 1 }, (_, i) => (
             <div
               key={i}
               className="tick"
-              style={{ left: `${(i / MOCK_TIMELINE.duration) * 100}%` }}
+              style={{ left: `${(i / timeline.duration) * 100}%` }}
             >
               <span>{i}s</span>
             </div>
@@ -264,22 +276,22 @@ export function TimelinePanel({ onPopout }: { onPopout?: () => void }) {
         </div>
 
         <div className="ide-timeline-tracks">
-          {MOCK_TIMELINE.tracks.map((tr) => (
+          {timeline.tracks.map((tr) => (
             <div key={tr.name} className="ide-timeline-track">
               <div className="ide-timeline-track-head">
                 <Switch checked />
                 <span>{tr.name}</span>
               </div>
               <div className="ide-timeline-track-lane">
-                {MOCK_TIMELINE.clips
+                {timeline.clips
                   .filter((c) => c.track === tr.name)
                   .map((c, i) => (
                     <div
                       key={i}
                       className="clip"
                       style={{
-                        left: `${(c.start / MOCK_TIMELINE.duration) * 100}%`,
-                        width: `${((c.end - c.start) / MOCK_TIMELINE.duration) * 100}%`,
+                        left: `${(c.start / timeline.duration) * 100}%`,
+                        width: `${((c.end - c.start) / timeline.duration) * 100}%`,
                       }}
                     >
                       {c.label}
@@ -289,7 +301,7 @@ export function TimelinePanel({ onPopout }: { onPopout?: () => void }) {
                   <div
                     key={i}
                     className="keyframe"
-                    style={{ left: `${(k / MOCK_TIMELINE.duration) * 100}%` }}
+                    style={{ left: `${(k / timeline.duration) * 100}%` }}
                   />
                 ))}
                 <div className="ide-playhead" style={{ left: `${pct}%` }} />
@@ -313,6 +325,10 @@ const TRIGGER_ICON: Record<string, IconName> = {
 export function PatternsPanel({ onPopout }: { onPopout?: () => void }) {
   const [recording, setRecording] = useState(false);
   const [selectedId, setSelectedId] = useState("p2");
+  // Phase B : la liste des patterns vient du store. Permettra d'ajouter
+  // un pattern via `record_start` → `record_stop` en Phase E (AI tools)
+  // sans remount complet du panel.
+  const patterns = useSceneEditorStore(selectPatterns);
 
   return (
     <Panel
@@ -391,7 +407,7 @@ export function PatternsPanel({ onPopout }: { onPopout?: () => void }) {
       )}
 
       <div style={{ padding: "4px 6px" }}>
-        {MOCK_PATTERNS.map((p) => (
+        {patterns.map((p) => (
           <div
             key={p.id}
             onClick={() => setSelectedId(p.id)}
@@ -550,6 +566,9 @@ function ChannelStrip({ ch }: { ch: AudioChannel }) {
 
 export function MixerPanel({ onPopout }: { onPopout?: () => void }) {
   const master: AudioChannel = { id: "master", name: "Master", level: 0.8, muted: false, solo: false };
+  // Phase B : channels audio tirés du store. Les Phase E (AI tools) pourront
+  // ajouter `mixer.set_level(channel, value)` comme tool callable par Hermes.
+  const channels = useSceneEditorStore(selectAudioChannels);
 
   return (
     <Panel
@@ -579,7 +598,7 @@ export function MixerPanel({ onPopout }: { onPopout?: () => void }) {
           alignItems: "stretch",
         }}
       >
-        {MOCK_AUDIO_CHANNELS.map((c) => (
+        {channels.map((c) => (
           <ChannelStrip key={c.id} ch={c} />
         ))}
         <div

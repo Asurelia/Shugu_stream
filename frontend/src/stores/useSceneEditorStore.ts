@@ -1,0 +1,278 @@
+/**
+ * Scene Editor — store principal (état UI + data mockée côté front).
+ *
+ * Ce store est la **source unique de vérité** pour l'état qui transite entre
+ * les panels du Scene Editor (hierarchy, assets, inspector, etc.). Il est
+ * volontairement séparé de `useDockLayoutStore` (qui persiste le layout des
+ * docks) : le contenu du store ici **ne doit pas survivre** au reload — on
+ * veut qu'une nouvelle session repart propre sur la scène active et l'outil
+ * sélectionné, uniquement l'ergonomie de dock est mémorisée.
+ *
+ * # Architecture
+ *
+ *   (UI state)             (Data state)
+ *   - currentScene         - scenes[]        ← seeded from mock-data.ts
+ *   - selectedId           - hierarchy[]
+ *   - tool                 - inspector
+ *   - layoutPreset         - assets[]
+ *                          - patterns[]
+ *                          - audioChannels[]
+ *                          - timeline
+ *
+ * Toutes les Phase C+ (backend CRUD), les `scenes` / `hierarchy` / etc.
+ * seront rafraîchies depuis l'API au mount ; le store devient alors un
+ * cache local. Pour Phase B on se contente de wrap les mocks pour ouvrir
+ * le chemin.
+ *
+ * # Undo/Redo (Zundo / temporal middleware)
+ *
+ * Seuls `currentScene` et `layoutPreset` sont suivis par l'historique — les
+ * changements de `tool`/`selectedId` sont des gestes éphémères qu'il serait
+ * confusant de voir repasser en ⌘Z. Les *vrais* edits (move avatar, set FOV,
+ * etc.) seront ajoutés au `partialize` au fil des Phases E/F quand la
+ * sémantique DraftScene sera implémentée.
+ *
+ * Les actions `undo()` / `redo()` sont branchées sur les hotkeys ⌘Z / ⌘⇧Z
+ * via `SceneEditorApp` → `useHotkeys`. L'accès se fait via
+ * `useSceneEditorStore.temporal.getState().undo()`.
+ */
+
+import { create } from "zustand";
+import { temporal } from "zundo";
+import type { TemporalState } from "zundo";
+import { useStore } from "zustand";
+import {
+  MOCK_ASSETS,
+  MOCK_AUDIO_CHANNELS,
+  MOCK_HIERARCHY,
+  MOCK_INSPECTOR,
+  MOCK_PATTERNS,
+  MOCK_SCENES,
+  MOCK_TIMELINE,
+  type AssetItem,
+  type AudioChannel,
+  type InspectorData,
+  type PatternItem,
+  type SceneSummary,
+  type TimelineData,
+} from "@/features/scene-editor/mock-data";
+import type { TreeNodeData } from "@/features/scene-editor/primitives";
+
+/* ─────────────────────────── TYPES ─────────────────────────── */
+
+/** Outil actif dans la main toolbar + hotkeys W/E/R. */
+export type Tool = "move" | "rotate" | "scale";
+
+/**
+ * Presets de layout prédéfinis. Port verbatim des options du Select dans
+ * `SceneEditorApp.tsx::MainToolbar` (design bundle Claude Design) — toute
+ * divergence ici casse l'UI car le `<Select>` ne matche pas sa `value`.
+ * Fix Phase B H-1 : les valeurs étaient lowercase (default/coding/streaming)
+ * → 3 options sur 4 devenaient silent no-op.
+ */
+export type LayoutPreset = "Streaming" | "Editing" | "Performance" | "Custom…";
+
+/** Liste source des options, identique à celle passée à Select. */
+export const LAYOUT_PRESETS: readonly LayoutPreset[] = [
+  "Streaming",
+  "Editing",
+  "Performance",
+  "Custom…",
+] as const;
+
+/* ─────────────────────────── STATE ─────────────────────────── */
+
+export interface SceneEditorState {
+  /* ---- UI state (éphémère, non persisté) ---- */
+  currentScene: string;
+  selectedId: string | null;
+  tool: Tool;
+  layoutPreset: LayoutPreset;
+
+  /* ---- Data state (mocks côté Phase B, remplacés par API Phase C+) ---- */
+  scenes: SceneSummary[];
+  hierarchy: TreeNodeData[];
+  /**
+   * Map node id → propriétés inspectables. L'Inspector Panel lit
+   * `inspectorById[selectedId]` à la volée ; on garde cette shape plutôt
+   * qu'un seul blob pour faciliter Phase D (WS) où chaque node peut être
+   * mis à jour indépendamment.
+   */
+  inspectorById: Record<string, InspectorData>;
+  assets: AssetItem[];
+  audioChannels: AudioChannel[];
+  patterns: PatternItem[];
+  timeline: TimelineData;
+
+  /* ---- UI actions ---- */
+  setCurrentScene: (id: string) => void;
+  setSelectedId: (id: string | null) => void;
+  setTool: (t: Tool) => void;
+  setLayoutPreset: (name: LayoutPreset) => void;
+
+  /* ---- Data actions (stubs Phase B — enrichis par les phases suivantes) ---- */
+  /**
+   * Toggle visibility d'un node dans la hiérarchie. Modifie l'arbre en place
+   * (immuable côté Zustand : on reconstruit la branche concernée). Utilisé
+   * par `HierarchyPanel` quand on clique l'œil d'un node.
+   */
+  toggleNodeVisibility: (nodeId: string) => void;
+
+  /** Toggle lock d'un node (verrouillage édition). */
+  toggleNodeLock: (nodeId: string) => void;
+
+  /** Réinitialise l'état UI (utile pour tests et pour un "Close all"). */
+  resetUI: () => void;
+}
+
+/* ─────────────────────────── HELPERS ─────────────────────────── */
+
+/**
+ * Applique `mutator` récursivement à l'arbre : renvoie un NOUVEL arbre si un
+ * node matche, sinon le même (référence stable → pas de re-render inutile).
+ */
+function mapTree(
+  nodes: TreeNodeData[],
+  predicate: (n: TreeNodeData) => boolean,
+  mutator: (n: TreeNodeData) => TreeNodeData,
+): TreeNodeData[] {
+  let changed = false;
+  const out = nodes.map((n) => {
+    if (predicate(n)) {
+      changed = true;
+      return mutator(n);
+    }
+    if (n.children && n.children.length > 0) {
+      const newChildren = mapTree(n.children, predicate, mutator);
+      if (newChildren !== n.children) {
+        changed = true;
+        return { ...n, children: newChildren };
+      }
+    }
+    return n;
+  });
+  return changed ? out : nodes;
+}
+
+/* ─────────────────────────── INITIAL STATE ─────────────────────────── */
+
+/**
+ * Valeurs par défaut ré-injectables via `resetUI()`. On extrait dans une
+ * const pour que `useSceneEditorStore.getState()` au premier appel matche
+ * exactement ce que le store crée.
+ *
+ * L'initial UI state reflète le comportement de `SceneEditorApp.tsx` pre-B :
+ *   - currentScene = "s2" (Main · Talk, active par défaut dans MOCK_SCENES)
+ *   - selectedId = "shugu" (sélection de démo cohérente avec MOCK_INSPECTOR)
+ *   - tool = "move"
+ *   - layoutPreset = "Streaming" (identique au design bundle verbatim)
+ */
+const INITIAL_UI_STATE = {
+  currentScene: "s2",
+  selectedId: "shugu" as string | null,
+  tool: "move" as Tool,
+  layoutPreset: "Streaming" as LayoutPreset,
+};
+
+/* ─────────────────────────── STORE ─────────────────────────── */
+
+export const useSceneEditorStore = create<SceneEditorState>()(
+  temporal(
+    (set) => ({
+      ...INITIAL_UI_STATE,
+
+      // Data state — seedé depuis les mocks. Nouveau ref pour les arrays pour
+      // éviter les mutations partagées accidentelles entre tests.
+      scenes: [...MOCK_SCENES],
+      hierarchy: MOCK_HIERARCHY,
+      inspectorById: MOCK_INSPECTOR,
+      assets: [...MOCK_ASSETS],
+      audioChannels: [...MOCK_AUDIO_CHANNELS],
+      patterns: [...MOCK_PATTERNS],
+      timeline: MOCK_TIMELINE,
+
+      setCurrentScene: (id) => set({ currentScene: id }),
+      setSelectedId: (id) => set({ selectedId: id }),
+      setTool: (t) => set({ tool: t }),
+      setLayoutPreset: (name) => set({ layoutPreset: name }),
+
+      toggleNodeVisibility: (nodeId) =>
+        set((state) => ({
+          hierarchy: mapTree(
+            state.hierarchy,
+            (n) => n.id === nodeId,
+            (n) => ({ ...n, visible: !n.visible }),
+          ),
+        })),
+
+      toggleNodeLock: (nodeId) =>
+        set((state) => ({
+          hierarchy: mapTree(
+            state.hierarchy,
+            (n) => n.id === nodeId,
+            (n) => ({ ...n, locked: !n.locked }),
+          ),
+        })),
+
+      resetUI: () => set({ ...INITIAL_UI_STATE }),
+    }),
+    {
+      // Zundo / temporal : on limite l'historique à ce qui est *sémantiquement*
+      // undoable. Tool et selectedId ne rentrent pas (gestes éphémères).
+      // `hierarchy` rentre car le toggle visibility est une action cataloguée
+      // comme édition utilisateur.
+      partialize: (state) => ({
+        currentScene: state.currentScene,
+        layoutPreset: state.layoutPreset,
+        hierarchy: state.hierarchy,
+      }),
+      limit: 50,
+      // Par défaut zundo compare par référence (`Object.is`), mais partialize
+      // retourne un nouvel objet à chaque `set()` → un changement de `tool`
+      // créerait un snapshot vide. On utilise donc une égalité "shallow" sur
+      // les 3 champs partialized : un snapshot n'est ajouté que si une des
+      // valeurs trackées change réellement.
+      equality: (pastState, currentState) =>
+        pastState.currentScene === currentState.currentScene &&
+        pastState.layoutPreset === currentState.layoutPreset &&
+        pastState.hierarchy === currentState.hierarchy,
+    },
+  ),
+);
+
+/* ─────────────────────────── TEMPORAL HOOK ─────────────────────────── */
+
+/**
+ * Hook qui retourne l'état temporal (undo/redo) avec sélecteur fin : ne
+ * re-render que si pastStates.length ou futureStates.length change.
+ * Pratique pour greyer les boutons Undo/Redo sans abonner au store entier.
+ */
+export function useSceneEditorTemporal<T>(
+  selector: (state: TemporalState<Pick<SceneEditorState, "currentScene" | "layoutPreset" | "hierarchy">>) => T,
+): T {
+  return useStore(useSceneEditorStore.temporal, selector);
+}
+
+/* ─────────────────────────── SELECTORS ─────────────────────────── */
+
+export const selectCurrentScene = (s: SceneEditorState): string => s.currentScene;
+export const selectSelectedId = (s: SceneEditorState): string | null => s.selectedId;
+export const selectTool = (s: SceneEditorState): Tool => s.tool;
+export const selectLayoutPreset = (s: SceneEditorState): LayoutPreset => s.layoutPreset;
+
+export const selectScenes = (s: SceneEditorState): SceneSummary[] => s.scenes;
+export const selectHierarchy = (s: SceneEditorState): TreeNodeData[] => s.hierarchy;
+export const selectInspectorById = (s: SceneEditorState): Record<string, InspectorData> =>
+  s.inspectorById;
+/**
+ * Selector pratique : retourne l'InspectorData du node sélectionné, ou
+ * `null` si rien n'est sélectionné ou si le node n'a pas d'inspectable.
+ */
+export const selectCurrentInspector = (s: SceneEditorState): InspectorData | null => {
+  if (!s.selectedId) return null;
+  return s.inspectorById[s.selectedId] ?? null;
+};
+export const selectAssets = (s: SceneEditorState): AssetItem[] => s.assets;
+export const selectPatterns = (s: SceneEditorState): PatternItem[] => s.patterns;
+export const selectAudioChannels = (s: SceneEditorState): AudioChannel[] => s.audioChannels;
+export const selectTimeline = (s: SceneEditorState): TimelineData => s.timeline;
