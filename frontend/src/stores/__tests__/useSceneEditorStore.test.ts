@@ -227,3 +227,62 @@ describe("useSceneEditorStore · temporal (zundo undo/redo)", () => {
     expect(pastLen).toBeLessThanOrEqual(50);
   });
 });
+
+/* ═════════════════ Phase D — WS collab state/actions ═════════════════ */
+
+describe("useSceneEditorStore · Phase D WS collab", () => {
+  it("initial state : peers vide + remoteDraftDeltas vide", () => {
+    const state = useSceneEditorStore.getState();
+    expect(state.peers).toEqual([]);
+    expect(state.remoteDraftDeltas).toEqual({});
+  });
+
+  it("setPeers remplace la liste complète", () => {
+    useSceneEditorStore.getState().setPeers(["alice", "bob"]);
+    expect(useSceneEditorStore.getState().peers).toEqual(["alice", "bob"]);
+    useSceneEditorStore.getState().setPeers(["carol"]);
+    expect(useSceneEditorStore.getState().peers).toEqual(["carol"]);
+  });
+
+  it("addPeer ajoute si absent, no-op si déjà présent", () => {
+    useSceneEditorStore.getState().addPeer("alice");
+    expect(useSceneEditorStore.getState().peers).toEqual(["alice"]);
+    useSceneEditorStore.getState().addPeer("alice");
+    expect(useSceneEditorStore.getState().peers).toEqual(["alice"]);
+    useSceneEditorStore.getState().addPeer("bob");
+    expect(useSceneEditorStore.getState().peers).toEqual(["alice", "bob"]);
+  });
+
+  it("removePeer retire si présent, no-op si absent", () => {
+    useSceneEditorStore.getState().setPeers(["alice", "bob", "carol"]);
+    useSceneEditorStore.getState().removePeer("bob");
+    expect(useSceneEditorStore.getState().peers).toEqual(["alice", "carol"]);
+    useSceneEditorStore.getState().removePeer("nobody");
+    expect(useSceneEditorStore.getState().peers).toEqual(["alice", "carol"]);
+  });
+
+  it("applyRemoteDraftUpdate shallow-merge dans remoteDraftDeltas", () => {
+    useSceneEditorStore.getState().applyRemoteDraftUpdate({ fov: 60 });
+    expect(useSceneEditorStore.getState().remoteDraftDeltas).toEqual({ fov: 60 });
+    useSceneEditorStore.getState().applyRemoteDraftUpdate({ avatar: { x: 1 } });
+    expect(useSceneEditorStore.getState().remoteDraftDeltas).toEqual({
+      fov: 60,
+      avatar: { x: 1 },
+    });
+    // Override d'une clé existante.
+    useSceneEditorStore.getState().applyRemoteDraftUpdate({ fov: 90 });
+    expect(useSceneEditorStore.getState().remoteDraftDeltas).toEqual({
+      fov: 90,
+      avatar: { x: 1 },
+    });
+  });
+
+  it("resetUI reset aussi peers et remoteDraftDeltas (state de session)", () => {
+    useSceneEditorStore.getState().setPeers(["alice", "bob"]);
+    useSceneEditorStore.getState().applyRemoteDraftUpdate({ fov: 60 });
+    useSceneEditorStore.getState().resetUI();
+    const state = useSceneEditorStore.getState();
+    expect(state.peers).toEqual([]);
+    expect(state.remoteDraftDeltas).toEqual({});
+  });
+});
