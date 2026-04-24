@@ -48,6 +48,7 @@ from .routes import (
     operator_voice_ws,
     operator_ws,
     registry_api,
+    scene_editor_api,
     visitor_ws,
 )
 
@@ -283,6 +284,7 @@ def create_app() -> FastAPI:
     app.include_router(internal_vip.router)  # /internal/vip/* — bridge vip_agent ↔ backend (Phase 1 Brique 1.2)
     app.include_router(registry_api.public_router)
     app.include_router(registry_api.admin_router)
+    app.include_router(scene_editor_api.router)  # /api/scene-editor/* — Phase C drafts/patterns/layouts/timeline
     app.include_router(hermes_state_api.router)
     app.include_router(visitor_ws.router)
     app.include_router(operator_ws.router)

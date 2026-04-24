@@ -5,9 +5,12 @@ from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import (
+    JSON,
     BigInteger,
     Boolean,
+    CheckConstraint,
     DateTime,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -18,6 +21,14 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+
+# Variantes dialect-aware : les tables Scene Editor (Phase C) s'exécutent aussi
+# bien sur Postgres (prod, integration tests) que SQLite (unit tests). JSONB
+# tombe sur JSON générique, UUID(as_uuid=False) tombe sur String(36).
+# Les anciennes tables (memory_facts, asset_registry, etc.) gardent leurs types
+# natifs PG — elles ne sont exercées que par l'integration suite.
+_JSONB_VARIANT = JSONB().with_variant(JSON(), "sqlite")
+_UUID_VARIANT = UUID(as_uuid=False).with_variant(String(36), "sqlite")
 
 
 class Base(DeclarativeBase):
@@ -166,11 +177,14 @@ class AssetRegistry(Base):
     """
     __tablename__ = "asset_registry"
 
-    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True)
+    # UUID stocke en texte (36 chars) cote PG, string 36 cote SQLite pour que
+    # la testsuite Phase C puisse instancier la table sans extension Postgres.
+    id: Mapped[str] = mapped_column(_UUID_VARIANT, primary_key=True)
     kind: Mapped[str] = mapped_column(String(32), nullable=False)
     slug: Mapped[str] = mapped_column(String(64), nullable=False)
     display_name: Mapped[str] = mapped_column(String(128), nullable=False)
-    payload: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    # JSONB natif cote PG (GIN index eligible), JSON generique cote SQLite.
+    payload: Mapped[dict] = mapped_column(_JSONB_VARIANT, nullable=False, default=dict)
     owner_username: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -181,4 +195,185 @@ class AssetRegistry(Base):
     __table_args__ = (
         UniqueConstraint("kind", "slug", name="uq_asset_registry_kind_slug"),
         Index("idx_asset_registry_kind_active", "kind", "is_active"),
+    )
+
+
+# ─── Scene Editor — Phase C ────────────────────────────────────────────────
+# 4 tables qui appuient l'éditeur Unity-style livré frontend Phases A/B :
+#   * `scene_drafts`   — historique versionné des payloads de scène avant
+#     publication dans `asset_registry` (kind='scene').
+#   * `scene_patterns` — patterns d'actions déclenchables par chat/hotkey.
+#   * `dock_layouts`   — layouts nommés du dock de l'éditeur (UI state).
+#   * `timeline_clips` — clips de timeline attachés à une scène publiée.
+#
+# Tous les writes exigent un opérateur authentifié (require_operator).
+# Le frontend consomme ces endpoints via le store Zustand (Phase B).
+
+
+class SceneDraft(Base):
+    """Version de travail d'une scène — historique append-only.
+
+    Un opérateur sauvegarde régulièrement le state de l'éditeur sans publier.
+    La version sert de rang (1, 2, 3…) permettant de lister/restorer une
+    révision antérieure. Publier = copier le payload dans `asset_registry`
+    (kind='scene') — fait côté endpoint admin_users/registry_api, pas ici.
+
+    Le `payload` est intentionnellement JSONB libre : le schéma exact est
+    défini par le frontend (ScenePayload TypeScript) et évolue indépendamment.
+    Validation souple côté Pydantic (dict), stricte côté frontend TS.
+    """
+    __tablename__ = "scene_drafts"
+
+    id: Mapped[str] = mapped_column(_UUID_VARIANT, primary_key=True)
+    scene_id: Mapped[str] = mapped_column(
+        _UUID_VARIANT,
+        ForeignKey("asset_registry.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    payload: Mapped[dict] = mapped_column(_JSONB_VARIANT, nullable=False, default=dict)
+    # Commentaire libre (ex: "rev stream intro", "fix camera angle"). Nullable
+    # parce qu'un auto-save peut légitimement ne pas avoir de commentaire.
+    comment: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    # FK nullable vers user_accounts.username : si l'opérateur est supprimé,
+    # on garde l'historique des drafts (pas de CASCADE). Nullable aussi pour
+    # les tests qui peuvent créer des drafts sans row user_accounts.
+    created_by: Mapped[Optional[str]] = mapped_column(
+        String(64),
+        ForeignKey("user_accounts.username", ondelete="SET NULL"),
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False,
+    )
+
+    scene: Mapped[AssetRegistry] = relationship("AssetRegistry")
+
+    __table_args__ = (
+        UniqueConstraint("scene_id", "version", name="uq_scene_drafts_scene_version"),
+        # Index dédié aux queries "dernière version de la scène X" — pattern
+        # très fréquent (bouton "restore last" dans l'éditeur).
+        Index("idx_scene_drafts_scene_created", "scene_id", "created_at"),
+    )
+
+
+class ScenePattern(Base):
+    """Pattern d'actions déclenchable par chat, hotkey ou commande manuelle.
+
+    Ex : pattern "wave" — trigger `!wave`, trigger_kind=chat, durée 2000ms,
+    actions = [{type: 'gesture', slug: 'wave'}, {type: 'tts', text: 'hey!'}].
+
+    Les patterns sont scoped à un opérateur (owner_username) : chaque streamer
+    maintient sa propre collection. Unique par (owner, name) pour éviter les
+    duplicats dans le panel patterns.
+    """
+    __tablename__ = "scene_patterns"
+
+    id: Mapped[str] = mapped_column(_UUID_VARIANT, primary_key=True)
+    name: Mapped[str] = mapped_column(String(80), nullable=False)
+    trigger: Mapped[str] = mapped_column(String(40), nullable=False)
+    # Enum : chat (mot-clé dans le chat), hotkey (raccourci clavier dans l'op
+    # UI), manual (clic dans le dock). Check constraint côté DB + validator
+    # Pydantic côté API.
+    trigger_kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    # Durée totale du pattern (0..300000ms = 5min max). 0 = instantané.
+    duration_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    actions: Mapped[list] = mapped_column(_JSONB_VARIANT, nullable=False, default=list)
+    owner_username: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("user_accounts.username", ondelete="CASCADE"),
+        nullable=False,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False,
+    )
+
+    __table_args__ = (
+        UniqueConstraint("owner_username", "name", name="uq_scene_patterns_owner_name"),
+        CheckConstraint(
+            "trigger_kind IN ('chat', 'hotkey', 'manual')",
+            name="ck_scene_patterns_trigger_kind",
+        ),
+        CheckConstraint(
+            "duration_ms >= 0 AND duration_ms <= 300000",
+            name="ck_scene_patterns_duration_range",
+        ),
+        Index("idx_scene_patterns_owner", "owner_username"),
+    )
+
+
+class DockLayout(Base):
+    """Layout nommé du dock de l'éditeur Unity-style — UI state persisté.
+
+    L'opérateur peut sauvegarder plusieurs arrangements (ex: "default",
+    "streaming-preset", "debug") et switcher entre eux. Le payload est opaque
+    côté backend (contrat défini par react-dockview côté frontend).
+
+    Unique par (owner, name) : deux opérateurs différents peuvent avoir un
+    layout "default" chacun, mais un même opérateur n'a qu'un "default".
+    Upsert natif via endpoint POST (pas besoin de PUT séparé).
+    """
+    __tablename__ = "dock_layouts"
+
+    id: Mapped[str] = mapped_column(_UUID_VARIANT, primary_key=True)
+    owner_username: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("user_accounts.username", ondelete="CASCADE"),
+        nullable=False,
+    )
+    name: Mapped[str] = mapped_column(String(40), nullable=False)
+    payload: Mapped[dict] = mapped_column(_JSONB_VARIANT, nullable=False, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(),
+        nullable=False,
+    )
+
+    __table_args__ = (
+        UniqueConstraint("owner_username", "name", name="uq_dock_layouts_owner_name"),
+    )
+
+
+class TimelineClip(Base):
+    """Clip de timeline attaché à une scène — Phase C minimal viable.
+
+    Une timeline scene-bound est composée de pistes (track_name), chaque
+    piste contient N clips avec `start_sec` / `end_sec`. Le frontend les rend
+    dans le DockTimeline panel. Label optionnel pour affichage humain.
+
+    Contrainte métier : `end_sec > start_sec` (durée positive). Validation
+    DB + Pydantic pour défense en profondeur.
+
+    Note : pas encore d'overlap-check entre clips d'une même track ici — ce
+    sera Phase D (règles de composition). Le backend accepte les overlaps et
+    laisse le frontend décider de la sémantique.
+    """
+    __tablename__ = "timeline_clips"
+
+    id: Mapped[str] = mapped_column(_UUID_VARIANT, primary_key=True)
+    scene_id: Mapped[str] = mapped_column(
+        _UUID_VARIANT,
+        ForeignKey("asset_registry.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    track_name: Mapped[str] = mapped_column(String(80), nullable=False)
+    start_sec: Mapped[float] = mapped_column(Float, nullable=False)
+    end_sec: Mapped[float] = mapped_column(Float, nullable=False)
+    label: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    created_by: Mapped[Optional[str]] = mapped_column(
+        String(64),
+        ForeignKey("user_accounts.username", ondelete="SET NULL"),
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False,
+    )
+
+    scene: Mapped[AssetRegistry] = relationship("AssetRegistry")
+
+    __table_args__ = (
+        CheckConstraint("end_sec > start_sec", name="ck_timeline_clips_end_gt_start"),
+        CheckConstraint("start_sec >= 0", name="ck_timeline_clips_start_non_negative"),
+        # Pattern d'accès dominant : toutes les clips d'une scène, triées par
+        # track puis par start. Couvre list + range queries.
+        Index("idx_timeline_clips_scene_track_start", "scene_id", "track_name", "start_sec"),
     )
