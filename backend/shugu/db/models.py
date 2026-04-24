@@ -235,12 +235,16 @@ class SceneDraft(Base):
     # Commentaire libre (ex: "rev stream intro", "fix camera angle"). Nullable
     # parce qu'un auto-save peut légitimement ne pas avoir de commentaire.
     comment: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
-    # FK nullable vers user_accounts.username : si l'opérateur est supprimé,
-    # on garde l'historique des drafts (pas de CASCADE). Nullable aussi pour
-    # les tests qui peuvent créer des drafts sans row user_accounts.
+    # Champ informationnel "qui a créé ce draft" — **pas de FK** vers
+    # `user_accounts.username`. Fix review Phase C C1 : l'opérateur principal
+    # (`settings.operator_username`, ex: "Spoukie") est authentifié via
+    # hash bcrypt côté `routes/auth.py` et n'est jamais inséré dans
+    # `user_accounts` (table réservée aux self-service members/VIPs). Une
+    # FK ici bloquerait tous les POST drafts en prod. On garde la string
+    # brute comme snapshot d'auteur ; Phase D pourra ajouter une vraie
+    # table `operators` si de l'intégrité référentielle devient nécessaire.
     created_by: Mapped[Optional[str]] = mapped_column(
         String(64),
-        ForeignKey("user_accounts.username", ondelete="SET NULL"),
         nullable=True,
     )
     created_at: Mapped[datetime] = mapped_column(
@@ -279,9 +283,12 @@ class ScenePattern(Base):
     # Durée totale du pattern (0..300000ms = 5min max). 0 = instantané.
     duration_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     actions: Mapped[list] = mapped_column(_JSONB_VARIANT, nullable=False, default=list)
+    # Propriétaire du pattern — **pas de FK** vers user_accounts (cf. note sur
+    # `SceneDraft.created_by` fix C1). String brute qui identifie l'opérateur
+    # créateur ; l'IDOR est bloqué au niveau du router (filter WHERE
+    # owner_username = current_user dans list/delete).
     owner_username: Mapped[str] = mapped_column(
         String(64),
-        ForeignKey("user_accounts.username", ondelete="CASCADE"),
         nullable=False,
     )
     created_at: Mapped[datetime] = mapped_column(
@@ -316,9 +323,9 @@ class DockLayout(Base):
     __tablename__ = "dock_layouts"
 
     id: Mapped[str] = mapped_column(_UUID_VARIANT, primary_key=True)
+    # Propriétaire du layout — **pas de FK** vers user_accounts (cf. fix C1).
     owner_username: Mapped[str] = mapped_column(
         String(64),
-        ForeignKey("user_accounts.username", ondelete="CASCADE"),
         nullable=False,
     )
     name: Mapped[str] = mapped_column(String(40), nullable=False)
@@ -359,9 +366,9 @@ class TimelineClip(Base):
     start_sec: Mapped[float] = mapped_column(Float, nullable=False)
     end_sec: Mapped[float] = mapped_column(Float, nullable=False)
     label: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    # Auteur du clip — **pas de FK** vers user_accounts (cf. fix C1).
     created_by: Mapped[Optional[str]] = mapped_column(
         String(64),
-        ForeignKey("user_accounts.username", ondelete="SET NULL"),
         nullable=True,
     )
     created_at: Mapped[datetime] = mapped_column(

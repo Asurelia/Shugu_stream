@@ -210,21 +210,22 @@ async def create_draft(
             version=next_version,
             payload=body.payload,
             comment=body.comment,
-            # created_by reference user_accounts(username) ; on set None si
-            # l'operateur n'est pas dans cette table (ex: compte admin hors
-            # self-service). Le SET NULL cote FK tolere ce cas.
+            # Snapshot de l'auteur (string brute, pas de FK — fix review C1).
             created_by=identity.username or None,
         )
         session.add(row)
         try:
             await session.flush()
         except IntegrityError as e:
-            # Race : un autre POST a pris la version entre-temps. 409 signale
-            # au client qu'il peut retry.
-            raise HTTPException(
-                status_code=409,
-                detail="version conflict — retry the request",
-            ) from e
+            # Fix review H1/H2 : discrimine via `_describe_integrity_error`
+            # qui parse le nom de contrainte. Les UniqueConstraint sur
+            # (scene_id, version) = 409 race ; les autres (qui n'arrivent
+            # que si le schema évolue mal) = 400 avec message générique.
+            detail = _describe_integrity_error(e)
+            # Race sur version → 409, tout le reste (FK scene_id manquant,
+            # future check constraint) = 400.
+            code = 409 if "version already exists" in detail else 400
+            raise HTTPException(status_code=code, detail=detail) from e
         await session.refresh(row)
         out = _draft_to_out(row)
 
@@ -329,11 +330,12 @@ async def create_pattern(
         try:
             await session.flush()
         except IntegrityError as e:
-            # Race condition — UniqueConstraint DB
-            raise HTTPException(
-                status_code=409,
-                detail="pattern name race condition — retry",
-            ) from e
+            # Fix H1/H2 : message précis via helper. UniqueConstraint violée
+            # pendant la race = 409, CheckConstraint (trigger_kind/duration
+            # qui aurait contourné Pydantic) = 400.
+            detail = _describe_integrity_error(e)
+            code = 409 if "already exists" in detail else 400
+            raise HTTPException(status_code=code, detail=detail) from e
         await session.refresh(row)
         out = _pattern_to_out(row)
 
@@ -438,12 +440,10 @@ async def upsert_layout(
         try:
             await session.flush()
         except IntegrityError as e:
-            # Race : deux POST simultanes avec le meme (owner, name). Le 2eme
-            # tombe ici — le client peut retry (idempotent).
-            raise HTTPException(
-                status_code=409,
-                detail="layout upsert race condition — retry",
-            ) from e
+            # Fix H1/H2 : race 409 vs autre violation 400, via helper.
+            detail = _describe_integrity_error(e)
+            code = 409 if "already exists" in detail else 400
+            raise HTTPException(status_code=code, detail=detail) from e
         await session.refresh(row)
         out = _layout_to_out(row)
 
@@ -593,17 +593,39 @@ def _describe_integrity_error(e: IntegrityError) -> str:
     """Extrait un message safe d'un IntegrityError.
 
     On ne renvoie JAMAIS le message SQL brut au client (peut fuiter du
-    schema). On se contente d'un label general — le log serveur a les
-    details complets.
+    schema). On discrimine via le **nom de la contrainte** (pattern
+    `ck_*`/`uq_*`/`fk_*`) pour un message factuel — fix reviews H1/H2.
+
+    Les labels remontés ici sont tous déjà publics (noms de colonnes
+    utilisés dans les schemas Pydantic exposés via OpenAPI).
     """
     msg = str(e.orig) if e.orig else str(e)
-    # Keywords qu'on peut exposer sans risque (deja public via l'API).
-    if "end_gt_start" in msg or "end_sec" in msg:
+    low = msg.lower()
+
+    # CheckConstraints d'abord (pattern `ck_*`).
+    if "ck_timeline_clips_end_gt_start" in low or "end_gt_start" in low:
         return "end_sec must be strictly greater than start_sec"
-    if "start_non_negative" in msg or "start_sec" in msg:
+    if "ck_timeline_clips_start_non_negative" in low or "start_non_negative" in low:
         return "start_sec must be non-negative"
-    if "foreign key" in msg.lower() or "scene_id" in msg:
+    if "ck_scene_patterns_trigger_kind" in low:
+        return "trigger_kind must be one of: chat, hotkey, manual"
+    if "ck_scene_patterns_duration_range" in low:
+        return "duration_ms must be between 0 and 300000"
+
+    # UniqueConstraints (pattern `uq_*`) — garantissent l'unicité logique.
+    if "uq_scene_drafts_scene_version" in low:
+        return "a draft with this version already exists for this scene"
+    if "uq_scene_patterns_owner_name" in low:
+        return "a pattern with this name already exists"
+    if "uq_dock_layouts_owner_name" in low:
+        return "a layout with this name already exists"
+
+    # ForeignKeyConstraints (pattern `fk_*`) — parse le nom pour nommer
+    # la colonne précise qui référence un id manquant.
+    if "fk_scene_drafts_scene" in low or "fk_timeline_clips_scene" in low:
         return "scene_id references a non-existent scene"
+
+    # Fallback ultime : message générique non-informatif (pas de leak).
     return "constraint violation"
 
 

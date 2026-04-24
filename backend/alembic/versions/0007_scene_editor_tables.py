@@ -80,11 +80,11 @@ def upgrade() -> None:
             ["scene_id"], ["asset_registry.id"],
             ondelete="CASCADE", name="fk_scene_drafts_scene",
         ),
-        # FK vers user_accounts(username) — unique mais non PK, legal.
-        sa.ForeignKeyConstraint(
-            ["created_by"], ["user_accounts.username"],
-            ondelete="SET NULL", name="fk_scene_drafts_created_by",
-        ),
+        # Fix review Phase C C1 : PAS de FK sur `created_by` vers
+        # `user_accounts.username`. L'opérateur principal (Spoukie,
+        # `settings.operator_username`) est authentifié hors user_accounts
+        # (bcrypt config-based) et ne figure jamais dans cette table. Une
+        # FK bloquerait tous les POST en prod. String brute informationnelle.
         sa.UniqueConstraint(
             "scene_id", "version",
             name="uq_scene_drafts_scene_version",
@@ -117,10 +117,9 @@ def upgrade() -> None:
             server_default=sa.text("now()"),
             nullable=False,
         ),
-        sa.ForeignKeyConstraint(
-            ["owner_username"], ["user_accounts.username"],
-            ondelete="CASCADE", name="fk_scene_patterns_owner",
-        ),
+        # Fix review Phase C C1 : pas de FK sur `owner_username` vers
+        # user_accounts (cf. scene_drafts). IDOR bloqué au niveau router
+        # (filter WHERE owner_username = current_user).
         sa.UniqueConstraint(
             "owner_username", "name",
             name="uq_scene_patterns_owner_name",
@@ -158,10 +157,7 @@ def upgrade() -> None:
             server_default=sa.text("now()"),
             nullable=False,
         ),
-        sa.ForeignKeyConstraint(
-            ["owner_username"], ["user_accounts.username"],
-            ondelete="CASCADE", name="fk_dock_layouts_owner",
-        ),
+        # Fix review Phase C C1 : pas de FK sur `owner_username` (cf. note).
         sa.UniqueConstraint(
             "owner_username", "name",
             name="uq_dock_layouts_owner_name",
@@ -192,10 +188,7 @@ def upgrade() -> None:
             ["scene_id"], ["asset_registry.id"],
             ondelete="CASCADE", name="fk_timeline_clips_scene",
         ),
-        sa.ForeignKeyConstraint(
-            ["created_by"], ["user_accounts.username"],
-            ondelete="SET NULL", name="fk_timeline_clips_created_by",
-        ),
+        # Fix review Phase C C1 : pas de FK sur `created_by` (cf. note).
         sa.CheckConstraint(
             "end_sec > start_sec",
             name="ck_timeline_clips_end_gt_start",
