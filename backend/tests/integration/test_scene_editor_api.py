@@ -42,7 +42,11 @@ from shugu.routes.scene_editor_api import scene_editor_router
 
 pytestmark = pytest.mark.integration
 
-TEST_OPERATOR_USERNAME = "integ_test_operator"
+# Fix CI : UserAccount.username = VARCHAR(32). Ancien préfixe
+# "integ_test_operator" (19 chars) + suffix "_integ_xxxxxxxx" (15 chars) =
+# 34 chars → StringDataRightTruncationError côté Postgres. Un préfixe court
+# laisse 28 chars pour le suffix unique.
+TEST_OPERATOR_USERNAME = "itop"
 
 
 def _dsn() -> str | None:
