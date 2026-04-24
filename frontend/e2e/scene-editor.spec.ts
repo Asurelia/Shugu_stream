@@ -13,16 +13,35 @@
  *
  * Aucun backend requis en Phase A : le scene editor affiche les mocks de
  * `mock-data.ts` tant que le store Zustand (Phase B) et les APIs (Phase C)
- * ne sont pas branchés. Les tests restent donc déterministes tant qu'on est
- * sur main non authentifié ; l'auth operator sera stubbée à partir de
- * Phase C quand les drafts deviendront persistables.
+ * ne sont pas branchés. L'auth est stubbée côté test via `page.route()`
+ * pour que `AdminAuthGuard` (introduit Phase B, nit M2 du review Phase A)
+ * valide l'operator sans requérir le backend réel.
  */
 
 import { test, expect } from "@playwright/test";
 
 const EDITOR_URL = "/shugu/admin/scene-editor";
 
+/**
+ * Intercepte `/auth/me` pour simuler un operator connecté. Sans cette stub,
+ * `AdminAuthGuard` détecterait un 401/proxy fail et redirigerait vers
+ * `/login`, empêchant tout test E2E du scene editor.
+ */
+async function stubAuth(page: import("@playwright/test").Page, username = "shugu") {
+  await page.route("**/auth/me", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ username }),
+    });
+  });
+}
+
 test.describe("Scene Editor · Phase A smoke", () => {
+  test.beforeEach(async ({ page }) => {
+    await stubAuth(page);
+  });
+
   test("page loads fullscreen with menubar + 3 docks (viewport / right / bottom)", async ({ page }) => {
     await page.goto(EDITOR_URL);
 

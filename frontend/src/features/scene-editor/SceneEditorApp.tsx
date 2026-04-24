@@ -39,9 +39,7 @@ import {
   Splitter,
   StatusBar,
   TBBtn,
-  TabStrip,
   type IconName,
-  type TabDef,
 } from "./primitives";
 import {
   GameViewPanel,
@@ -58,8 +56,21 @@ import {
   StreamPanel,
   TimelinePanel,
 } from "./panels-aux";
-import { MOCK_SCENES } from "./mock-data";
 import { HotkeyToast, useHotkeys, useToast, type Tool } from "./hotkeys";
+// Phase B : le shell consomme maintenant les stores Zustand. useState locaux
+// supprimés au profit de selectors (plus testables, permettent undo/redo
+// global via zundo, et persistence du dock layout en localStorage).
+import {
+  useSceneEditorStore,
+  selectCurrentScene,
+  selectSelectedId,
+  selectTool,
+  selectLayoutPreset,
+  selectScenes,
+  LAYOUT_PRESETS,
+  type LayoutPreset,
+} from "@/stores/useSceneEditorStore";
+import { useDockLayoutStore } from "@/stores/useDockLayoutStore";
 
 /* ─────────────────────────── MENU DEFINITION ─────────────────────────── */
 
@@ -157,13 +168,11 @@ const HOTKEY_PANELS: Record<number, PanelKey> = {
 
 /* ─────────────────────────── DOCK LAYOUT ─────────────────────────── */
 
-type DockLayout = Record<DockId, { tabs: PanelKey[]; active: PanelKey }>;
-
-const DEFAULT_LAYOUT: DockLayout = {
-  viewport: { tabs: ["scene", "live"], active: "scene" },
-  right:    { tabs: ["inspector", "effects", "stream", "perf"], active: "inspector" },
-  bottom:   { tabs: ["assets", "timeline", "patterns", "mixer"], active: "assets" },
-};
+// Phase B (fix L-1 review) : le type `DockLayout` et les defaults vivaient
+// en double ici et dans `useDockLayoutStore`. On tire désormais depuis le
+// store pour éviter une éventuelle dérive silencieuse (si un panel est
+// ajouté côté store sans toucher à cette déclaration).
+import type { DockLayout } from "@/stores/useDockLayoutStore";
 
 /* ─────────────────────────── MENUBAR ─────────────────────────── */
 
@@ -304,27 +313,86 @@ function popOutPanel(panelKey: string, title: string): Window | null {
     "width=520,height=640,menubar=no,toolbar=no,location=no,status=no",
   );
   if (!w) return null;
-  w.document.title = `Shugu · ${title}`;
-  const styles = [...document.querySelectorAll("link[rel=stylesheet], style")]
-    .map((el) => el.outerHTML)
-    .join("\n");
-  w.document.body.innerHTML = `
-    <style>body{margin:0;background:#05050a;color:#f4ecff;}</style>
-    ${styles}
-    <div class="ide-root" style="height:100vh;width:100vw;">
-      <div class="ide-menubar" style="height:28px">
-        <div class="ide-menubar-brand">
-          <div class="mark">S</div>
-          <span style="font-size:11px">${title}</span>
-        </div>
-        <div class="ide-menubar-spacer"></div>
-        <div class="ide-menubar-status"><span>Detached window</span></div>
-      </div>
-      <div style="flex:1;display:flex;padding:8px;min-height:0;">
-        <div id="popout-root" style="flex:1;"></div>
-      </div>
-    </div>
-  `;
+
+  // Note Phase B (fix nit L1 review Phase A) : on construit le shell popout
+  // via DOM createElement + textContent plutôt que innerHTML pour neutraliser
+  // toute possibilité d'injection via `title`. Le design bundle utilisait
+  // innerHTML avec interpolation directe — acceptable car les call sites
+  // passent des chaînes statiques aujourd'hui, mais Phase D introduira des
+  // noms de scène user-controlled dans ce chemin. Les chaînes "styles"
+  // viennent du document parent (trusted, statiques au build Next) donc on
+  // les clone via `cloneNode(true)` qui préserve la structure sans parsing.
+  const doc = w.document;
+  doc.title = `Shugu · ${title}`;
+
+  // Wipe any pre-existing body content for idempotence (re-popping out the
+  // same panel name réutilise la même fenêtre par window.open convention).
+  while (doc.body.firstChild) doc.body.removeChild(doc.body.firstChild);
+
+  // Phase B (fix L-2 review) : les feuilles de style sont clonées dans
+  // `<head>` pour éviter un FOUC et respecter la sémantique HTML. Phase A
+  // les mettait dans `<body>` via innerHTML — non-bloquant mais théoriquement
+  // render-blocking hors head selon le user-agent.
+  const baseStyle = doc.createElement("style");
+  baseStyle.textContent = "body{margin:0;background:#05050a;color:#f4ecff;}";
+  doc.head.appendChild(baseStyle);
+
+  // Clone les feuilles de style du document parent pour que les classes
+  // `.ide-*` rendent identiquement dans la popup.
+  const parentStyles = document.querySelectorAll("link[rel=stylesheet], style");
+  parentStyles.forEach((el) => {
+    doc.head.appendChild(el.cloneNode(true));
+  });
+
+  // Root container
+  const root = doc.createElement("div");
+  root.className = "ide-root";
+  root.style.cssText = "height:100vh;width:100vw;";
+
+  // Menubar
+  const menubar = doc.createElement("div");
+  menubar.className = "ide-menubar";
+  menubar.style.height = "28px";
+
+  const brand = doc.createElement("div");
+  brand.className = "ide-menubar-brand";
+  const mark = doc.createElement("div");
+  mark.className = "mark";
+  mark.textContent = "S";
+  brand.appendChild(mark);
+  const titleSpan = doc.createElement("span");
+  titleSpan.style.fontSize = "11px";
+  // textContent = escape natif → aucun risque XSS même si `title` contient
+  // du HTML ou des guillemets. C'est la substance du fix L1.
+  titleSpan.textContent = title;
+  brand.appendChild(titleSpan);
+  menubar.appendChild(brand);
+
+  const spacer = doc.createElement("div");
+  spacer.className = "ide-menubar-spacer";
+  menubar.appendChild(spacer);
+
+  const status = doc.createElement("div");
+  status.className = "ide-menubar-status";
+  const statusSpan = doc.createElement("span");
+  statusSpan.textContent = "Detached window";
+  status.appendChild(statusSpan);
+  menubar.appendChild(status);
+
+  root.appendChild(menubar);
+
+  // Body area avec le popout-root que les consumers React peuvent cibler
+  // plus tard (Phase G — actuellement pas utilisé mais préservé pour compat).
+  const bodyWrap = doc.createElement("div");
+  bodyWrap.style.cssText = "flex:1;display:flex;padding:8px;min-height:0;";
+  const popoutRoot = doc.createElement("div");
+  popoutRoot.id = "popout-root";
+  popoutRoot.style.flex = "1";
+  bodyWrap.appendChild(popoutRoot);
+  root.appendChild(bodyWrap);
+
+  doc.body.appendChild(root);
+
   return w;
 }
 
@@ -530,14 +598,65 @@ export type SceneEditorAppProps = {
 };
 
 export function SceneEditorApp({ onExit }: SceneEditorAppProps) {
-  const [selectedId, setSelectedId] = useState<string | null>("shugu");
-  const [tool, setTool] = useState<Tool>("move");
-  const [layoutPreset, setLayoutPreset] = useState("Streaming");
-  const [currentScene] = useState("s2");
-  const [leftW, setLeftW] = useState(240);
-  const [rightW, setRightW] = useState(320);
-  const [bottomH, setBottomH] = useState(260);
-  const [dockLayout, setDockLayout] = useState<DockLayout>(DEFAULT_LAYOUT);
+  // Phase B : UI state tiré depuis `useSceneEditorStore`. Chaque selector
+  // est scoped au champ strictement nécessaire pour ne re-render que quand
+  // ce champ change (évite que le shell complet re-render quand l'utilisateur
+  // bouge l'avatar par exemple).
+  const selectedId = useSceneEditorStore(selectSelectedId);
+  const setSelectedId = useSceneEditorStore((s) => s.setSelectedId);
+  const tool = useSceneEditorStore(selectTool);
+  const setTool = useSceneEditorStore((s) => s.setTool);
+  const layoutPreset = useSceneEditorStore(selectLayoutPreset);
+  const setLayoutPresetRaw = useSceneEditorStore((s) => s.setLayoutPreset);
+  const currentScene = useSceneEditorStore(selectCurrentScene);
+
+  // Phase B (fix H-1 review) : `LayoutPreset` est aligné verbatim sur les 4
+  // options du Select MainToolbar ("Streaming" | "Editing" | "Performance"
+  // | "Custom…"), donc le wrapper se contente de vérifier que la valeur
+  // appartient bien à l'union avant de la pousser au store. En dev on warn
+  // pour détecter un éventuel désalignement futur.
+  const setLayoutPreset = useCallback(
+    (name: string) => {
+      if (LAYOUT_PRESETS.includes(name as LayoutPreset)) {
+        setLayoutPresetRaw(name as LayoutPreset);
+      } else if (process.env.NODE_ENV !== "production") {
+        console.warn(
+          `[SceneEditor] Ignoring unknown layout preset "${name}". ` +
+            `Expected one of: ${LAYOUT_PRESETS.join(", ")}.`,
+        );
+      }
+    },
+    [setLayoutPresetRaw],
+  );
+
+  // Phase B : dock layout + splitter widths vivent dans useDockLayoutStore
+  // (persist localStorage). Pour préserver la signature des callbacks
+  // existants (port verbatim), on expose des setters qui appellent les
+  // actions du store.
+  const dockLayout = useDockLayoutStore((s) => s.dockLayout);
+  const setDockLayoutRaw = useDockLayoutStore((s) => s.setDockLayout);
+  const leftW = useDockLayoutStore((s) => s.leftW);
+  const rightW = useDockLayoutStore((s) => s.rightW);
+  const bottomH = useDockLayoutStore((s) => s.bottomH);
+  const adjustLeftW = useDockLayoutStore((s) => s.adjustLeftW);
+  const adjustRightW = useDockLayoutStore((s) => s.adjustRightW);
+  const adjustBottomH = useDockLayoutStore((s) => s.adjustBottomH);
+
+  // Wrapper compatible avec l'API `setDockLayout` du design (accepte valeur
+  // ou updater). Permet à `Dock` et `selectPanel` de continuer à appeler
+  // `setDockLayout((prev) => ...)` sans changement.
+  const setDockLayout = useCallback(
+    (next: DockLayout | ((prev: DockLayout) => DockLayout)) => {
+      setDockLayoutRaw(next);
+    },
+    [setDockLayoutRaw],
+  );
+
+  // Note Phase B : les splitter width setters à l'ancienne (setLeftW /
+  // setRightW / setBottomH) ne sont plus nécessaires car les callbacks des
+  // Splitters utilisent maintenant directement `adjustLeftW/Right/Bottom`
+  // (clamp min/max centralisé dans le store). Les valeurs brutes restent
+  // lisibles via les selectors `leftW`, `rightW`, `bottomH`.
 
   // Drag payload shared across docks + assets
   const [dragPayload, setDragPayload] = useState<DragPayload | null>(null);
@@ -573,13 +692,17 @@ export function SceneEditorApp({ onExit }: SceneEditorAppProps) {
         return { ...prev, [dockId]: { ...prev[dockId], active: key } };
       });
     },
-    [showToast],
+    [showToast, setDockLayout],
   );
 
   useHotkeys({
     setTool,
-    undo:          () => {},
-    redo:          () => {},
+    // Phase B : branchage zundo sur les hotkeys ⌘Z / ⌘⇧Z. Le temporal store
+    // suit `currentScene`, `layoutPreset`, `hierarchy` (cf. partialize dans
+    // useSceneEditorStore). Les phases ultérieures élargiront le scope aux
+    // vrais edits (avatar position, camera FOV, etc.).
+    undo:          () => useSceneEditorStore.temporal.getState().undo(),
+    redo:          () => useSceneEditorStore.temporal.getState().redo(),
     duplicate:     () => {},
     save:          () => {},
     deleteSelected: () => setSelectedId(null),
@@ -590,14 +713,24 @@ export function SceneEditorApp({ onExit }: SceneEditorAppProps) {
     toast:          showToast,
   });
 
-  const sceneName = MOCK_SCENES.find((s) => s.id === currentScene)?.name ?? "—";
+  // Phase B (fix M-1 review) : le status bar tire la liste des scènes depuis
+  // le store au lieu d'importer `MOCK_SCENES` directement, pour qu'un futur
+  // `setScenes()` (Phase C quand on plug `/api/registry/scene`) propage
+  // automatiquement au label.
+  const scenes = useSceneEditorStore(selectScenes);
+  const sceneName = scenes.find((s) => s.id === currentScene)?.name ?? "—";
 
   return (
     <DragDropContext.Provider value={dndCtx}>
       <CtxMenuProvider>
         <div className="ide-root">
           <Menubar onExit={onExit} />
-          <MainToolbar tool={tool} setTool={setTool} layout={layoutPreset} setLayout={setLayoutPreset} />
+          <MainToolbar
+            tool={tool}
+            setTool={setTool}
+            layout={layoutPreset}
+            setLayout={setLayoutPreset}
+          />
 
           <div className="ide-workspace">
             <div className="ide-dock" style={{ flex: 1 }}>
@@ -610,7 +743,7 @@ export function SceneEditorApp({ onExit }: SceneEditorAppProps) {
               </div>
               <Splitter
                 orientation="horizontal"
-                onResize={(d) => setLeftW((w) => Math.max(180, Math.min(400, w + d)))}
+                onResize={(d) => adjustLeftW(d)}
               />
 
               <div style={{ flex: 1, display: "flex", minWidth: 0 }}>
@@ -628,7 +761,7 @@ export function SceneEditorApp({ onExit }: SceneEditorAppProps) {
 
               <Splitter
                 orientation="horizontal"
-                onResize={(d) => setRightW((w) => Math.max(260, Math.min(460, w - d)))}
+                onResize={(d) => adjustRightW(d)}
               />
               <div style={{ width: rightW, display: "flex", flexShrink: 0 }}>
                 <Dock
@@ -646,7 +779,7 @@ export function SceneEditorApp({ onExit }: SceneEditorAppProps) {
 
             <Splitter
               orientation="vertical"
-              onResize={(d) => setBottomH((h) => Math.max(160, Math.min(500, h - d)))}
+              onResize={(d) => adjustBottomH(d)}
             />
 
             <div style={{ height: bottomH, display: "flex", flexShrink: 0 }}>

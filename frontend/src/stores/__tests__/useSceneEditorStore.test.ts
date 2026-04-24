@@ -1,0 +1,229 @@
+/**
+ * Tests unit — `useSceneEditorStore`.
+ *
+ * Couvre :
+ *   - state initial (UI defaults + data seeded from mocks)
+ *   - UI actions : setTool, setSelectedId, setCurrentScene, setLayoutPreset
+ *   - toggleNodeVisibility / toggleNodeLock (mutation immuable de l'arbre)
+ *   - selectCurrentInspector (lookup par selectedId)
+ *   - temporal (zundo) : undo/redo suivent currentScene / layoutPreset /
+ *     hierarchy, IGNORENT tool / selectedId (éphémères)
+ *   - limit temporal à 50 snapshots
+ */
+
+import { beforeEach, describe, expect, it } from "vitest";
+import {
+  useSceneEditorStore,
+  selectCurrentInspector,
+} from "../useSceneEditorStore";
+
+beforeEach(() => {
+  useSceneEditorStore.getState().resetUI();
+  useSceneEditorStore.temporal.getState().clear();
+});
+
+describe("useSceneEditorStore · initial state", () => {
+  it("expose les UI defaults attendus (s2 / shugu / move / Streaming)", () => {
+    const state = useSceneEditorStore.getState();
+    expect(state.currentScene).toBe("s2");
+    expect(state.selectedId).toBe("shugu");
+    expect(state.tool).toBe("move");
+    // Phase B fix H-1 : aligné verbatim sur les options du Select toolbar.
+    expect(state.layoutPreset).toBe("Streaming");
+  });
+
+  it("seeds les data depuis les MOCK_* de mock-data.ts", () => {
+    const state = useSceneEditorStore.getState();
+    expect(state.scenes.length).toBeGreaterThanOrEqual(5);
+    expect(state.assets.length).toBeGreaterThanOrEqual(10);
+    expect(state.patterns.length).toBeGreaterThanOrEqual(4);
+    expect(state.audioChannels.length).toBeGreaterThanOrEqual(4);
+    expect(state.timeline.duration).toBeGreaterThan(0);
+    expect(state.timeline.tracks.length).toBeGreaterThan(0);
+    // Hierarchy a un root "scene" avec des children.
+    expect(state.hierarchy[0]?.id).toBe("scene");
+    expect(state.hierarchy[0]?.children?.length).toBeGreaterThan(0);
+  });
+
+  it("inspectorById est un map, pas un objet plat", () => {
+    const state = useSceneEditorStore.getState();
+    expect(state.inspectorById).toBeTypeOf("object");
+    expect(state.inspectorById.shugu).toBeDefined();
+    expect(state.inspectorById.shugu.name).toBe("Shugu (VRM)");
+  });
+});
+
+describe("useSceneEditorStore · UI actions", () => {
+  it("setTool change l'outil actif", () => {
+    useSceneEditorStore.getState().setTool("rotate");
+    expect(useSceneEditorStore.getState().tool).toBe("rotate");
+    useSceneEditorStore.getState().setTool("scale");
+    expect(useSceneEditorStore.getState().tool).toBe("scale");
+  });
+
+  it("setSelectedId accepte string et null", () => {
+    useSceneEditorStore.getState().setSelectedId("aura");
+    expect(useSceneEditorStore.getState().selectedId).toBe("aura");
+    useSceneEditorStore.getState().setSelectedId(null);
+    expect(useSceneEditorStore.getState().selectedId).toBeNull();
+  });
+
+  it("setCurrentScene change la scène active", () => {
+    useSceneEditorStore.getState().setCurrentScene("s3");
+    expect(useSceneEditorStore.getState().currentScene).toBe("s3");
+  });
+
+  it("setLayoutPreset accepte les 4 valeurs de l'enum (Streaming/Editing/Performance/Custom…)", () => {
+    useSceneEditorStore.getState().setLayoutPreset("Editing");
+    expect(useSceneEditorStore.getState().layoutPreset).toBe("Editing");
+    useSceneEditorStore.getState().setLayoutPreset("Performance");
+    expect(useSceneEditorStore.getState().layoutPreset).toBe("Performance");
+    useSceneEditorStore.getState().setLayoutPreset("Custom…");
+    expect(useSceneEditorStore.getState().layoutPreset).toBe("Custom…");
+    useSceneEditorStore.getState().setLayoutPreset("Streaming");
+    expect(useSceneEditorStore.getState().layoutPreset).toBe("Streaming");
+  });
+
+  it("resetUI restaure TOUS les champs UI (pas les data)", () => {
+    useSceneEditorStore.getState().setTool("rotate");
+    useSceneEditorStore.getState().setSelectedId("aura");
+    useSceneEditorStore.getState().setCurrentScene("s5");
+    useSceneEditorStore.getState().setLayoutPreset("Editing");
+
+    useSceneEditorStore.getState().resetUI();
+
+    const state = useSceneEditorStore.getState();
+    expect(state.tool).toBe("move");
+    expect(state.selectedId).toBe("shugu");
+    expect(state.currentScene).toBe("s2");
+    expect(state.layoutPreset).toBe("Streaming");
+    // Data n'est PAS reset (les MOCK_* restent en place).
+    expect(state.assets.length).toBeGreaterThanOrEqual(10);
+  });
+});
+
+describe("useSceneEditorStore · hierarchy toggles", () => {
+  it("toggleNodeVisibility flip le flag et préserve la référence des siblings", () => {
+    const before = useSceneEditorStore.getState().hierarchy;
+    const rootBefore = before[0];
+    const shuguBefore = rootBefore.children?.find((c) => c.id === "group-stage")?.children?.find(
+      (c) => c.id === "shugu",
+    );
+    expect(shuguBefore?.visible).toBe(true);
+
+    useSceneEditorStore.getState().toggleNodeVisibility("shugu");
+
+    const after = useSceneEditorStore.getState().hierarchy;
+    const shuguAfter = after[0].children?.find((c) => c.id === "group-stage")?.children?.find(
+      (c) => c.id === "shugu",
+    );
+    expect(shuguAfter?.visible).toBe(false);
+
+    // Re-flip pour remettre dans l'état initial.
+    useSceneEditorStore.getState().toggleNodeVisibility("shugu");
+    const final = useSceneEditorStore.getState().hierarchy;
+    const shuguFinal = final[0].children?.find((c) => c.id === "group-stage")?.children?.find(
+      (c) => c.id === "shugu",
+    );
+    expect(shuguFinal?.visible).toBe(true);
+  });
+
+  it("toggleNodeLock flip lock sans toucher à visibility", () => {
+    useSceneEditorStore.getState().toggleNodeLock("shugu");
+    const after = useSceneEditorStore.getState().hierarchy;
+    const shugu = after[0].children?.find((c) => c.id === "group-stage")?.children?.find(
+      (c) => c.id === "shugu",
+    );
+    expect(shugu?.locked).toBe(true);
+    expect(shugu?.visible).toBe(true); // intact
+  });
+
+  it("toggleNodeVisibility sur un id inexistant est un no-op", () => {
+    const before = useSceneEditorStore.getState().hierarchy;
+    useSceneEditorStore.getState().toggleNodeVisibility("nonexistent-id-xyz");
+    const after = useSceneEditorStore.getState().hierarchy;
+    // Référence identique = aucune mutation profonde inutile.
+    expect(after).toBe(before);
+  });
+});
+
+describe("useSceneEditorStore · selectCurrentInspector", () => {
+  it("retourne null si rien n'est sélectionné", () => {
+    useSceneEditorStore.getState().setSelectedId(null);
+    expect(selectCurrentInspector(useSceneEditorStore.getState())).toBeNull();
+  });
+
+  it("retourne l'inspector data du node sélectionné", () => {
+    useSceneEditorStore.getState().setSelectedId("shugu");
+    const inspector = selectCurrentInspector(useSceneEditorStore.getState());
+    expect(inspector).not.toBeNull();
+    expect(inspector?.name).toBe("Shugu (VRM)");
+  });
+
+  it("retourne null pour un node inexistant dans inspectorById", () => {
+    useSceneEditorStore.getState().setSelectedId("ghost-id");
+    expect(selectCurrentInspector(useSceneEditorStore.getState())).toBeNull();
+  });
+});
+
+describe("useSceneEditorStore · temporal (zundo undo/redo)", () => {
+  it("undo restaure la currentScene précédente", () => {
+    // Initial: s2
+    useSceneEditorStore.getState().setCurrentScene("s3");
+    useSceneEditorStore.getState().setCurrentScene("s5");
+    expect(useSceneEditorStore.getState().currentScene).toBe("s5");
+
+    useSceneEditorStore.temporal.getState().undo();
+    expect(useSceneEditorStore.getState().currentScene).toBe("s3");
+
+    useSceneEditorStore.temporal.getState().undo();
+    expect(useSceneEditorStore.getState().currentScene).toBe("s2");
+  });
+
+  it("redo re-applique un undo", () => {
+    useSceneEditorStore.getState().setCurrentScene("s3");
+    useSceneEditorStore.temporal.getState().undo();
+    expect(useSceneEditorStore.getState().currentScene).toBe("s2");
+
+    useSceneEditorStore.temporal.getState().redo();
+    expect(useSceneEditorStore.getState().currentScene).toBe("s3");
+  });
+
+  it("tool change ne génère PAS de snapshot undoable", () => {
+    useSceneEditorStore.getState().setTool("rotate");
+    useSceneEditorStore.getState().setTool("scale");
+    // Rien dans le passé : tool n'est pas dans le partialize.
+    expect(useSceneEditorStore.temporal.getState().pastStates.length).toBe(0);
+  });
+
+  it("selectedId change ne génère PAS de snapshot undoable", () => {
+    useSceneEditorStore.getState().setSelectedId("aura");
+    useSceneEditorStore.getState().setSelectedId(null);
+    expect(useSceneEditorStore.temporal.getState().pastStates.length).toBe(0);
+  });
+
+  it("toggleNodeVisibility GÉNÈRE un snapshot undoable", () => {
+    const beforeLen = useSceneEditorStore.temporal.getState().pastStates.length;
+    useSceneEditorStore.getState().toggleNodeVisibility("shugu");
+    const afterLen = useSceneEditorStore.temporal.getState().pastStates.length;
+    expect(afterLen).toBe(beforeLen + 1);
+
+    // Undo restaure la visibilité.
+    useSceneEditorStore.temporal.getState().undo();
+    const hierarchy = useSceneEditorStore.getState().hierarchy;
+    const shugu = hierarchy[0].children?.find((c) => c.id === "group-stage")?.children?.find(
+      (c) => c.id === "shugu",
+    );
+    expect(shugu?.visible).toBe(true);
+  });
+
+  it("historique limité à 50 snapshots (pas de fuite mémoire infinie)", () => {
+    // On pousse 60 changements de scène consécutifs.
+    for (let i = 0; i < 60; i++) {
+      useSceneEditorStore.getState().setCurrentScene(`s${i}`);
+    }
+    // Le passé ne dépasse pas 50.
+    const pastLen = useSceneEditorStore.temporal.getState().pastStates.length;
+    expect(pastLen).toBeLessThanOrEqual(50);
+  });
+});

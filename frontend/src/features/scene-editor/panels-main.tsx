@@ -26,11 +26,16 @@ import {
   type IconName,
   type TreeNodeData,
 } from "./primitives";
+import { type InspectorData } from "./mock-data";
+// Phase B : HierarchyPanel et InspectorPanel consomment désormais le store
+// Zustand `useSceneEditorStore` au lieu des MOCK_* directs. Les données
+// mockées restent dans `mock-data.ts` en seed initial du store, donc aucune
+// régression visuelle vs Phase A (mêmes avatars, même scene active).
 import {
-  MOCK_HIERARCHY,
-  MOCK_INSPECTOR,
-  type InspectorData,
-} from "./mock-data";
+  useSceneEditorStore,
+  selectHierarchy,
+  selectCurrentInspector,
+} from "@/stores/useSceneEditorStore";
 
 /* ═══════════════════════════════ SCENE VIEW ═══════════════════════════════ */
 
@@ -439,20 +444,14 @@ type HierarchyProps = {
 };
 
 export function HierarchyPanel({ selectedId, onSelect, onPopout }: HierarchyProps) {
-  const [nodes, setNodes] = useState<TreeNodeData[]>(MOCK_HIERARCHY);
+  // Phase B : l'arbre vit dans le store et les toggles passent par des actions
+  // du store. Ça débloque l'undo/redo ⌘Z sur ces gestes (partialize inclut
+  // `hierarchy` dans le temporal snapshot), et ça prépare Phase D où l'arbre
+  // sera synchronisé cross-operator via WebSocket.
+  const nodes = useSceneEditorStore(selectHierarchy);
+  const toggleVisible = useSceneEditorStore((s) => s.toggleNodeVisibility);
+  const toggleLock = useSceneEditorStore((s) => s.toggleNodeLock);
   const ctxMenu = useCtxMenu();
-
-  const walkUpdate = (arr: TreeNodeData[], id: string, upd: (n: TreeNodeData) => TreeNodeData): TreeNodeData[] =>
-    arr.map((n) =>
-      n.id === id
-        ? upd(n)
-        : { ...n, children: n.children ? walkUpdate(n.children, id, upd) : undefined },
-    );
-
-  const toggleVisible = (id: string) =>
-    setNodes(walkUpdate(nodes, id, (n) => ({ ...n, visible: n.visible === false })));
-  const toggleLock = (id: string) =>
-    setNodes(walkUpdate(nodes, id, (n) => ({ ...n, locked: !n.locked })));
 
   const handleCtx = (node: TreeNodeData, e: React.MouseEvent) => {
     ctxMenu({
@@ -503,8 +502,14 @@ export function HierarchyPanel({ selectedId, onSelect, onPopout }: HierarchyProp
 
 type InspectorProps = { selectedId?: string | null; onPopout?: () => void };
 
-export function InspectorPanel({ selectedId, onPopout }: InspectorProps) {
-  const data: InspectorData | undefined = selectedId ? MOCK_INSPECTOR[selectedId] : undefined;
+export function InspectorPanel({ selectedId: _selectedId, onPopout }: InspectorProps) {
+  // Phase B : l'Inspector tire son contenu depuis le selector
+  // `selectCurrentInspector` qui combine `selectedId` + `inspectorById`. Le
+  // prop `selectedId` reste accepté pour compat API mais est ignoré au
+  // profit du store — les deux sont forcément égaux tant que `onSelect`
+  // utilise `useSceneEditorStore.setSelectedId` (ce qui est le cas depuis
+  // SceneEditorApp refactor).
+  const data: InspectorData | null = useSceneEditorStore(selectCurrentInspector);
 
   if (!data) {
     return (
