@@ -319,6 +319,10 @@ async def lifespan(app: FastAPI):
                     },
                 )
 
+        # Phase E4 H2 — injecter le MemoryAgent si memory_enabled=True.
+        # Si memory_enabled=False, on passe None → skip silencieux dans l'orchestrator.
+        director_memory_agent = _memory if settings.memory_enabled else None
+
         director_orchestrator = Orchestrator(
             state_store=director_state_store,
             workers=app.state.director_workers,
@@ -327,6 +331,7 @@ async def lifespan(app: FastAPI):
             settings=settings,
             debouncer=director_debouncer,
             tick_cache=director_tick_cache,
+            memory_agent=director_memory_agent,
         )
         # Phase E4 — Seed assets_available dans le state store au boot.
         # Les workers OutfitWorker / VfxWorker / AnimWorker / SceneWorker

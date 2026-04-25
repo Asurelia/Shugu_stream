@@ -114,19 +114,43 @@ def build_prompt(
     state: SceneStateSnapshot,
     trigger: TriggerEvent,
     persona: Optional[str] = None,
+    memory_facts: Optional[list[str]] = None,
 ) -> tuple[str, str]:
     """Construit le couple (system, user) pour l'appel LLM Shugu Soul.
 
     Args:
-        state:   Snapshot courant de la scène (état + assets disponibles).
-        trigger: Trigger courant qui motive la réaction de Shugu.
-        persona: Override optionnel de la persona (MVP placeholder).
-                 Si None, utilise `DEFAULT_PERSONA`.
+        state:        Snapshot courant de la scène (état + assets disponibles).
+        trigger:      Trigger courant qui motive la réaction de Shugu.
+        persona:      Override optionnel de la persona (MVP placeholder).
+                      Si None, utilise `DEFAULT_PERSONA`.
+        memory_facts: Faits mémoire pertinents pour ce trigger (max 5).
+                      Injectés dans le system prompt après la persona pour
+                      que Shugu se souvienne des préférences VIP. Chaque
+                      fact est sanitisé (newlines + cap 300 chars) avant
+                      injection pour éviter le prompt injection.
 
     Returns:
         (system, user) : tuple de strings prêts à passer à `AsyncAnthropic`.
     """
     effective_persona = persona if persona is not None else DEFAULT_PERSONA
+
+    # Construction du system prompt en parties pour injecter les memories.
+    system_parts: list[str] = [effective_persona]
+
+    # Injection des mémoires pertinentes (H2 Phase E4).
+    # Sanitisées : newlines remplacés, cappées à 300 chars, max 5 facts.
+    if memory_facts:
+        sanitized_facts = [
+            _sanitize_user_input(f, max_len=300)
+            for f in memory_facts[:5]
+        ]
+        # Filtre les facts vides après sanitisation.
+        sanitized_facts = [f for f in sanitized_facts if f]
+        if sanitized_facts:
+            memories_block = "Mémoires pertinentes :\n" + "\n".join(
+                f"- {f}" for f in sanitized_facts
+            )
+            system_parts.append(memories_block)
 
     # Sérialisation JSON compacte du snapshot — on omet les listes vides pour
     # garder le contexte minimal (moins de tokens = moins de latence).
@@ -152,16 +176,17 @@ def build_prompt(
         else "Aucun asset spécifique enregistré — utilise uniquement les tags fixes."
     )
 
-    system = f"""{effective_persona}
-
-# État de la scène (JSON compact)
+    # Ajouter le contexte de scène, assets et instructions de format.
+    system_parts.append(f"""# État de la scène (JSON compact)
 {state_json}
 
 # Assets disponibles
 {assets_section}
 
 {_FIXED_TAG_VALUES}
-{_FORMAT_INSTRUCTIONS}"""
+{_FORMAT_INSTRUCTIONS}""")
+
+    system = "\n\n".join(system_parts)
 
     # ── User prompt ──────────────────────────────────────────────────────────
     # Trigger courant + events récents (max 10 déjà garanti par SceneState).
