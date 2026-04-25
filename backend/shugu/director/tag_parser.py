@@ -17,11 +17,18 @@ deux couches de défense :
    bank d'assets du snapshot. Un tag bien formé mais hors whitelist est log-warned
    et silencieusement rejeté (pas d'exception — le pipeline LLM ne crashe jamais).
 
-# Import des whitelists workers
+# Import des whitelists workers — IMPORTANT pour E5/E6
 
 On importe directement depuis les modules worker pour éviter la duplication.
 Les whitelists `FACE_WHITELIST`, `SAY_EMOTION_WHITELIST`, `CAMERA_WHITELIST`
 sont des `frozenset[str]` définis dans leurs modules respectifs.
+
+IMPORTANT POUR PHASES E5/E6 : Ces whitelists sont importées au module load.
+Si les Phases E5 ou E6 étendent les whitelists dans les worker modules,
+les nouvelles valeurs ne seront visibles qu'après un redémarrage de l'application.
+Il n'existe pas actuellement de mécanisme de reload à chaud des whitelists.
+Pour ajouter des valeurs whitelist sans déploiement, il faudrait implémenter
+un cache dynamique ou un appel au worker pour chaque validation (Phase E5+).
 
 # API publique
 
