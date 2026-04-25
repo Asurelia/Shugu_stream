@@ -1,15 +1,26 @@
-"""Core protocols — the modular seams of the app.
+"""Core protocols — les coutures modulaires de l'application.
 
 Every adapter (brain, TTS, STT, moderation) conforms to one of these.
 Adding a new implementation = one file under `adapters/` + one entry in
 `app.py`'s dependency wiring. No other file changes.
+
+Règle d'isolation mémoire :
+  Le brain et les composants Director ne doivent JAMAIS importer `MemoryAgent`,
+  `MemoryFact`, `pgvector` ou `sqlalchemy` directement. Ils déclarent leur
+  dépendance via `MemoryService` uniquement.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import AsyncIterator, Literal, Optional, Protocol
+from typing import TYPE_CHECKING, AsyncIterator, Literal, Optional, Protocol
 
 from .identity import Identity
+
+if TYPE_CHECKING:
+    # Importé uniquement pour les annotations de type — aucune dépendance
+    # runtime de `core` vers `memory`. Évite tout import circulaire futur si
+    # `memory` venait à importer un type de `core`.
+    from ..memory.types import MemoryItem, RecallQuery
 
 Emotion = Literal["neutral", "happy", "angry", "sad", "relaxed"]
 
@@ -136,3 +147,26 @@ class EventBus(Protocol):
     def subscribe(self, topic: str) -> "AsyncIterator[dict]": ...
 
     async def close(self) -> None: ...
+
+
+class MemoryService(Protocol):
+    """Contrat public pour la mémoire long-terme.
+
+    Le brain et les composants Director ne doivent JAMAIS importer
+    `MemoryAgent`, `MemoryFact`, `pgvector`, `sqlalchemy` directement —
+    uniquement ce protocol.
+
+    `MemoryAgent` satisfait ce protocol par structural typing (pas d'héritage).
+    Les types `MemoryItem` / `RecallQuery` sont des dataclasses stdlib (aucune
+    dépendance heavy) et peuvent être importés directement par les consommers.
+    """
+
+    async def store(self, item: "MemoryItem") -> None: ...
+
+    async def recall(self, query: "RecallQuery") -> "list[MemoryItem]": ...
+
+    async def maintenance(self) -> dict: ...
+
+    async def persona_get(self) -> dict: ...
+
+    async def persona_set(self, patch: dict) -> None: ...
