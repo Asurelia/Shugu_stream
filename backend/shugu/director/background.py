@@ -251,3 +251,10 @@ class DirectorBackground:
     async def stop(self) -> None:
         await self._silence.stop()
         await self._scene_change.stop()
+        # Ferme le bus en dernier : on veut que les tasks Director arrêtent
+        # de publier AVANT que le bus refuse les publish (sinon un publish
+        # in-flight pendant le cancel logguerait un no-op inutile). Un
+        # handler WS externe (chat) qui publierait après ce point retombe
+        # sur le no-op silencieux côté `TriggerBus.publish` — comportement
+        # voulu, sans crash.
+        await self._trigger_bus.close()

@@ -13,6 +13,7 @@ Coverage :
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import FrozenInstanceError
 
 import pytest
@@ -141,3 +142,29 @@ async def test_trigger_bus_singleton_factory_consistent() -> None:
     b1 = get_trigger_bus()
     b2 = get_trigger_bus()
     assert b1 is b2
+
+
+async def test_trigger_bus_publish_after_close_is_silent_no_op(caplog) -> None:
+    """Régression review C1 — `publish` post-`close` doit être un no-op.
+
+    Avant le fix, `log.debug("...", kind=event.kind)` levait `TypeError` sur
+    le logger stdlib (pas de kwargs arbitraires). Le test garde 2 garanties :
+    1. Aucune exception ne remonte du publish post-close (assertion primaire).
+    2. Un message DEBUG `trigger_bus.publish_after_close` est bien émis (le
+       no-op reste auditable via les logs).
+    """
+    bus = TriggerBus()
+    await bus.close()
+
+    caplog.set_level(logging.DEBUG, logger="shugu.director.triggers")
+
+    # Assertion primaire : ne doit PAS lever.
+    await bus.publish(TriggerEvent(kind="chat", payload={}))
+
+    # Assertion secondaire : le no-op log bien le message attendu.
+    debug_msgs = [
+        rec.message
+        for rec in caplog.records
+        if rec.name == "shugu.director.triggers" and rec.levelno == logging.DEBUG
+    ]
+    assert any("trigger_bus.publish_after_close" in m for m in debug_msgs)

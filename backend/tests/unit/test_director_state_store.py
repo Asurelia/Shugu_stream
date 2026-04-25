@@ -77,6 +77,45 @@ async def test_state_store_update_ignores_unknown_fields() -> None:
     assert not hasattr(snap, "unknown_field")
 
 
+async def test_state_store_update_copies_input_lists() -> None:
+    """Régression review H2 — `update()` doit deepcopy les conteneurs reçus.
+
+    Avant le fix, `setattr(self._state, key, value)` stockait la référence
+    du caller. Muter la liste source post-update polluait l'état interne, ce
+    qui contredisait la promesse de la docstring.
+    """
+    store = DirectorStateStore()
+    evil = ["a", "b"]
+    await store.update({"recent_events": evil})
+
+    # Mutation sur la liste source du caller : ne DOIT pas remonter dans le
+    # snapshot interne.
+    evil.append("EVIL")
+
+    snap = await store.get()
+    assert "EVIL" not in snap.recent_events
+    assert snap.recent_events == ["a", "b"]
+
+
+async def test_state_store_update_copies_input_dicts() -> None:
+    """Régression review H2 — idem mais pour un champ dict (assets_available).
+
+    Garantit que la deepcopy est récursive : muter une liste imbriquée dans
+    un dict reçu ne pollue pas l'état interne.
+    """
+    store = DirectorStateStore()
+    evil_assets: dict[str, list[str]] = {"outfits": ["default", "vip_fan"]}
+    await store.update({"assets_available": evil_assets})
+
+    # Mutation de la liste imbriquée côté caller.
+    evil_assets["outfits"].append("EVIL_OUTFIT")
+    evil_assets["new_key"] = ["EVIL"]
+
+    snap = await store.get()
+    assert "EVIL_OUTFIT" not in snap.assets_available.get("outfits", [])
+    assert "new_key" not in snap.assets_available
+
+
 async def test_state_store_get_returns_copy_not_reference() -> None:
     """Muter la snapshot retournée ne doit pas polluer l'état interne."""
     store = DirectorStateStore()

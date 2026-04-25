@@ -17,6 +17,7 @@ eux-mêmes.
 from __future__ import annotations
 
 import asyncio
+import copy
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -79,7 +80,16 @@ class DirectorStateStore:
             for key, value in patch.items():
                 if key not in known_fields:
                     continue
-                setattr(self._state, key, value)
+                # Deep-copy les conteneurs mutables (list/dict/set) pour que
+                # le caller puisse re-muter sa structure locale sans polluer
+                # l'état interne (cf. docstring : "mutations dans le caller
+                # n'impactent pas l'instance interne"). Les primitives
+                # (str/int/bool/None) sont passées telles quelles —
+                # immutables, deepcopy serait gaspillé.
+                if isinstance(value, (list, dict, set)):
+                    setattr(self._state, key, copy.deepcopy(value))
+                else:
+                    setattr(self._state, key, value)
             # Trim FIFO même si le caller a envoyé une liste longue.
             if len(self._state.recent_events) > MAX_RECENT_EVENTS:
                 overflow = len(self._state.recent_events) - MAX_RECENT_EVENTS

@@ -22,7 +22,7 @@ import pytest
 
 from shugu.config import Settings
 from shugu.director import background as director_background
-from shugu.director.background import SilenceMonitor
+from shugu.director.background import DirectorBackground, SilenceMonitor
 from shugu.director.triggers import TriggerBus, TriggerEvent
 from shugu.director.wiring import publish_chat_trigger
 
@@ -216,6 +216,40 @@ async def test_silence_monitor_noop_when_disabled() -> None:
 
     assert silence_events == []
     assert monitor._task is None
+
+
+async def test_director_background_stop_closes_trigger_bus() -> None:
+    """Régression review H3 — `DirectorBackground.stop()` doit fermer le bus.
+
+    Avant le fix, `stop()` cancellait silence + scene_change tasks mais ne
+    fermait pas le `TriggerBus`. Un handler WS publiant après le shutdown
+    voyait encore un bus ouvert (et combiné au TypeError C1, crashait).
+
+    On instancie `DirectorBackground` avec un `TriggerBus` injecté
+    explicitement (pas le singleton, pour ne pas fuiter entre tests) et un
+    `InProcessEventBus` minimal.
+    """
+    from shugu.core.event_bus import InProcessEventBus
+
+    settings = _make_settings(enabled=True, silence_timeout_s=5)
+    trigger_bus = TriggerBus()
+    event_bus = InProcessEventBus()
+
+    bg = DirectorBackground(
+        settings=settings,
+        event_bus=event_bus,
+        trigger_bus=trigger_bus,
+    )
+    bg.start()
+    # Laisse les tasks s'amorcer pour matcher le cycle de vie réel.
+    await asyncio.sleep(0.02)
+
+    assert trigger_bus._closed is False
+    await bg.stop()
+    assert trigger_bus._closed is True
+
+    # Sanity : un publish post-stop est un no-op silencieux (pas d'exception).
+    await trigger_bus.publish(TriggerEvent(kind="chat", payload={}))
 
 
 @pytest.mark.parametrize(

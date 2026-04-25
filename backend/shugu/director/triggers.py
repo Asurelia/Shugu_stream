@@ -118,7 +118,12 @@ class TriggerBus:
         même. Post-`close()`, la méthode est un no-op (log debug).
         """
         if self._closed:
-            log.debug("trigger_bus.publish_after_close", kind=event.kind)
+            # NOTE: stdlib logger ne supporte pas les kwargs arbitraires —
+            # passer par `extra={...}` (cohérent avec le reste du module et
+            # `wiring.py` / `background.py`). Avant le fix : `kind=event.kind`
+            # levait `TypeError: Logger._log() got unexpected kwarg 'kind'`
+            # à chaque publish-after-close, brisant le no-op promis.
+            log.debug("trigger_bus.publish_after_close", extra={"kind": event.kind})
             return
         # Snapshot la liste sous lock pour tolérer un subscribe/unsubscribe
         # concurrent pendant le dispatch.
