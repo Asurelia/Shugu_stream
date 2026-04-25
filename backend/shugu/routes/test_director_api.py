@@ -13,9 +13,16 @@ broadcast → viewer-adapter) dans un environnement CI sans traffic réel.
   + `require_operator()` (JWT cookie). Un de ces deux checks suffit à
   bloquer — les deux ensemble garantissent qu'un attaquant extérieur ne
   peut pas saturer le LLM via cette route en prod.
-- **Payload validé** : seul le `kind` in `TriggerKind` est accepté.
-  Le `payload` est un dict libre mais la taille est bornée à 256 chars
-  par valeur pour éviter l'injection dans les prompts.
+- **Kinds restreints** : `vip_arrival` est EXCLU des kinds acceptés par
+  cette route. En effet, `vip_arrival` bypasse le rate limit 2s ET le cap
+  horaire 200/h dans l'orchestrator — un attaquant avec un JWT operator
+  leaké + `SHUGU_TEST_TRIGGERS_ENABLED=true` pourrait déclencher des
+  milliers d'appels LLM/heure via cette route de test (cost amplification
+  vector). Utilisez `kind="chat"` pour tester les réactions VIP via le
+  wiring Phase E1 (chat d'un sender VIP publie automatiquement `vip_arrival`
+  en plus du `chat`).
+- **Payload validé** : le `payload` est un dict libre mais la taille est
+  bornée à 256 chars par valeur pour éviter l'injection dans les prompts.
 - **OFF par défaut** : `SHUGU_TEST_TRIGGERS_ENABLED` non setée = 404.
   Il ne faut PAS ajouter ce flag au `.env` prod.
 
@@ -25,23 +32,27 @@ broadcast → viewer-adapter) dans un environnement CI sans traffic réel.
 # Lancer le backend avec le flag
 SHUGU_DIRECTOR_ENABLED=true SHUGU_TEST_TRIGGERS_ENABLED=true uvicorn ...
 
-# Déclencher un trigger depuis Playwright APIRequestContext
+# Déclencher un trigger chat depuis Playwright APIRequestContext
 POST /api/test/director/trigger
 Cookie: shugu_access=<operator_jwt>
-{"kind": "vip_arrival", "payload": {"sender": "spoukie"}}
+{"kind": "chat", "payload": {"sender": "spoukie", "text": "coucou !"}}
+
+# Pour tester le chemin VIP : envoyer un chat avec un sender dans vip_usernames —
+# le wiring Phase E1 (wiring.publish_chat_trigger) publie alors automatiquement
+# un trigger vip_arrival en plus du chat.
 ```
 """
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
 
 from ..auth.dependencies import require_operator
 from ..config import Settings, get_settings
-from ..director.triggers import TriggerEvent, TriggerKind, get_trigger_bus
+from ..director.triggers import TriggerEvent, get_trigger_bus
 
 log = logging.getLogger(__name__)
 
@@ -51,11 +62,25 @@ router = APIRouter(prefix="/api/test/director", tags=["test-director"])
 _PAYLOAD_VALUE_MAX_LEN = 256
 
 
-class TriggerRequest(BaseModel):
-    """Body du POST /api/test/director/trigger."""
+# Kinds autorisés par la route de test. `vip_arrival` est exclu car il
+# bypasse le rate limit 2s et le cap horaire 200/h dans l'orchestrator —
+# vecteur d'amplification de coût LLM si le JWT operator est leaké.
+# Pour tester le chemin VIP, utilisez kind="chat" avec un sender dans
+# vip_usernames : le wiring Phase E1 publie automatiquement vip_arrival.
+_ALLOWED_TEST_KINDS = Literal["chat", "scene_change", "silence", "viewer_milestone"]
 
-    kind: TriggerKind = Field(
-        description="Kind du trigger à publier (vip_arrival, chat, scene_change, …).",
+
+class TriggerRequest(BaseModel):
+    """Body du POST /api/test/director/trigger.
+
+    Note : `vip_arrival` est volontairement exclu des kinds acceptés —
+    il bypasse le rate limit et le cap horaire de l'orchestrator (cost
+    amplification vector). Utilisez kind="chat" avec un sender VIP pour
+    déclencher le chemin vip_arrival via le wiring Phase E1.
+    """
+
+    kind: _ALLOWED_TEST_KINDS = Field(
+        description="Kind du trigger à publier. vip_arrival exclu (cost amplification vector).",
     )
     payload: dict[str, Any] = Field(
         default_factory=dict,

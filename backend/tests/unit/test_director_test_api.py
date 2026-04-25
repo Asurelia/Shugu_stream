@@ -95,7 +95,7 @@ async def test_trigger_route_returns_404_when_flag_disabled() -> None:
 
     response = client.post(
         "/api/test/director/trigger",
-        json={"kind": "vip_arrival", "payload": {"sender": "spoukie"}},
+        json={"kind": "chat", "payload": {"sender": "spoukie", "text": "coucou"}},
     )
     assert response.status_code == 404, response.text
 
@@ -108,7 +108,7 @@ async def test_trigger_route_returns_503_when_director_disabled() -> None:
 
     response = client.post(
         "/api/test/director/trigger",
-        json={"kind": "vip_arrival", "payload": {"sender": "spoukie"}},
+        json={"kind": "chat", "payload": {"sender": "spoukie", "text": "coucou"}},
     )
     assert response.status_code == 503, response.text
 
@@ -127,18 +127,18 @@ async def test_trigger_route_returns_202_and_publishes() -> None:
 
     response = client.post(
         "/api/test/director/trigger",
-        json={"kind": "vip_arrival", "payload": {"sender": "spoukie"}},
+        json={"kind": "chat", "payload": {"sender": "spoukie", "text": "coucou !"}},
     )
     assert response.status_code == 202, response.text
     body = response.json()
     assert body["status"] == "accepted"
-    assert body["kind"] == "vip_arrival"
+    assert body["kind"] == "chat"
 
     # Le bus a bien reçu l'event.
     # Note : TestClient est sync, le gather asyncio dans TriggerBus tourne
     # dans la même event loop du TestClient. On peut vérifier le résultat direct.
     assert len(received) == 1
-    assert received[0].kind == "vip_arrival"
+    assert received[0].kind == "chat"
     assert received[0].payload["sender"] == "spoukie"
 
 
@@ -179,11 +179,12 @@ async def test_trigger_route_sanitizes_long_payload_values() -> None:
     assert len(sanitized) == 256, f"Expected 256, got {len(sanitized)}"
 
 
-async def test_trigger_route_accepts_all_valid_kinds() -> None:
-    """Tous les TriggerKind valides sont acceptés."""
-    valid_kinds = ["chat", "vip_arrival", "scene_change", "silence", "viewer_milestone"]
+async def test_trigger_route_accepts_allowed_kinds() -> None:
+    """Les kinds autorisés retournent 202. vip_arrival est exclu."""
+    # vip_arrival absent de la liste — cf. H1 : cost amplification vector.
+    allowed_kinds = ["chat", "scene_change", "silence", "viewer_milestone"]
 
-    for kind in valid_kinds:
+    for kind in allowed_kinds:
         bus = TriggerBus()
         settings = _make_settings()
         _, client = _make_app(settings, bus)
@@ -193,3 +194,23 @@ async def test_trigger_route_accepts_all_valid_kinds() -> None:
         )
         assert response.status_code == 202, f"Kind {kind!r} → {response.text}"
         _reset_for_tests()
+
+
+async def test_trigger_route_rejects_vip_arrival_kind() -> None:
+    """vip_arrival est rejeté avec 422 — cost amplification vector (H1 fix).
+
+    vip_arrival bypasse le rate limit 2s et le cap horaire 200/h dans
+    l'orchestrator. Un attaquant avec un JWT operator leaké + flag
+    SHUGU_TEST_TRIGGERS_ENABLED=true pourrait déclencher des milliers
+    d'appels LLM/heure via cette route.
+    """
+    bus = TriggerBus()
+    settings = _make_settings()
+    _, client = _make_app(settings, bus)
+
+    response = client.post(
+        "/api/test/director/trigger",
+        json={"kind": "vip_arrival", "payload": {"sender": "alice"}},
+    )
+    # Pydantic Literal validation rejette avant même les checks 404/503.
+    assert response.status_code == 422, response.text
