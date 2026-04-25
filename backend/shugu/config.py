@@ -231,6 +231,69 @@ class Settings(BaseSettings):
                     "Défaut 200 (≈ 1 call/18s max). Bornes [1, 10000].",
     )
 
+    # Director LLM multi-provider — Phase E2.5. MiniMax par défaut (réutilise
+    # l'infrastructure existante, 5-10x moins cher qu'Anthropic).
+    # Override via SHUGU_DIRECTOR_LLM_PROVIDER=anthropic pour Claude Haiku/Sonnet.
+    director_llm_provider: Literal["minimax", "anthropic", "openai", "ollama"] = Field(
+        default="minimax",
+        description="Provider LLM Director (default minimax — réutilise l'infra ShuguPersonaBrain). "
+                    "minimax | anthropic | openai (E2.6) | ollama (E2.6).",
+    )
+
+    # Director cache sémantique pgvector — Phase E2.5.
+    director_cache_enabled: bool = Field(
+        default=True,
+        description="Cache sémantique pgvector pour réduire les appels LLM Director. "
+                    "Réduit ~60-80% des appels sur les flux chat répétitifs.",
+    )
+    director_cache_ttl_seconds: int = Field(
+        default=300,
+        ge=60,
+        le=3600,
+        description="Durée de vie du cache sémantique Director (secondes). "
+                    "Défaut : 300s (5 min). Bornes [60, 3600].",
+    )
+    director_cache_similarity_threshold: float = Field(
+        default=0.92,
+        ge=0.5,
+        le=1.0,
+        description="Seuil cosine similarity pour un cache hit (0.0–1.0). "
+                    "0.92 = très similaire. Calibrer en prod selon la qualité des hits.",
+    )
+
+    # Director debounce chat — Phase E2.5.
+    director_debounce_window_seconds: float = Field(
+        default=3.0,
+        ge=0.5,
+        le=30.0,
+        description="Fenêtre de debounce des triggers chat (secondes). "
+                    "Réduit ~50% des appels LLM en collapsant le spam chat. "
+                    "Bornes [0.5, 30.0].",
+    )
+    director_debounce_max_batch: int = Field(
+        default=10,
+        ge=1,
+        le=100,
+        description="Max triggers chat avant flush forcé de la fenêtre debounce. "
+                    "Bornes [1, 100].",
+    )
+
+    # Director canned responses — Phase E2.5.
+    director_canned_enabled: bool = Field(
+        default=True,
+        description="Activer les réponses canned pour les triggers à faible variabilité "
+                    "(silence, viewer_milestone, scene_change). Réduit ~15-20% des appels LLM.",
+    )
+
+    # Director daily token budget — Phase E2.5.
+    director_daily_token_budget: int = Field(
+        default=0,
+        ge=0,
+        description="Budget tokens quotidien Director (0 = illimité). "
+                    "Hard cap sur les tokens consommés par jour. "
+                    "Non implémenté Phase E2.5 — posé pour Phase E3.",
+    )
+
     @field_validator("vip_usernames", mode="before")
     @classmethod
     def _normalize_vip_usernames(cls, value: object) -> object:

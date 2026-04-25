@@ -1,22 +1,27 @@
-"""Orchestrator LLM Shugu Soul — Phase E2.3.
+"""Orchestrator LLM Shugu Soul — Phase E2.5 (refactoré depuis E2.3).
 
 Boucle principale du Director :
-  trigger → prompt → LLM → tags → workers (parallèle) → state delta → broadcast
+  trigger → [debouncer] → [canned] → [cache sémantique] → LLM → tags → workers → state → broadcast
 
-# Architecture Soul/Shell
+# Architecture Soul/Shell refactorisée (Phase E2.5)
 
 ```text
 TriggerBus ──→  Orchestrator.tick(trigger)
                   │
-                  ├─ 1. DirectorStateStore.get()   → SceneStateSnapshot
-                  ├─ 2. build_prompt(state, trigger) → (system, user)
-                  ├─ 3. DirectorLLMClient.complete() → texte + tags
+                  ├─ 1. Feature flag + Rate limit + Cap horaire (guards)
+                  ├─ 2. Debouncer (chat only) → batch ou absorbe
+                  ├─ 3. Canned responses (silence/milestone/scene_change)
+                  │     → skip LLM si canned disponible
+                  ├─ 4. Cache sémantique pgvector (DirectorStateStore.get + embed)
+                  │     → skip LLM si hit cosine ≥ 0.92
+                  ├─ 5. DirectorBrain.complete() → texte + tags (LLM call)
                   │     └─ timeout 3s → fallback [say_emotion:neutral]
-                  ├─ 4. parse_tags(text)             → list[ParsedTag]
-                  ├─ 5. strip_tags(text)             → texte TTS
-                  ├─ 6. asyncio.gather(worker.apply per tag) → list[StateDelta]
-                  ├─ 7. state_store.update(merged_patch)
-                  └─ 8. event_bus.publish("editor:broadcast", {scene.tick envelope})
+                  ├─ 6. parse_tags(text)             → list[ParsedTag]
+                  ├─ 7. strip_tags(text)             → texte TTS
+                  ├─ 8. tick_cache.store()           → cache le résultat LLM
+                  ├─ 9. asyncio.gather(worker.apply per tag) → list[StateDelta]
+                  ├─ 10. state_store.update(merged_patch)
+                  └─ 11. event_bus.publish("editor:broadcast", {scene.tick envelope})
 ```
 
 # Guard Rails
@@ -29,6 +34,13 @@ TriggerBus ──→  Orchestrator.tick(trigger)
 - **Feature flag** : `settings.director_enabled=False` → `tick()` est un no-op.
 - **Lifecycle** : `start()` subscribe au `TriggerBus`, `stop()` unsubscribe
   et attend la fin du tick courant s'il y en a un.
+
+# Cost Reduction (Phase E2.5)
+
+- **Debouncer** : collapse les bursts chat (fenêtre 3s, max 10) → ~50% LLM reduction.
+- **Canned** : silence/milestone/scene_change utilisent des réponses pré-définies → ~15% reduction.
+- **Cache sémantique** : triggers sémantiquement similaires réutilisent la réponse → ~60-80% reduction.
+- Objectif global : ~43k → 5-8k appels LLM/jour.
 """
 from __future__ import annotations
 
@@ -40,11 +52,14 @@ from datetime import datetime, timezone
 from typing import Callable, Optional
 
 from ..config import Settings
-from .llm_client import DirectorLLMClient, LLMClientError
+from .brain_provider import DirectorBrain
+from .canned_responses import CANNED_ELIGIBLE_KINDS, CannedResponse, pick_canned
+from .debouncer import DEBOUNCEABLE_KINDS, TriggerDebouncer
 from .prompt import build_prompt
 from .scene_state import SceneStateSnapshot
 from .state_store import DirectorStateStore
 from .tag_parser import ParsedTag, parse_tags, strip_tags
+from .tick_cache import TickCache, format_trigger_for_cache
 from .triggers import TriggerBus, TriggerEvent
 from .workers import EDITOR_BROADCAST_TOPIC
 from .workers.base import DIRECTOR_SCENE_ID_SENTINEL, StateDelta, Worker
@@ -62,8 +77,11 @@ class _TickRateCounter:
     """Compteur atomique fenêtre glissante 1h pour cap coût LLM.
 
     Permet de limiter le nombre de ticks par heure pour borner la consommation
-    API Anthropic. Utilise une fenêtre glissante (les timestamps expirés sont
+    API LLM. Utilise une fenêtre glissante (les timestamps expirés sont
     trimés après chaque check).
+
+    Note : les canned responses et les cache hits ne comptent PAS comme tick
+    (ils n'appellent pas le LLM). Seuls les appels LLM réels sont comptés.
     """
 
     def __init__(self, max_per_hour: int) -> None:
@@ -113,15 +131,24 @@ class Orchestrator:
         `tick()` est protégé par `_tick_lock` (asyncio.Lock) pour s'assurer
         qu'un seul tick tourne à la fois. Le rate limit garantit qu'on ne
         surcharge pas le LLM même en cas de burst de triggers.
+
+    Cost reduction (Phase E2.5) :
+        Le pipeline tick() passe successivement par :
+        1. Debouncer (chat) → batch les messages rapprochés.
+        2. Canned responses → évite le LLM pour silence/milestone/scene_change.
+        3. Cache sémantique → évite le LLM pour les triggers similaires récents.
+        4. LLM call (en dernier recours).
     """
 
     def __init__(
         self,
         state_store: DirectorStateStore,
         workers: dict[str, Worker],
-        llm_client: DirectorLLMClient,
+        llm_client: DirectorBrain,
         event_bus,   # shugu.core.protocols.EventBus — type fluide pour éviter l'import circulaire
         settings: Settings,
+        tick_cache: Optional[TickCache] = None,
+        debouncer: Optional[TriggerDebouncer] = None,
     ) -> None:
         self._store = state_store
         self._workers = workers
@@ -133,27 +160,46 @@ class Orchestrator:
         self._tick_lock: asyncio.Lock = asyncio.Lock()
         self._dispose: Optional[Callable[[], None]] = None  # unsubscribe handle du TriggerBus
         self._current_task: Optional[asyncio.Task] = None
-        # Compteur horaire pour le cap coût LLM (M1).
+        # Compteur horaire pour le cap coût LLM.
         self._tick_rate_counter = _TickRateCounter(settings.director_max_ticks_per_hour)
+
+        # Phase E2.5 — cache sémantique + debouncer.
+        # Un StubTickCache/StubDebouncer peut être injecté pour les tests.
+        self._tick_cache: TickCache = tick_cache  # type: ignore[assignment]
+        if debouncer is not None:
+            # Si un debouncer externe est injecté (tests ou lifespan), on branche
+            # on_flush s'il n'en a pas encore — évite de perdre les triggers solitaires.
+            if debouncer._on_flush is None:
+                debouncer._on_flush = self._handle_batched_trigger
+            self._debouncer: TriggerDebouncer = debouncer
+        else:
+            self._debouncer = TriggerDebouncer(
+                window_seconds=settings.director_debounce_window_seconds,
+                max_batch=settings.director_debounce_max_batch,
+                on_flush=self._handle_batched_trigger,
+            )
+
+        # Déduplication des canned responses — IDs des N dernières utilisées.
+        self._recent_canned_ids: set[str] = set()
+        self._recent_canned_history: deque[str] = deque(maxlen=8)
 
     async def tick(self, trigger: TriggerEvent) -> None:
         """Une réaction Shugu à un trigger.
 
-        Séquence complète :
-        1. Pull scene state
-        2. Build prompt
-        3. Call LLM avec timeout 3s
-        4. Parse tags + strip text pour TTS
-        5. Dispatch workers en parallèle (asyncio.gather), récupère StateDeltas
-        6. Merge deltas dans state_store
-        7. Publish state delta sur RedisEventBus topic editor:broadcast
+        Pipeline Phase E2.5 :
+        1. Guards (feature flag + rate limit + cap horaire)
+        2. Debouncer (chat only) — absorbe ou flushe un batch
+        3. Canned response — skip LLM pour silence/milestone/scene_change
+        4. Cache sémantique — skip LLM si hit cosine ≥ threshold
+        5. LLM call — construit le prompt, appelle le brain, store le cache
+        6. Dispatch workers + state update + broadcast
 
         Guard rails :
         - Feature flag OFF → no-op silencieux.
         - Rate limit 2s → skip (sauf vip_arrival).
-        - Cap houraire (M1) → skip avec warning si max ticks/h atteint.
+        - Cap horaire → skip avec warning si max ticks/h atteint.
         - Un seul tick concurrent (asyncio.Lock).
-        - Timeout LLM 3s → fallback [say_emotion:neutral] sans mutation d'état.
+        - Timeout LLM 3s → fallback [say_emotion:neutral].
         """
         if not self._settings.director_enabled:
             return
@@ -168,7 +214,7 @@ class Orchestrator:
             )
             return
 
-        # Cap horaire ticks (M1 — cost control). VIP bypasse aussi ce check.
+        # Cap horaire ticks. VIP bypasse aussi ce check.
         if not is_vip:
             can_tick = await self._tick_rate_counter.try_acquire()
             if not can_tick:
@@ -192,14 +238,75 @@ class Orchestrator:
             await self._execute_tick(trigger)
 
     async def _execute_tick(self, trigger: TriggerEvent) -> None:
-        """Corps interne du tick — appelé sous `_tick_lock`."""
-        # 1. Pull scene state
-        state = await self._store.get()
+        """Corps interne du tick — appelé sous `_tick_lock`.
 
-        # 2. Build prompt
+        Pipeline complet E2.5 : debounce → canned → cache → LLM.
+        """
+        # 2. Debouncer pour chat (batch les messages rapprochés).
+        if trigger.kind in DEBOUNCEABLE_KINDS and self._debouncer is not None:
+            batched = await self._debouncer.submit(trigger)
+            if batched is None:
+                # Trigger absorbé dans la fenêtre debounce — pas d'appel LLM.
+                # Le debouncer appellera on_flush (= _handle_batched_trigger)
+                # quand la fenêtre expirera via le timer.
+                log.debug(
+                    "director.orchestrator_trigger_debounced",
+                    extra={"kind": trigger.kind},
+                )
+                return
+            trigger = batched
+
+        await self._execute_tick_post_debounce(trigger)
+
+    async def _execute_tick_post_debounce(self, trigger: TriggerEvent) -> None:
+        """Pipeline post-debounce : canned → cache → LLM.
+
+        Appelé depuis `_execute_tick` (après le debouncer) ET depuis
+        `_handle_batched_trigger` (timer auto-flush, trigger déjà batché).
+
+        Doit être appelé sous `_tick_lock`.
+        """
+        # 3. Canned responses pour les triggers à faible variabilité.
+        if self._settings.director_canned_enabled and trigger.kind in CANNED_ELIGIBLE_KINDS:
+            canned = pick_canned(
+                trigger.kind,
+                trigger.payload,
+                recent_canned_ids=self._recent_canned_ids,
+            )
+            if canned is not None:
+                log.debug(
+                    "director.orchestrator_canned_response",
+                    extra={"kind": trigger.kind, "canned_id": canned.id},
+                )
+                self._register_canned(canned)
+                await self._execute_from_text(canned.text, trigger, source="canned")
+                return  # SKIP LLM
+
+        # 4. Cache sémantique pgvector.
+        state = await self._store.get()
+        trigger_text = format_trigger_for_cache(
+            trigger.kind,
+            trigger.payload,
+            scene_slug=state.scene,
+            face=state.face,
+        )
+
+        if self._tick_cache is not None and self._settings.director_cache_enabled:
+            cached = await self._tick_cache.lookup(trigger_text)
+            if cached is not None:
+                log.debug(
+                    "director.orchestrator_cache_hit",
+                    extra={
+                        "kind": trigger.kind,
+                        "similarity": round(cached.similarity, 4),
+                    },
+                )
+                await self._execute_from_text(cached.llm_text, trigger, source="cache")
+                return  # SKIP LLM
+
+        # 5. LLM call (en dernier recours).
         system, user = build_prompt(state, trigger)
 
-        # 3. Call LLM avec timeout 3s
         llm_text: Optional[str] = None
         tags: list[ParsedTag]
         tts_text: str
@@ -209,7 +316,7 @@ class Orchestrator:
                 self._llm_client.complete(system=system, user=user),
                 timeout=3.0,
             )
-            # 4. Parse tags + strip pour TTS
+            # 6. Parse tags + strip pour TTS.
             tags = parse_tags(llm_text, max_tags=10, state=state)
             tts_text = strip_tags(llm_text)
         except TimeoutError:
@@ -219,7 +326,7 @@ class Orchestrator:
             )
             tags = [_FALLBACK_TAG]
             tts_text = ""
-        except LLMClientError as exc:
+        except Exception as exc:
             log.warning(
                 "director.orchestrator_llm_error",
                 extra={"kind": trigger.kind, "error": repr(exc)},
@@ -227,27 +334,64 @@ class Orchestrator:
             tags = [_FALLBACK_TAG]
             tts_text = ""
 
+        # 7. Store dans le cache si on a un résultat LLM valide.
+        if llm_text and self._tick_cache is not None and self._settings.director_cache_enabled:
+            await self._tick_cache.store(trigger_text, llm_text, tags)
+
         if not tags:
             # LLM a répondu mais sans tags valides — on ne mute pas l'état.
             log.debug(
                 "director.orchestrator_no_tags",
                 extra={"kind": trigger.kind, "llm_text_len": len(llm_text or "")},
             )
-            # On broadcast quand même le texte pour que le pipeline TTS puisse
-            # parler (même sans tag on peut vouloir un say_emotion:neutral).
             await self._broadcast_tick(tts_text=tts_text, patch={}, trigger=trigger)
             return
 
-        # 5. Dispatch workers en parallèle
-        deltas = await self._dispatch_workers(tags, state)
+        # 8. Dispatch workers + 9. state update + 10. broadcast.
+        await self._dispatch_and_publish(tags, tts_text, trigger)
 
-        # 6. Merge deltas dans state_store
+    async def _execute_from_text(
+        self,
+        text: str,
+        trigger: TriggerEvent,
+        source: str = "llm",
+    ) -> None:
+        """Execute le pipeline depuis un texte (canned ou cache) — sans LLM call.
+
+        Parse les tags, dispatch les workers, update le state, broadcast.
+        """
+        state = await self._store.get()
+        tags = parse_tags(text, max_tags=10, state=state)
+        tts_text = strip_tags(text)
+
+        if not tags:
+            log.debug(
+                "director.orchestrator_no_tags_from_text",
+                extra={"kind": trigger.kind, "source": source},
+            )
+            await self._broadcast_tick(tts_text=tts_text, patch={}, trigger=trigger)
+            return
+
+        await self._dispatch_and_publish(tags, tts_text, trigger)
+
+    async def _dispatch_and_publish(
+        self,
+        tags: list[ParsedTag],
+        tts_text: str,
+        trigger: TriggerEvent,
+    ) -> None:
+        """Dispatch workers, merge deltas, update state, broadcast."""
+        state = await self._store.get()
+        deltas = await self._dispatch_workers(tags, state)
         merged_patch = _merge_deltas(deltas)
         if merged_patch:
             await self._store.update(merged_patch)
-
-        # 7. Publish state delta sur editor:broadcast
         await self._broadcast_tick(tts_text=tts_text, patch=merged_patch, trigger=trigger)
+
+    def _register_canned(self, canned: CannedResponse) -> None:
+        """Enregistre une canned response utilisée pour la déduplication."""
+        self._recent_canned_history.append(canned.id)
+        self._recent_canned_ids = set(self._recent_canned_history)
 
     async def _dispatch_workers(
         self,
@@ -330,31 +474,85 @@ class Orchestrator:
         """Subscribe au TriggerBus — prêt à recevoir les triggers.
 
         Idempotent : si déjà démarré, on unsubscribe d'abord puis re-subscribe.
+        Démarre aussi le timer auto-flush du debouncer pour que les triggers
+        chat solitaires ne restent pas coincés indéfiniment dans la fenêtre.
         """
         if self._dispose is not None:
             self._dispose()
         self._dispose = trigger_bus.subscribe(self._on_trigger)
+        if self._debouncer is not None:
+            await self._debouncer.start()
         log.info("director.orchestrator_started")
 
     async def stop(self) -> None:
-        """Unsubscribe et attend la fin du tick courant.
+        """Unsubscribe, draine le debouncer, attend la fin du tick courant.
 
         Doit être appelé AVANT `director_bg.stop()` et AVANT `event_bus.close()`
         dans le lifespan finally — l'orchestrator peut encore publier pendant
         le tick en cours.
+
+        stop() flushe aussi le buffer debouncer résiduel via debouncer.stop()
+        pour éviter de perdre les triggers absorbés en fin de session.
         """
         if self._dispose is not None:
             self._dispose()
             self._dispose = None
 
+        # Drainer le debouncer AVANT d'attendre le lock — stop() peut déclencher
+        # un dernier tick (le flush du buffer résiduel). Unsubscribe déjà fait
+        # ci-dessus, donc ce tick ne peut pas créer de nouveaux triggers entrants.
+        if self._debouncer is not None:
+            await self._debouncer.stop()
+
         # Attend que le lock soit libéré (tick en cours terminé).
-        # On acquiert puis relâche immédiatement — juste pour s'assurer
-        # qu'aucun tick ne tourne au moment du stop().
         log.info("director.orchestrator_waiting_tick_drain")
         async with self._tick_lock:
             pass
 
         log.info("director.orchestrator_stopped")
+
+    async def _handle_batched_trigger(self, trigger: TriggerEvent) -> None:
+        """Callback appelé par le debouncer quand une fenêtre flushe via timer.
+
+        Identique à tick() mais SANS passer par le debouncer (le trigger est
+        déjà un batch consolidé). Respecte le rate limit, le cap horaire et
+        le tick_lock — seule l'étape debouncer est court-circuitée.
+
+        Appelé depuis la task asyncio interne du debouncer (_timer_loop ou stop()).
+        """
+        if not self._settings.director_enabled:
+            return
+
+        is_vip = trigger.kind == "vip_arrival"
+        now = time.monotonic()
+        if not is_vip and (now - self._last_tick_at) < TICK_MIN_INTERVAL_S:
+            log.debug(
+                "director.orchestrator_batched_trigger_rate_limited",
+                extra={"kind": trigger.kind, "elapsed_s": round(now - self._last_tick_at, 3)},
+            )
+            return
+
+        if not is_vip:
+            can_tick = await self._tick_rate_counter.try_acquire()
+            if not can_tick:
+                log.warning(
+                    "director.orchestrator_batched_trigger_rate_capped",
+                    extra={"kind": trigger.kind, "max_per_hour": self._settings.director_max_ticks_per_hour},
+                )
+                return
+
+        if self._tick_lock.locked():
+            log.debug(
+                "director.orchestrator_batched_trigger_skipped_busy",
+                extra={"kind": trigger.kind},
+            )
+            return
+
+        async with self._tick_lock:
+            self._last_tick_at = time.monotonic()
+            # On passe directement à _execute_tick_post_debounce pour éviter
+            # de re-soumettre le batch au debouncer.
+            await self._execute_tick_post_debounce(trigger)
 
     async def _on_trigger(self, event: TriggerEvent) -> None:
         """Callback subscriber — appelé par TriggerBus.publish().
