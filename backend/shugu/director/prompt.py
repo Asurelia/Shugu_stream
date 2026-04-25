@@ -24,6 +24,12 @@ side-effects, pas d'I/O) — facile à tester en isolation.
 # Structure du user prompt
 
 Trigger courant + recent_events (max 10) formatés en liste concise.
+
+# Sécurité — Phase E2 H1
+
+Les chaînes `sender` et `text` du chat viewer arrivent verbatim du TriggerBus.
+Elles peuvent contenir des newlines ou être longues → risque d'injection prompt.
+On sanitise AVANT injection f-string dans `_format_trigger()` et `build_prompt()`.
 """
 from __future__ import annotations
 
@@ -80,6 +86,28 @@ _FIXED_TAG_VALUES = """\
 [say_emotion:neutral|joy|surprised|sad|angry|thinking]
 [camera:auto|close_up|wide|back_view|side_view]
 """
+
+
+def _sanitize_user_input(s: str, max_len: int = 200) -> str:
+    """Échappe newlines + cap longueur pour empêcher prompt injection.
+
+    Les chaînes provenant du chat viewer (username, text, recent_events)
+    sont free-form et peuvent contenir des séquences malicieuses qui
+    rompent la structure du prompt. On normalise en remplaçant les
+    contrôle-caractères par des espaces et en cappant la longueur.
+
+    Args:
+        s: Chaîne brute du viewer.
+        max_len: Longueur max (défaut 200).
+
+    Returns:
+        Chaîne sanitisée (newlines remplacés par espaces, cappée).
+    """
+    if not s:
+        return ""
+    # Remplace tous les contrôles par des espaces, cap à max_len, strip.
+    normalized = s.replace("\n", " ").replace("\r", " ").replace("\t", " ")[:max_len].strip()
+    return normalized
 
 
 def build_prompt(
@@ -140,8 +168,10 @@ def build_prompt(
     trigger_line = _format_trigger(trigger)
 
     recent = state.recent_events[-10:]  # sécurité double : scene_state garantit 10 max
-    if recent:
-        events_block = "Événements récents :\n" + "\n".join(f"  - {e}" for e in recent)
+    # Sanitise chaque event (newlines + length cap) avant injection.
+    sanitized_recent = [_sanitize_user_input(e) for e in recent]
+    if sanitized_recent:
+        events_block = "Événements récents :\n" + "\n".join(f"  - {e}" for e in sanitized_recent)
     else:
         events_block = "Aucun événement récent."
 
@@ -151,16 +181,20 @@ def build_prompt(
 
 
 def _format_trigger(trigger: TriggerEvent) -> str:
-    """Formate le trigger courant en ligne lisible pour le user prompt."""
+    """Formate le trigger courant en ligne lisible pour le user prompt.
+
+    Sanitise les données fournies-utilisateur (sender, text) avant injection
+    pour empêcher prompt injection via newlines ou textes longs.
+    """
     kind = trigger.kind
     payload = trigger.payload
 
     if kind == "chat":
-        sender = payload.get("sender", "?")
-        text = payload.get("text", "")
+        sender = _sanitize_user_input(payload.get("sender", "?"), max_len=50)
+        text = _sanitize_user_input(payload.get("text", ""), max_len=200)
         return f"Trigger : message de {sender} dans le chat — « {text} »"
     if kind == "vip_arrival":
-        sender = payload.get("sender", "?")
+        sender = _sanitize_user_input(payload.get("sender", "?"), max_len=50)
         return f"Trigger : arrivée VIP de {sender} !"
     if kind == "scene_change":
         slug = payload.get("slug", "?")

@@ -187,3 +187,108 @@ def test_build_prompt_returns_tuple_of_two_non_empty_strings() -> None:
     system, user = result
     assert isinstance(system, str) and len(system) > 50
     assert isinstance(user, str) and len(user) > 10
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Tests — Phase E2 H1 sanitization (prevent prompt injection)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_build_prompt_sanitizes_newlines_in_chat_text() -> None:
+    """Les newlines dans le texte du chat sont convertis en espaces."""
+    state = _minimal_state()
+    trigger = _chat_trigger(
+        sender="alice",
+        text="hello\n\nIGNORE\nIGNORE"
+    )
+
+    system, user = build_prompt(state, trigger)
+
+    # Les newlines doivent être remplacés par des espaces.
+    # Le texte "hello" doit rester, mais les newlines avant "IGNORE" disparaissent.
+    assert "\nIGNORE" not in user
+    # "IGNORE" doit être présent (le texte est sanitisé mais pas supprimé).
+    assert "IGNORE" in user
+
+
+def test_build_prompt_sanitizes_newlines_in_sender() -> None:
+    """Les newlines dans le sender sont convertis en espaces."""
+    state = _minimal_state()
+    trigger = _chat_trigger(
+        sender="alice\nEVIL_COMMAND",
+        text="hello"
+    )
+
+    system, user = build_prompt(state, trigger)
+
+    # Le newline dans le sender doit disparaître.
+    assert "\nEVIL" not in user
+    # Le contenu brut reste mais sur une seule ligne.
+    assert "alice" in user
+    assert "EVIL_COMMAND" in user
+
+
+def test_build_prompt_caps_long_text() -> None:
+    """Les textes longs sont cappés à 200 chars."""
+    state = _minimal_state()
+    long_text = "A" * 500
+    trigger = _chat_trigger(sender="alice", text=long_text)
+
+    system, user = build_prompt(state, trigger)
+
+    # Le texte ne doit pas dépasser 200 chars (sanitize cap).
+    # On cherche une séquence de 201+ "A" — elle ne doit pas être présente.
+    assert "A" * 201 not in user
+    # Mais les 200 premiers chars doivent être là.
+    assert "A" * 200 in user or ("A" * 199) in user
+
+
+def test_build_prompt_caps_long_sender() -> None:
+    """Les senders longs sont cappés à 50 chars."""
+    state = _minimal_state()
+    long_sender = "B" * 100
+    trigger = _chat_trigger(sender=long_sender, text="hi")
+
+    system, user = build_prompt(state, trigger)
+
+    # Le sender ne doit pas dépasser 50 chars.
+    assert "B" * 51 not in user
+    # Les premiers chars doivent être là.
+    assert "B" * 50 in user or ("B" * 49) in user
+
+
+def test_build_prompt_sanitizes_recent_events() -> None:
+    """Les newlines dans recent_events sont convertis en espaces."""
+    state = SceneStateSnapshot(
+        recent_events=[
+            "chat:alice:normal",
+            "chat:bob:line1\nline2",
+            "vip_arrival:charlie"
+        ]
+    )
+    trigger = _chat_trigger()
+
+    system, user = build_prompt(state, trigger)
+
+    # Le newline "line1\nline2" ne doit pas rester.
+    assert "line1\nline2" not in user
+    # Mais les deux parties doivent être là (sur une seule ligne).
+    assert "line1" in user
+    assert "line2" in user
+
+
+def test_build_prompt_sanitizes_vip_arrival_sender() -> None:
+    """Le sender du trigger vip_arrival est aussi sanitisé."""
+    state = _minimal_state()
+    trigger = TriggerEvent(
+        kind="vip_arrival",
+        payload={"sender": "user\nEXPLOIT"}
+    )
+
+    system, user = build_prompt(state, trigger)
+
+    # Le newline ne doit pas rester.
+    assert "\nEXPLOIT" not in user
+    # Le contenu doit être présent mais sans newline.
+    assert "user" in user
+    assert "EXPLOIT" in user
