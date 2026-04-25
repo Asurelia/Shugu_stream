@@ -72,12 +72,13 @@ jobs:
       # DATABASE_URL reste standard pour compat avec les outils CI tiers.
       DATABASE_URL: postgresql+asyncpg://shugu:shugu@localhost:5432/shugu_test
       VIP_INTERNAL_SECRET: ci-test-secret-not-real
-      # SHUGU_ENV=ci désactive le validator strict ip_hash_salt (cf config.py — Mémoire PR 2 fix M1).
+      # ENV=ci désactive le validator strict ip_hash_salt (cf config.py — Mémoire PR 2 fix M1).
       # Sans ça, alembic upgrade plante car ip_hash_salt vide en prod par défaut.
-      SHUGU_ENV: ci
+      # Les fields s'appellent `env` et `ip_hash_salt` (sans prefix shugu_) → env vars sans prefix.
+      ENV: ci
       # Salt fictif pour les tests integration qui hashent des IPs viewer.
       # Pas un secret réel — l'env CI est éphémère et isolé.
-      SHUGU_IP_HASH_SALT: ci-fixture-salt-not-secret
+      IP_HASH_SALT: ci-fixture-salt-not-secret
 
     steps:
       - name: Checkout
