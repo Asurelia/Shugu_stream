@@ -35,6 +35,8 @@ def _make_settings(
 ) -> Settings:
     """Construit un Settings minimal sans lire l'env file."""
     return Settings(
+        env="test",
+        ip_hash_salt="test",
         director_enabled=enabled,
         vip_usernames=vips or [],
         director_silence_timeout_s=silence_timeout_s,
