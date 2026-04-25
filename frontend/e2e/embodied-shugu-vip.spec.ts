@@ -112,7 +112,7 @@ test.describe("Phase E4 — Embodied Shugu VIP north star demo", () => {
 
   test(
     "VIP arrival triggers Embodied Shugu transformation in <5s",
-    async ({ page, request }) => {
+    async ({ page }) => {
       // Ce test nécessite une clé LLM en CI pour que le Director produise
       // des tags réels (outfit/vfx/face) — sans clé, le fallback est
       // [say_emotion:neutral] qui ne change pas l'outfit.
@@ -139,25 +139,28 @@ test.describe("Phase E4 — Embodied Shugu VIP north star demo", () => {
       // Capturer l'état initial.
       const initialOutfit = await adapter.getAttribute("data-current-outfit");
 
-      // Déclencher l'arrivée VIP via la route de test Director.
+      // Déclencher via un chat de Spoukie (sender VIP dans vip_usernames).
+      // Le wiring Phase E1 (publish_chat_trigger) publie automatiquement
+      // un trigger vip_arrival en plus du chat quand le sender est VIP.
+      //
+      // On utilise page.request.post() (pas request.post()) pour partager
+      // le contexte de cookies de la page — le cookie operator shugu_access
+      // est ainsi transmis automatiquement (M3 fix : évite 401 en CI).
       const triggerUrl = BACKEND_URL
         ? `${BACKEND_URL}/api/test/director/trigger`
         : "/api/test/director/trigger";
 
-      const triggerResponse = await request.post(triggerUrl, {
+      const triggerResponse = await page.request.post(triggerUrl, {
         data: {
-          kind: "vip_arrival",
-          payload: { sender: "spoukie" },
-        },
-        headers: {
-          // Le cookie operator doit être transmis pour l'auth.
-          // En CI, le backend est lancé avec credentials de test.
+          kind: "chat",
+          payload: { sender: "Spoukie", text: "Salut Shugu !" },
         },
       });
 
       // 202 Accepted = trigger publié sur le bus (orchestration asynchrone).
       // 404 = test_triggers_enabled=False → fail explicite.
       // 503 = director_enabled=False → fail explicite.
+      // 401 = cookie non transmis (ne doit pas arriver avec page.request.post).
       expect(triggerResponse.status(), "La route /api/test/director/trigger doit retourner 202").toBe(202);
 
       // Attendre que l'outfit change (le Director a eu le temps de LLM + workers).
@@ -200,8 +203,9 @@ test.describe("Phase E4 — Embodied Shugu VIP north star demo", () => {
       // Sans cookie d'auth → 401 (correct).
       // Avec cookie mais sans flag → 404 (correct).
       // On vérifie juste que la route ne retourne jamais 200 sans le flag.
+      // Note : on utilise "chat" (pas "vip_arrival" — exclu par H1 Literal).
       const response = await request.post(triggerUrl, {
-        data: { kind: "vip_arrival", payload: {} },
+        data: { kind: "chat", payload: { sender: "spoukie", text: "test" } },
         failOnStatusCode: false,
       });
 
