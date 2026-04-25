@@ -69,6 +69,14 @@ class DirectorLLMClient:
         self._http = http
         self._model = model
 
+    def __repr__(self) -> str:
+        """Retourne une repr sûre sans exposer la clé API.
+
+        Phase E2 L1 : empêche les leaks de secrets en cas de logging ou
+        debugging (ex: logger exception qui affiche la repr de self).
+        """
+        return f"<DirectorLLMClient model={self._model!r}>"
+
     async def complete(
         self,
         *,
