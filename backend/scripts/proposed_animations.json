@@ -1,0 +1,296 @@
+{
+  "description": "30 animations MVP proposed for Shugu animation bank (Phase E4)",
+  "total_count": 30,
+  "categories": {
+    "idle_afk": {
+      "priority": "P0-P2",
+      "count": 5,
+      "animations": [
+        {
+          "slug": "idle_loop",
+          "name": "Neutral Idle (Breathing)",
+          "description": "Standard rest pose with subtle breathing",
+          "priority": "P0",
+          "duration_seconds": "2-3",
+          "use_case": "Default loop when not performing actions"
+        },
+        {
+          "slug": "idle_breathing",
+          "name": "Breathing Idle",
+          "description": "Idle with exaggerated breathing motion",
+          "priority": "P1",
+          "duration_seconds": "3-4",
+          "use_case": "Emphasis on subtle movement"
+        },
+        {
+          "slug": "idle_lookaround",
+          "name": "Look Around",
+          "description": "Idle with head turns and scanning",
+          "priority": "P1",
+          "duration_seconds": "2-3",
+          "use_case": "Curious, attentive behavior"
+        },
+        {
+          "slug": "idle_stretch",
+          "name": "Stretch",
+          "description": "Standing stretch motion",
+          "priority": "P2",
+          "duration_seconds": "2",
+          "use_case": "Idle variation, boredom indicator"
+        },
+        {
+          "slug": "idle_yawn",
+          "name": "Yawn",
+          "description": "Yawning motion with full body",
+          "priority": "P2",
+          "duration_seconds": "3",
+          "use_case": "Late night stream, tiredness"
+        }
+      ]
+    },
+    "greetings": {
+      "priority": "P0-P2",
+      "count": 5,
+      "animations": [
+        {
+          "slug": "wave",
+          "name": "Wave",
+          "description": "Standard hand wave greeting",
+          "priority": "P0",
+          "duration_seconds": "1-2",
+          "use_case": "Welcome, hello, farewell"
+        },
+        {
+          "slug": "wave_excited",
+          "name": "Excited Wave",
+          "description": "Enthusiastic two-hand wave",
+          "priority": "P1",
+          "duration_seconds": "1.5",
+          "use_case": "VIP arrival, birthday, special events"
+        },
+        {
+          "slug": "bow",
+          "name": "Bow",
+          "description": "Japanese-style bow (respectful greeting)",
+          "priority": "P0",
+          "duration_seconds": "2",
+          "use_case": "Respect, humility, formal greeting"
+        },
+        {
+          "slug": "salute",
+          "name": "Military Salute",
+          "description": "Formal military salute",
+          "priority": "P2",
+          "duration_seconds": "1",
+          "use_case": "Respect, acknowledgment"
+        },
+        {
+          "slug": "peace_sign",
+          "name": "Peace Sign",
+          "description": "Victory/peace gesture with both hands",
+          "priority": "P1",
+          "duration_seconds": "1-1.5",
+          "use_case": "Positivity, goodbye, celebration"
+        }
+      ]
+    },
+    "reactions": {
+      "priority": "P0-P2",
+      "count": 5,
+      "animations": [
+        {
+          "slug": "thumbs_up",
+          "name": "Thumbs Up",
+          "description": "Approval and confirmation gesture",
+          "priority": "P0",
+          "duration_seconds": "1",
+          "use_case": "Agreement, approval, like"
+        },
+        {
+          "slug": "clap",
+          "name": "Clapping",
+          "description": "Applause and celebration",
+          "priority": "P0",
+          "duration_seconds": "2-3",
+          "use_case": "Congratulations, appreciation, cheer"
+        },
+        {
+          "slug": "cheer",
+          "name": "Cheering",
+          "description": "Celebratory cheering with full body",
+          "priority": "P1",
+          "duration_seconds": "3",
+          "use_case": "Victory, excitement, milestone"
+        },
+        {
+          "slug": "fist_pump",
+          "name": "Fist Pump",
+          "description": "Victorious fist pump celebration",
+          "priority": "P1",
+          "duration_seconds": "1.5",
+          "use_case": "Achievement, success, hype"
+        },
+        {
+          "slug": "surprised_jump",
+          "name": "Surprised Jump",
+          "description": "Surprised/excited jumping",
+          "priority": "P2",
+          "duration_seconds": "2",
+          "use_case": "Surprise, shock, amazement"
+        }
+      ]
+    },
+    "emotes": {
+      "priority": "P0-P2",
+      "count": 5,
+      "animations": [
+        {
+          "slug": "dance",
+          "name": "Dance",
+          "description": "Simple enthusiastic dance move",
+          "priority": "P0",
+          "duration_seconds": "4-6",
+          "use_case": "Celebration, happy, fun moments"
+        },
+        {
+          "slug": "dance_silly",
+          "name": "Silly Dance",
+          "description": "Ridiculous, over-the-top dance",
+          "priority": "P1",
+          "duration_seconds": "4-5",
+          "use_case": "Comedy, absurdity, personality"
+        },
+        {
+          "slug": "shy_giggle",
+          "name": "Shy Giggle",
+          "description": "Embarrassed laughing/giggling",
+          "priority": "P0",
+          "duration_seconds": "2",
+          "use_case": "Embarrassment, humility, cuteness"
+        },
+        {
+          "slug": "shy_hide",
+          "name": "Shy Hide",
+          "description": "Embarrassed hiding/covering face",
+          "priority": "P2",
+          "duration_seconds": "1.5",
+          "use_case": "Shame, embarrassment, shyness"
+        },
+        {
+          "slug": "thinking",
+          "name": "Thinking",
+          "description": "Thoughtful pose with hand on chin",
+          "priority": "P0",
+          "duration_seconds": "2-3",
+          "use_case": "Contemplation, decision-making, uncertainty"
+        }
+      ]
+    },
+    "talk_gestures": {
+      "priority": "P1-P2",
+      "count": 5,
+      "animations": [
+        {
+          "slug": "talk_explain",
+          "name": "Explaining",
+          "description": "Talking with hand gestures for explanation",
+          "priority": "P1",
+          "duration_seconds": "2-3",
+          "use_case": "Education, explanation, teaching"
+        },
+        {
+          "slug": "talk_emphasize",
+          "name": "Emphasizing",
+          "description": "Strong gesturing for emphasis",
+          "priority": "P2",
+          "duration_seconds": "2",
+          "use_case": "Punctuation, important point, intensity"
+        },
+        {
+          "slug": "nod",
+          "name": "Nodding",
+          "description": "Head nodding in agreement",
+          "priority": "P1",
+          "duration_seconds": "1.5",
+          "use_case": "Agreement, understanding, yes"
+        },
+        {
+          "slug": "headshake",
+          "name": "Head Shake",
+          "description": "Head shaking disagreement",
+          "priority": "P1",
+          "duration_seconds": "1.5",
+          "use_case": "Disagreement, negation, no"
+        },
+        {
+          "slug": "shrug",
+          "name": "Shrug",
+          "description": "Shoulder shrug with uncertainty",
+          "priority": "P1",
+          "duration_seconds": "1",
+          "use_case": "Uncertainty, don't know, indifference"
+        }
+      ]
+    },
+    "daily_life": {
+      "priority": "P1-P2",
+      "count": 5,
+      "animations": [
+        {
+          "slug": "read_book",
+          "name": "Reading Book",
+          "description": "Sitting and reading from book",
+          "priority": "P2",
+          "duration_seconds": "3",
+          "use_case": "Learning content, quiet moment"
+        },
+        {
+          "slug": "sip_drink",
+          "name": "Drinking",
+          "description": "Sipping from a cup/bottle",
+          "priority": "P2",
+          "duration_seconds": "2",
+          "use_case": "Break, hydration, casual moment"
+        },
+        {
+          "slug": "doodle",
+          "name": "Doodling/Drawing",
+          "description": "Drawing or doodling gesture",
+          "priority": "P2",
+          "duration_seconds": "2.5",
+          "use_case": "Creative thinking, idle variation"
+        },
+        {
+          "slug": "type_keyboard",
+          "name": "Typing",
+          "description": "Typing on keyboard motion",
+          "priority": "P1",
+          "duration_seconds": "2",
+          "use_case": "Coding, chat, responses"
+        },
+        {
+          "slug": "stretch_long",
+          "name": "Long Stretch",
+          "description": "Full body stretching motion",
+          "priority": "P1",
+          "duration_seconds": "3",
+          "use_case": "Fatigue, relaxation, between topics"
+        }
+      ]
+    }
+  },
+  "notes": {
+    "source": "Mixamo (Adobe) free animation library",
+    "license": "Adobe Mixamo License (personal + commercial use allowed)",
+    "retarget_mapping": "Standard VRM Humanoid skeleton",
+    "import_workflow": "Mixamo FBX → Blender retarget → VRMA (GLB + metadata JSON)",
+    "deployment": "frontend/public/assets/vrma/{slug}.vrma",
+    "phase": "E4 MVP",
+    "next_steps": [
+      "Batch convert all 30 animations via convert_batch.sh",
+      "Validate VRMA files with test_vrma_loader.py",
+      "Update assets_available whitelist in app.py",
+      "Stream-test with Director LLM emitting [anim:*] tags"
+    ]
+  }
+}

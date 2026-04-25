@@ -1,0 +1,11 @@
+{
+  "format": "vrma",
+  "version": "1.0",
+  "slug": "excited_wave",
+  "frame_count": 60,
+  "fps": 30.0,
+  "duration_seconds": 2.0,
+  "retarget_source": "mixamo",
+  "retarget_mapping": "vrm_humanoid_standard",
+  "export_date": "2026-04-25T21:30:00Z"
+}
