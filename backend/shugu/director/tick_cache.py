@@ -91,7 +91,8 @@ def format_trigger_for_cache(
         text_part = str(payload.get("text", ""))[:200]
         trigger_repr = f"chat:{text_part}"
     elif kind == "vip_arrival":
-        trigger_repr = "vip_arrival"
+        sender = payload.get("sender", "?")
+        trigger_repr = f"vip_arrival:{sender}"
     elif kind == "silence":
         # On ne casse pas sur la durée exacte — on veut regrouper les silences.
         trigger_repr = "silence"

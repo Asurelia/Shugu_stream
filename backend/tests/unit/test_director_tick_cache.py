@@ -37,12 +37,26 @@ def test_format_trigger_chat_includes_text() -> None:
     assert "face=joy" in text
 
 
-def test_format_trigger_vip_arrival_is_stable() -> None:
-    """vip_arrival produit toujours le même texte (sender non inclus)."""
-    text1 = format_trigger_for_cache("vip_arrival", {"sender": "alice"})
-    text2 = format_trigger_for_cache("vip_arrival", {"sender": "bob"})
-    assert text1 == text2
-    assert "vip_arrival" in text1
+def test_format_trigger_vip_arrival_includes_sender() -> None:
+    """vip_arrival inclut le sender dans la clé — évite de servir la réponse
+    d'alice à bob quand le LLM a inclus le nom dans la réponse."""
+    text_alice = format_trigger_for_cache("vip_arrival", {"sender": "alice"})
+    text_bob = format_trigger_for_cache("vip_arrival", {"sender": "bob"})
+    # Clés différentes par sender.
+    assert text_alice != text_bob
+    # Le kind est toujours présent dans les deux.
+    assert "vip_arrival" in text_alice
+    assert "vip_arrival" in text_bob
+    # Le sender est bien inclus.
+    assert "alice" in text_alice
+    assert "bob" in text_bob
+
+
+def test_format_trigger_vip_arrival_missing_sender_uses_placeholder() -> None:
+    """vip_arrival sans sender dans le payload utilise '?' comme placeholder."""
+    text = format_trigger_for_cache("vip_arrival", {})
+    assert "vip_arrival" in text
+    assert "?" in text
 
 
 def test_format_trigger_silence_is_stable() -> None:
