@@ -473,3 +473,58 @@ def test_draft_update_not_delivered_to_other_scene_subscriber(
         assert recv["type"] == "pong"
         assert recv.get("nonce") == "ping-b", \
             "scene isolation broke — B recv'd an event from another scene"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# DIRECTOR scene.apply BYPASS (Phase E3)
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def test_scene_apply_broadcast_delivered_to_all_clients_regardless_of_scene_id(
+    client: TestClient, settings, event_bus,
+) -> None:
+    """Phase E3 — un broadcast Director `scene.apply` doit etre livre a TOUS
+    les clients connectes, qu'ils soient subscribed ou non a une scene
+    particuliere. Le forward loop bypass le filtre `scene_id` pour cette
+    famille d'events (cf. `_bus_forward_loop` doc). Sans ce bypass, un
+    operator focused sur scene_b ne verrait jamais l'outfit hot-swap
+    pousse par Shugu Soul."""
+    token_a = _issue_token(settings, "alice")
+    token_b = _issue_token(settings, "bob")
+    with client.websocket_connect(f"/ws/editor?token={token_a}") as ws_a, \
+         client.websocket_connect(f"/ws/editor?token={token_b}") as ws_b:
+        assert ws_a.receive_json()["type"] == "hello"
+        assert ws_b.receive_json()["type"] == "hello"
+        # A subscribe scene_a, B subscribe scene_b — scenes disjointes.
+        ws_a.send_json({"type": "subscribe", "scene_id": SCENE_A})
+        assert ws_a.receive_json()["type"] == "subscribed"
+        ws_b.send_json({"type": "subscribe", "scene_id": SCENE_B})
+        assert ws_b.receive_json()["type"] == "subscribed"
+
+        # Simule un broadcast Director : envelope avec sentinel scene_id="*"
+        # et payload `scene.apply`. On passe par le portal anyio du
+        # TestClient pour que le `publish` execute dans la MEME loop que
+        # les subscribers serveur (InProcessEventBus expose des queues
+        # asyncio liees a la loop d'origine).
+        director_payload = {
+            "type": "scene.apply",
+            "kind": "outfit",
+            "id": "vip_fan",
+            "ts": "2026-04-25T10:30:00+00:00",
+        }
+        director_envelope = {
+            "scene_id": "*",
+            "origin": "director",
+            "payload": director_payload,
+        }
+        client.portal.call(
+            event_bus.publish, "editor:broadcast", director_envelope,
+        )
+
+        # Les deux clients recoivent le payload meme s'ils sont subscribed
+        # a des scenes disjointes — c'est le bypass `scene.apply`.
+        ev_a = ws_a.receive_json()
+        assert ev_a == director_payload
+
+        ev_b = ws_b.receive_json()
+        assert ev_b == director_payload

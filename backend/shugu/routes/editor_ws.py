@@ -505,6 +505,16 @@ async def _bus_forward_loop(ws: WebSocket, state: _ConnState) -> None:
     Les events `peer.joined`/`peer.left` passent par ce meme chemin : comme
     on publie sur le bus au subscribe(), tout client deja subscribed a la
     meme scene recevra l'annonce (cross-worker inclus via redis).
+
+    Bypass `scene.apply` (Phase E3) : les workers Director publient des
+    payloads `{"type": "scene.apply", ...}` avec un envelope sentinelle
+    `scene_id="*"`. Ces broadcasts s'adressent a TOUS les clients quel
+    que soit le scene_id auquel ils sont subscribed (un changement
+    d'outfit / VFX est un effet global du viewer, pas un detail
+    d'edition collaborative). Le bypass court-circuite donc le filtre
+    `scene_id` pour cette famille d'events. Le filtre self-echo reste
+    actif (un client qui se serait identifie comme origine ne se voit
+    pas relayer son propre broadcast).
     """
     try:
         async for envelope in state.deps.event_bus.subscribe(BROADCAST_TOPIC):
@@ -514,12 +524,18 @@ async def _bus_forward_loop(ws: WebSocket, state: _ConnState) -> None:
             # events au client qui les a envoyes.
             if envelope.get("connection_id") == state.connection_id:
                 continue
+            inner = envelope.get("payload")
+            if not isinstance(inner, dict):
+                continue
+            # Bypass Phase E3 — broadcasts Director (`scene.apply`) :
+            # delivres a tout client connecte, independamment du
+            # scene_id de subscription (cf. docstring).
+            if inner.get("type") == "scene.apply":
+                await _safe_send_json(ws, inner)
+                continue
             # Filtre scope : on ne livre que si on est subscribed a cette scene.
             scene_id = envelope.get("scene_id")
             if state.scene_id is None or scene_id != state.scene_id:
-                continue
-            inner = envelope.get("payload")
-            if not isinstance(inner, dict):
                 continue
             await _safe_send_json(ws, inner)
     except asyncio.CancelledError:
