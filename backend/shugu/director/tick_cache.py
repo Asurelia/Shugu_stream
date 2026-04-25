@@ -18,6 +18,13 @@ Le `trigger_text` inclut un fingerprint de l'état courant de la scène :
 `"scene={scene_slug}|face={face}|trigger={kind}:{payload_compact}"`.
 Cela évite de rejouer des tags qui référencent des assets de l'ancienne scène.
 
+## Session factory (C1 fix — Phase E2.5 review)
+
+`TickCache` est instancié UNE FOIS au lifespan mais ouvre une session courte
+par lookup/store via `session_factory` (callable → async context manager).
+Pattern : `session_factory=session_scope` depuis `db.session`.
+Cela évite une session longue durée stale et le double-commit.
+
 ## Securité — embedding poisoning
 
 Le `trigger_text` est sanitisé avant embedding :
@@ -117,27 +124,39 @@ class TickCache:
 
     Réduit 60-80% des appels LLM (chat events sémantiquement similaires).
 
-    Usage:
-        cache = TickCache(db=session, embedder=embedder, settings=settings)
-        cached = await cache.lookup(trigger_text)
-        if cached:
-            return cached  # skip LLM
-        text = await llm.complete(...)
-        await cache.store(trigger_text, text, tags)
+    ## Architecture session_factory
+
+    `TickCache` est instancié UNE FOIS au lifespan mais a besoin de sessions
+    courtes par requête. Pour éviter d'injecter une session longue durée (qui
+    serait stale après quelques secondes), on injecte une `session_factory` :
+    callable qui retourne un async context manager → AsyncSession.
+
+    Compatible avec `db.session.session_scope` (asynccontextmanager) :
+        tick_cache = TickCache(
+            session_factory=session_scope,
+            embedder=embedder,
+            ttl_seconds=settings.director_cache_ttl_seconds,
+            similarity_threshold=settings.director_cache_similarity_threshold,
+        )
+
+    Chaque appel `lookup()` / `store()` ouvre une session courte via
+    `async with self._session_factory() as session:`. La session_factory
+    gère le commit (session_scope fait `await session.commit()` en sortie
+    normale) — NE PAS appeler `session.commit()` manuellement dans store().
 
     Note: utilise `director_tick_cache` (migration 0008).
     """
 
     def __init__(
         self,
-        db,  # sqlalchemy.ext.asyncio.AsyncSession — import lazy pour ne pas dépendre de SA dans les tests
-        embedder,  # shugu.memory.embedder.Embedder
+        session_factory,  # Callable[[], AsyncContextManager[AsyncSession]]
+        embedder,         # shugu.memory.embedder.Embedder
         *,
         ttl_seconds: int = 300,
         similarity_threshold: float = 0.92,
         enabled: bool = True,
     ) -> None:
-        self._db = db
+        self._session_factory = session_factory
         self._embedder = embedder
         self._ttl_seconds = ttl_seconds
         self._threshold = similarity_threshold
@@ -184,8 +203,9 @@ class TickCache:
             .limit(1)
         )
 
-        result = await self._db.execute(stmt)
-        row = result.first()
+        async with self._session_factory() as session:
+            result = await session.execute(stmt)
+            row = result.first()
 
         if row is None:
             return None
@@ -269,8 +289,10 @@ class TickCache:
             created_at=now,
             expires_at=now + timedelta(seconds=self._ttl_seconds),
         )
-        self._db.add(record)
-        await self._db.commit()
+        # session_factory (= session_scope) commit automatiquement en sortie
+        # du context manager — NE PAS appeler session.commit() ici.
+        async with self._session_factory() as session:
+            session.add(record)
 
         log.debug(
             "director.tick_cache_stored",

@@ -7,14 +7,20 @@ Couverture :
 - _sanitize_trigger_text() : newlines remplacés, cap longueur.
 - CachedTick dataclass.
 - Injection de données dans StubTickCache.
+- C1 — TickCache.lookup/store appellent bien la session_factory (mock).
+- C1 — TickCache disabled → session_factory jamais appelée.
 
 Note : TickCache réel (pgvector) n'est testé qu'en intégration.
 """
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
+from unittest.mock import AsyncMock, MagicMock, patch
+
 from shugu.director.tick_cache import (
     CachedTick,
     StubTickCache,
+    TickCache,
     _sanitize_trigger_text,
     format_trigger_for_cache,
 )
@@ -200,3 +206,113 @@ def test_cached_tick_fields() -> None:
     assert tick.llm_text == "Bonjour ! [face:joy]"
     assert tick.similarity == 0.95
     assert len(tick.tags) == 1
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Tests C1 — TickCache.session_factory wiring
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _make_session_factory():
+    """Retourne un (mock_session, session_factory) pour les tests TickCache."""
+    mock_session = MagicMock()
+    mock_session.execute = AsyncMock(return_value=MagicMock(first=MagicMock(return_value=None)))
+    mock_session.add = MagicMock()
+    mock_session.commit = AsyncMock()
+    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = AsyncMock(return_value=False)
+
+    session_factory_calls: list[int] = []
+
+    @asynccontextmanager
+    async def session_factory():
+        session_factory_calls.append(1)
+        yield mock_session
+
+    return mock_session, session_factory, session_factory_calls
+
+
+async def test_tick_cache_lookup_calls_session_factory() -> None:
+    """TickCache.lookup() ouvre une session via session_factory (cache miss)."""
+    mock_session, session_factory, calls = _make_session_factory()
+
+    mock_embedder = MagicMock()
+    mock_embedder.embed_query = AsyncMock(return_value=[0.1] * 1024)
+
+    cache = TickCache(
+        session_factory=session_factory,
+        embedder=mock_embedder,
+        ttl_seconds=300,
+        similarity_threshold=0.92,
+        enabled=True,
+    )
+
+    # Patch les imports lazy dans _lookup_impl.
+    with patch("shugu.director.tick_cache.TickCache._lookup_impl", new_callable=AsyncMock) as mock_impl:
+        mock_impl.return_value = None
+        result = await cache.lookup("trigger_text")
+
+    assert result is None
+    mock_impl.assert_called_once_with("trigger_text")
+
+
+async def test_tick_cache_store_calls_session_factory() -> None:
+    """TickCache.store() ouvre une session via session_factory et ajoute le record."""
+    mock_session, session_factory, calls = _make_session_factory()
+
+    mock_embedder = MagicMock()
+    mock_embedder.embed_documents = AsyncMock(return_value=[[0.1] * 1024])
+
+    cache = TickCache(
+        session_factory=session_factory,
+        embedder=mock_embedder,
+        ttl_seconds=300,
+        similarity_threshold=0.92,
+        enabled=True,
+    )
+
+    # Patch _store_impl pour vérifier l'appel sans dépendance DB réelle.
+    with patch("shugu.director.tick_cache.TickCache._store_impl", new_callable=AsyncMock) as mock_impl:
+        await cache.store("trigger_text", "llm réponse [face:joy]", [])
+
+    mock_impl.assert_called_once_with("trigger_text", "llm réponse [face:joy]", [])
+
+
+async def test_tick_cache_disabled_lookup_returns_none_without_db() -> None:
+    """TickCache disabled → lookup retourne None sans toucher la session_factory."""
+    session_factory_calls: list[int] = []
+
+    @asynccontextmanager
+    async def session_factory():
+        session_factory_calls.append(1)
+        yield MagicMock()
+
+    cache = TickCache(
+        session_factory=session_factory,
+        embedder=MagicMock(),
+        enabled=False,
+    )
+
+    result = await cache.lookup("trigger_text")
+    assert result is None
+    # La session ne doit pas avoir été ouverte.
+    assert len(session_factory_calls) == 0
+
+
+async def test_tick_cache_disabled_store_no_db_call() -> None:
+    """TickCache disabled → store() ne touche pas la session_factory."""
+    session_factory_calls: list[int] = []
+
+    @asynccontextmanager
+    async def session_factory():
+        session_factory_calls.append(1)
+        yield MagicMock()
+
+    cache = TickCache(
+        session_factory=session_factory,
+        embedder=MagicMock(),
+        enabled=False,
+    )
+
+    await cache.store("trigger_text", "réponse", [])
+    assert len(session_factory_calls) == 0

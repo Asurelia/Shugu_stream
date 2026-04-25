@@ -155,11 +155,12 @@ async def lifespan(app: FastAPI):
 
     # MemoryAgent — Phase 1 Brique 1.3 + Phase 2.2 (embedder wiring).
     # L'agent est instancié même si `memory_enabled=False` (rétrocompat).
-    # L'embedder, lui, n'est chargé QUE si `memory_enabled=True` — le modèle
-    # ONNX (~2GB) n'est pas téléchargé sur un boot de dev qui n'utilise pas
-    # la mémoire. Quand disponible, store() auto-embed + recall() cosine.
+    # L'embedder est chargé si `memory_enabled=True` OU `director_cache_enabled=True`
+    # (le TickCache Director partage le même modèle d'embedding multilingue 1024-dim).
+    # Le modèle ONNX (~2GB) n'est chargé qu'en cas de besoin réel.
     embedder = None
-    if settings.memory_enabled:
+    _need_embedder = settings.memory_enabled or settings.director_cache_enabled
+    if _need_embedder:
         from .memory.embedder import FastEmbedE5Large
         embedder = FastEmbedE5Large(
             model_name=settings.memory_embedder_model,
@@ -174,7 +175,7 @@ async def lifespan(app: FastAPI):
         "memory_agent.ready",
         embed_dim=settings.memory_embed_dim,
         enabled=settings.memory_enabled,
-        embedder_model=settings.memory_embedder_model if settings.memory_enabled else None,
+        embedder_model=settings.memory_embedder_model if _need_embedder else None,
     )
 
     personality_loader = MarkdownPersonalityLoader(
@@ -285,6 +286,7 @@ async def lifespan(app: FastAPI):
         from .director.debouncer import TriggerDebouncer
         from .director.orchestrator import Orchestrator
         from .director.state_store import get_director_state_store
+        from .director.tick_cache import TickCache
         from .director.triggers import get_trigger_bus
 
         director_state_store = get_director_state_store()
@@ -294,6 +296,28 @@ async def lifespan(app: FastAPI):
             window_seconds=settings.director_debounce_window_seconds,
             max_batch=settings.director_debounce_max_batch,
         )
+
+        # TickCache — wiring réel via session_factory async (C1 fix).
+        # Prérequis : embedder disponible (chargé ci-dessus si director_cache_enabled=True).
+        director_tick_cache = None
+        if settings.director_cache_enabled:
+            if embedder is not None:
+                director_tick_cache = TickCache(
+                    session_factory=session_scope,
+                    embedder=embedder,
+                    ttl_seconds=settings.director_cache_ttl_seconds,
+                    similarity_threshold=settings.director_cache_similarity_threshold,
+                    enabled=True,
+                )
+            else:
+                log.warning(
+                    "director.cache_enabled_but_not_wired",
+                    extra={
+                        "status": "disabled_silently",
+                        "reason": "embedder non disponible (memory_enabled=False et director_cache_enabled=True mais embedder non chargé)",
+                    },
+                )
+
         director_orchestrator = Orchestrator(
             state_store=director_state_store,
             workers=app.state.director_workers,
@@ -301,18 +325,16 @@ async def lifespan(app: FastAPI):
             event_bus=event_bus,
             settings=settings,
             debouncer=director_debouncer,
-            # tick_cache=None en Phase E2.5 prod — nécessite une DB session async
-            # injectée. À brancher Phase E3 via un middleware DB.
-            tick_cache=None,
+            tick_cache=director_tick_cache,
         )
         await director_orchestrator.start(director_trigger_bus)
         app.state.director_orchestrator = director_orchestrator
         log.info(
-            "director.orchestrator_wired",
+            "director.lifespan_started",
             extra={
                 "provider": settings.director_llm_provider,
                 "model": settings.director_model,
-                "cache_enabled": settings.director_cache_enabled,
+                "cache_active": director_tick_cache is not None,
                 "canned_enabled": settings.director_canned_enabled,
             },
         )
