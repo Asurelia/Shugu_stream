@@ -711,6 +711,8 @@ async def test_tick_chat_debounced_first_call_absorbed() -> None:
 
     # Le brain ne doit pas avoir été appelé (trigger absorbé).
     assert len(brain.calls) == 0
+    # Annule le timer 60s en attente pour éviter la task destroyed warning.
+    await orch.stop()
 
 
 async def test_tick_chat_debounced_max_batch_flush() -> None:

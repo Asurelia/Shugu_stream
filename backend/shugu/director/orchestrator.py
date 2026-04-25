@@ -166,10 +166,18 @@ class Orchestrator:
         # Phase E2.5 — cache sémantique + debouncer.
         # Un StubTickCache/StubDebouncer peut être injecté pour les tests.
         self._tick_cache: TickCache = tick_cache  # type: ignore[assignment]
-        self._debouncer: TriggerDebouncer = debouncer or TriggerDebouncer(
-            window_seconds=settings.director_debounce_window_seconds,
-            max_batch=settings.director_debounce_max_batch,
-        )
+        if debouncer is not None:
+            # Si un debouncer externe est injecté (tests ou lifespan), on branche
+            # on_flush s'il n'en a pas encore — évite de perdre les triggers solitaires.
+            if debouncer._on_flush is None:
+                debouncer._on_flush = self._handle_batched_trigger
+            self._debouncer: TriggerDebouncer = debouncer
+        else:
+            self._debouncer = TriggerDebouncer(
+                window_seconds=settings.director_debounce_window_seconds,
+                max_batch=settings.director_debounce_max_batch,
+                on_flush=self._handle_batched_trigger,
+            )
 
         # Déduplication des canned responses — IDs des N dernières utilisées.
         self._recent_canned_ids: set[str] = set()
@@ -239,6 +247,8 @@ class Orchestrator:
             batched = await self._debouncer.submit(trigger)
             if batched is None:
                 # Trigger absorbé dans la fenêtre debounce — pas d'appel LLM.
+                # Le debouncer appellera on_flush (= _handle_batched_trigger)
+                # quand la fenêtre expirera via le timer.
                 log.debug(
                     "director.orchestrator_trigger_debounced",
                     extra={"kind": trigger.kind},
@@ -246,6 +256,16 @@ class Orchestrator:
                 return
             trigger = batched
 
+        await self._execute_tick_post_debounce(trigger)
+
+    async def _execute_tick_post_debounce(self, trigger: TriggerEvent) -> None:
+        """Pipeline post-debounce : canned → cache → LLM.
+
+        Appelé depuis `_execute_tick` (après le debouncer) ET depuis
+        `_handle_batched_trigger` (timer auto-flush, trigger déjà batché).
+
+        Doit être appelé sous `_tick_lock`.
+        """
         # 3. Canned responses pour les triggers à faible variabilité.
         if self._settings.director_canned_enabled and trigger.kind in CANNED_ELIGIBLE_KINDS:
             canned = pick_canned(
@@ -454,22 +474,35 @@ class Orchestrator:
         """Subscribe au TriggerBus — prêt à recevoir les triggers.
 
         Idempotent : si déjà démarré, on unsubscribe d'abord puis re-subscribe.
+        Démarre aussi le timer auto-flush du debouncer pour que les triggers
+        chat solitaires ne restent pas coincés indéfiniment dans la fenêtre.
         """
         if self._dispose is not None:
             self._dispose()
         self._dispose = trigger_bus.subscribe(self._on_trigger)
+        if self._debouncer is not None:
+            await self._debouncer.start()
         log.info("director.orchestrator_started")
 
     async def stop(self) -> None:
-        """Unsubscribe et attend la fin du tick courant.
+        """Unsubscribe, draine le debouncer, attend la fin du tick courant.
 
         Doit être appelé AVANT `director_bg.stop()` et AVANT `event_bus.close()`
         dans le lifespan finally — l'orchestrator peut encore publier pendant
         le tick en cours.
+
+        stop() flushe aussi le buffer debouncer résiduel via debouncer.stop()
+        pour éviter de perdre les triggers absorbés en fin de session.
         """
         if self._dispose is not None:
             self._dispose()
             self._dispose = None
+
+        # Drainer le debouncer AVANT d'attendre le lock — stop() peut déclencher
+        # un dernier tick (le flush du buffer résiduel). Unsubscribe déjà fait
+        # ci-dessus, donc ce tick ne peut pas créer de nouveaux triggers entrants.
+        if self._debouncer is not None:
+            await self._debouncer.stop()
 
         # Attend que le lock soit libéré (tick en cours terminé).
         log.info("director.orchestrator_waiting_tick_drain")
@@ -477,6 +510,49 @@ class Orchestrator:
             pass
 
         log.info("director.orchestrator_stopped")
+
+    async def _handle_batched_trigger(self, trigger: TriggerEvent) -> None:
+        """Callback appelé par le debouncer quand une fenêtre flushe via timer.
+
+        Identique à tick() mais SANS passer par le debouncer (le trigger est
+        déjà un batch consolidé). Respecte le rate limit, le cap horaire et
+        le tick_lock — seule l'étape debouncer est court-circuitée.
+
+        Appelé depuis la task asyncio interne du debouncer (_timer_loop ou stop()).
+        """
+        if not self._settings.director_enabled:
+            return
+
+        is_vip = trigger.kind == "vip_arrival"
+        now = time.monotonic()
+        if not is_vip and (now - self._last_tick_at) < TICK_MIN_INTERVAL_S:
+            log.debug(
+                "director.orchestrator_batched_trigger_rate_limited",
+                extra={"kind": trigger.kind, "elapsed_s": round(now - self._last_tick_at, 3)},
+            )
+            return
+
+        if not is_vip:
+            can_tick = await self._tick_rate_counter.try_acquire()
+            if not can_tick:
+                log.warning(
+                    "director.orchestrator_batched_trigger_rate_capped",
+                    extra={"kind": trigger.kind, "max_per_hour": self._settings.director_max_ticks_per_hour},
+                )
+                return
+
+        if self._tick_lock.locked():
+            log.debug(
+                "director.orchestrator_batched_trigger_skipped_busy",
+                extra={"kind": trigger.kind},
+            )
+            return
+
+        async with self._tick_lock:
+            self._last_tick_at = time.monotonic()
+            # On passe directement à _execute_tick_post_debounce pour éviter
+            # de re-soumettre le batch au debouncer.
+            await self._execute_tick_post_debounce(trigger)
 
     async def _on_trigger(self, event: TriggerEvent) -> None:
         """Callback subscriber — appelé par TriggerBus.publish().
