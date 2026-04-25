@@ -14,7 +14,6 @@ import respx
 
 from shugu.director.llm_client import DirectorLLMClient, LLMClientError
 
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Test — __repr__ security (L1)
 # ─────────────────────────────────────────────────────────────────────────────
