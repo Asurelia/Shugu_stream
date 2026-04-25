@@ -21,6 +21,7 @@ from ..config import Settings
 from ..core.identity import VisitorIdentity, hash_ip
 from ..core.protocols import EventBus, ModerationLayer
 from ..director.wiring import publish_chat_trigger
+from ..memory.sense_publish import publish_sense_raw
 from ..pipeline.queue import QueuedMessage, RedisQueue, new_msg_id
 
 # Visitor `!action` commands: short-circuit the LLM + TTS and broadcast a
@@ -139,6 +140,23 @@ async def _handle_visitor_message(
             "detector": verdict.detector,
         }))
         return
+
+    # Mémoire PR 2 — publish sense.raw AVANT l'enqueue. No-op si
+    # memory_enabled=False. Le subject visitor:<ip_hash> est le canonical
+    # anonymous id (lowered via hash_ip) — cohérent avec la convention
+    # subject="visitor:<ip_hash_lc>" utilisée par memory.types.MemoryItem.
+    # Choix conscient await (pas create_task) : Redis publish ~1ms en local
+    # acceptable, code plus simple, pas de leaks au shutdown (cf. retour
+    # adversarial H2).
+    await publish_sense_raw(
+        event_bus=_deps.event_bus,
+        settings=_deps.settings,
+        subject=f"visitor:{identity.ip_hash}",
+        event_type="chat_in",
+        actor=f"visitor:{identity.ip_hash}",
+        payload={"text": text, "nonce": nonce},
+        session_id=identity.session_id,
+    )
 
     msg = QueuedMessage(
         msg_id=new_msg_id(),

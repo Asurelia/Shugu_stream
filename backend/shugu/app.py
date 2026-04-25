@@ -283,6 +283,8 @@ async def lifespan(app: FastAPI):
         operator_voice_ws.set_deps(operator_voice_ws.VoiceWSDeps(
             settings=settings, redis=_redis, picker=picker,
             stt=stt, hermes_embodied=hermes_embodied, metrics=_metrics,
+            # Mémoire PR 2 — bus pour publier sense.raw sur le transcript STT.
+            event_bus=event_bus,
         ))
 
     # Director workers (Phase E3) — registry tag_name -> Worker injecté avec le bus.
