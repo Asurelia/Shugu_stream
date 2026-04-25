@@ -90,6 +90,7 @@ class AnthropicDirectorBrain:
                     "content-type": "application/json",
                 },
                 json=payload,
+                timeout=60.0,
             )
             resp.raise_for_status()
             data = resp.json()

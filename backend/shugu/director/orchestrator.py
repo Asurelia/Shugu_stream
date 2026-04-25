@@ -52,7 +52,7 @@ from datetime import datetime, timezone
 from typing import Callable, Optional
 
 from ..config import Settings
-from .brain_provider import DirectorBrain, DirectorBrainError
+from .brain_provider import DirectorBrain
 from .canned_responses import CANNED_ELIGIBLE_KINDS, CannedResponse, pick_canned
 from .debouncer import DEBOUNCEABLE_KINDS, TriggerDebouncer
 from .prompt import build_prompt
@@ -306,7 +306,7 @@ class Orchestrator:
             )
             tags = [_FALLBACK_TAG]
             tts_text = ""
-        except (DirectorBrainError, Exception) as exc:
+        except Exception as exc:
             log.warning(
                 "director.orchestrator_llm_error",
                 extra={"kind": trigger.kind, "error": repr(exc)},
