@@ -217,9 +217,35 @@ function mapTree(
 }
 
 /**
+ * Segments interdits — bloquent toute tentative de prototype pollution via
+ * un path dot-separated. Phase F — Hardening H1 :
+ *
+ * `setDeepPath` est aujourd'hui appelé en interne avec des chemins
+ * hardcodés ("transform.pos", "transform.rot.1") via `viewer-adapter.tsx`.
+ * Le contrat publique de `updateInspectorField` est cependant **permissif**
+ * (cf. JSDoc : "tout chemin valide dans `InspectorData`"), et la Phase G/H
+ * va router des deltas WebSocket *untrusted* vers cette même action. Sans
+ * ce filtre, `updateInspectorField("shugu", "__proto__.polluted", "pwn")`
+ * aboutit à pollution de `Object.prototype` → côté client `({}).polluted
+ * === "pwn"` partout dans l'app.
+ *
+ * Le filtre rejette aussi `constructor` et `prototype` — moins exploitables
+ * directement mais dans la même famille (cf. CWE-1321). Le coût runtime
+ * est trivial (un `Set.has` par segment) et la liste reste close — pas
+ * d'inflation par fonctionnalités produit légitimes (les noms de champs
+ * `InspectorData` sont des identifiants métier, pas des keywords JS).
+ */
+const FORBIDDEN_PATH_SEGMENTS = new Set([
+  "__proto__",
+  "constructor",
+  "prototype",
+]);
+
+/**
  * Pose un value à un chemin dot-separated dans un draft Immer. Renvoie
  * `true` si l'écriture a eu lieu, `false` si le segment parent est absent
- * (on n'écrase jamais un objet qui n'existe pas).
+ * (on n'écrase jamais un objet qui n'existe pas) ou si un segment du chemin
+ * est interdit (cf. `FORBIDDEN_PATH_SEGMENTS`).
  *
  * Les segments numériques (`"0"`, `"1"`) sont interprétés comme index
  * d'array — pratique pour mutter `transform.pos.0` sans réécrire tout le
@@ -232,6 +258,21 @@ function setDeepPath(
 ): boolean {
   const segments = path.split(".");
   if (segments.length === 0) return false;
+  for (const seg of segments) {
+    if (FORBIDDEN_PATH_SEGMENTS.has(seg)) {
+      if (process.env.NODE_ENV !== "production") {
+        // Visible en dev/test pour repérer les call-sites buggés ; muet en
+        // prod pour ne pas signaler l'attaque à un éventuel scanner.
+        console.warn(
+          "[useSceneEditorStore] setDeepPath: forbidden segment rejected:",
+          seg,
+          "in path",
+          path,
+        );
+      }
+      return false;
+    }
+  }
   let cursor: unknown = draft;
   for (let i = 0; i < segments.length - 1; i++) {
     if (cursor === null || typeof cursor !== "object") return false;

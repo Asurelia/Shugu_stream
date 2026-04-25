@@ -11,7 +11,7 @@
  *   - limit temporal à 50 snapshots
  */
 
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   useSceneEditorStore,
   selectCurrentInspector,
@@ -329,6 +329,80 @@ describe("useSceneEditorStore · updateInspectorField (Phase F)", () => {
     const auraAfter = useSceneEditorStore.getState().inspectorById.aura;
     // Même REF : aucune mutation sur aura.
     expect(auraAfter).toBe(auraBefore);
+  });
+
+  /* ─── Phase F H1 — prototype pollution guard ─── */
+
+  describe("setDeepPath · prototype pollution guard (H1)", () => {
+    // Garde-fou défensif : si le filtre regresse et qu'un segment interdit
+    // pollue Object.prototype au cours d'un test, les tests suivants
+    // hériteraient du flag → on nettoie *toujours* après chaque cas.
+    afterEach(() => {
+      delete (Object.prototype as unknown as Record<string, unknown>).polluted;
+      delete (Object.prototype as unknown as Record<string, unknown>).pwn;
+      delete (Object.prototype as unknown as Record<string, unknown>).x;
+    });
+
+    it("__proto__ rejeté : aucune pollution globale + store inchangé (ref equality)", () => {
+      const before = useSceneEditorStore.getState().inspectorById;
+      useSceneEditorStore
+        .getState()
+        .updateInspectorField("shugu", "__proto__.polluted", "pwn");
+      const after = useSceneEditorStore.getState().inspectorById;
+      // Discriminating check : ref identique = la garde a court-circuité
+      // AVANT toute mutation Immer. Si on n'avait que le check valeur, un
+      // bug qui mute puis revert pourrait passer.
+      expect(after).toBe(before);
+      // Object.prototype intact : aucun objet vide ne hérite de "polluted".
+      expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+    });
+
+    it("constructor rejeté : store inchangé (ref equality)", () => {
+      const before = useSceneEditorStore.getState().inspectorById;
+      useSceneEditorStore
+        .getState()
+        .updateInspectorField("shugu", "constructor.x", 1);
+      const after = useSceneEditorStore.getState().inspectorById;
+      expect(after).toBe(before);
+      expect(({} as Record<string, unknown>).x).toBeUndefined();
+    });
+
+    it("prototype rejeté en segment terminal : store inchangé", () => {
+      const before = useSceneEditorStore.getState().inspectorById;
+      useSceneEditorStore
+        .getState()
+        .updateInspectorField("shugu", "transform.prototype", "x");
+      const after = useSceneEditorStore.getState().inspectorById;
+      expect(after).toBe(before);
+    });
+
+    it("__proto__ niché : le filtre matche n'importe quel segment, pas seulement le 1er", () => {
+      const before = useSceneEditorStore.getState().inspectorById;
+      useSceneEditorStore
+        .getState()
+        .updateInspectorField("shugu", "transform.__proto__.polluted", "pwn");
+      const after = useSceneEditorStore.getState().inspectorById;
+      expect(after).toBe(before);
+      expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+    });
+
+    it("régression : transform.pos passe toujours après l'ajout de la garde", () => {
+      useSceneEditorStore
+        .getState()
+        .updateInspectorField("shugu", "transform.pos", [1, 2, 3]);
+      expect(
+        useSceneEditorStore.getState().inspectorById.shugu.transform.pos,
+      ).toEqual([1, 2, 3]);
+    });
+
+    it("régression : transform.rot.1 (path Phase F viewer-adapter) passe toujours", () => {
+      useSceneEditorStore
+        .getState()
+        .updateInspectorField("shugu", "transform.rot.1", 45);
+      expect(
+        useSceneEditorStore.getState().inspectorById.shugu.transform.rot[1],
+      ).toBe(45);
+    });
   });
 });
 
