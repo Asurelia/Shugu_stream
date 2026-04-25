@@ -6,7 +6,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Resolve the env file path in a portable way:
@@ -175,6 +175,74 @@ class Settings(BaseSettings):
     stt_compute_type: str = "int8"     # int8|int8_float16|float16|float32
     stt_device: str = "auto"           # auto|cpu|cuda
     stt_language: str = "fr"
+
+    # Director / Embodied Shugu — Phase E1 (foundation Scene State + Trigger Bus).
+    #
+    # `director_enabled=False` par défaut : tant que ce flag n'est pas basculé,
+    # aucun trigger n'est émis, la tâche silence-detection ne tourne pas, et
+    # les WS handlers court-circuitent avant tout `TriggerBus.publish()`. C'est
+    # la garantie anti-régression prod : déployer Phase E1 sans le flipper n'a
+    # AUCUN impact fonctionnel visible par rapport à Phase D.
+    #
+    # `vip_usernames` accepte une liste JSON (SHUGU_VIP_USERNAMES='["alice","bob"]')
+    # OU une CSV (SHUGU_VIP_USERNAMES="alice,bob"). Le validator normalise
+    # (strip + lower + dédup) pour éviter les bugs de matching case-sensitive
+    # sur les usernames chat.
+    vip_usernames: list[str] = Field(
+        default_factory=list,
+        description="Whitelist des usernames VIP qui déclenchent `vip_arrival` triggers. "
+                    "Accepte CSV ou JSON array via env SHUGU_VIP_USERNAMES.",
+    )
+    director_enabled: bool = Field(
+        default=False,
+        description="Feature flag global Director (Embodied Shugu). "
+                    "OFF par défaut — garde anti-régression prod. "
+                    "Bascule sur True une fois Phase E2+ (orchestrator + workers) livrée.",
+    )
+    director_silence_timeout_s: int = Field(
+        default=30,
+        ge=5,
+        le=600,
+        description="Seuil silence (secondes) avant d'émettre un trigger `silence`. "
+                    "Reset à chaque trigger `chat`. Bornes [5, 600] pour éviter "
+                    "les valeurs dégénérées (busy-loop ou silence jamais détecté).",
+    )
+
+    @field_validator("vip_usernames", mode="before")
+    @classmethod
+    def _normalize_vip_usernames(cls, value: object) -> object:
+        """Normalise `vip_usernames` depuis env CSV ou JSON, strip/lower/dédup.
+
+        pydantic-settings tente un `json.loads` par défaut pour les champs
+        list — une CSV brute (`"alice,bob"`) crashe avec JSONDecodeError. On
+        attrape les deux formes :
+        - `str` : split sur virgule (tolère les espaces), déduplique, lower.
+        - `list` : map lower/strip, déduplique en préservant l'ordre.
+        - autre : on laisse pydantic valider (ex: tuple serait rejeté).
+        """
+        if value is None or value == "":
+            return []
+        if isinstance(value, str):
+            tokens = [tok.strip().lower() for tok in value.split(",")]
+            seen: set[str] = set()
+            ordered: list[str] = []
+            for tok in tokens:
+                if tok and tok not in seen:
+                    seen.add(tok)
+                    ordered.append(tok)
+            return ordered
+        if isinstance(value, list):
+            seen_l: set[str] = set()
+            ordered_l: list[str] = []
+            for item in value:
+                if not isinstance(item, str):
+                    continue
+                tok = item.strip().lower()
+                if tok and tok not in seen_l:
+                    seen_l.add(tok)
+                    ordered_l.append(tok)
+            return ordered_l
+        return value
 
 
 @lru_cache(maxsize=1)

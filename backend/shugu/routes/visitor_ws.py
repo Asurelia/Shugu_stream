@@ -20,6 +20,7 @@ from ulid import ULID
 from ..config import Settings
 from ..core.identity import VisitorIdentity, hash_ip
 from ..core.protocols import EventBus, ModerationLayer
+from ..director.wiring import publish_chat_trigger
 from ..pipeline.queue import QueuedMessage, RedisQueue, new_msg_id
 
 # Visitor `!action` commands: short-circuit the LLM + TTS and broadcast a
@@ -163,6 +164,18 @@ async def _handle_visitor_message(
     # clock so the mood drift stays biased toward cheerful/playful.
     if _deps.ambient is not None:
         _deps.ambient.mark_human_input()
+
+    # Director trigger (Phase E1) — publie `chat` (+ `vip_arrival` si VIP)
+    # sur le `TriggerBus` intra-process. No-op si `settings.director_enabled`
+    # est OFF (feature flag). On utilise le session_id comme `sender` pour
+    # les visiteurs anonymes : la VIP whitelist opère sur ce même token si
+    # l'admin veut VIPer un user authentifié côté operator_ws — ici c'est
+    # essentiellement le canal "un humain a écrit" pour le silence timer.
+    await publish_chat_trigger(
+        settings=_deps.settings,
+        sender=identity.session_id,
+        text=text,
+    )
 
 
 async def _send_error(ws: WebSocket, *, nonce, reason: str) -> None:
