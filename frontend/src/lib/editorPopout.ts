@@ -43,12 +43,17 @@
  * bruyant (on accepte une expérience dégradée sans sync).
  */
 
+import type { PanelKey } from "@/features/scene-editor/dnd-context";
+
 const CHANNEL_NAME = "scene-editor";
 
 /** Debounce par défaut du publish `state-sync` (ms). */
 const DEFAULT_PUBLISH_DEBOUNCE_MS = 50;
 
 /* ─────────────────────────── TYPES ─────────────────────────── */
+
+/** Re-export pour les consumers de cette lib qui ont déjà l'import editorPopout. */
+export type { PanelKey };
 
 /**
  * Rôle de l'émetteur du message. `'parent'` = la fenêtre principale de
@@ -75,7 +80,7 @@ export interface PopoutMessage {
   type: PopoutMessageType;
   payload?: unknown;
   origin: PopoutRole;
-  panelKey: string;
+  panelKey: PanelKey;
   ts: number;
   /**
    * Origin navigateur de l'émetteur (`window.location.origin` au moment
@@ -259,7 +264,7 @@ export function flushPopout(key?: string): void {
  * fermeture (fallback au message `popout-closed`).
  */
 export function openPanelWindow(
-  panelKey: string,
+  panelKey: PanelKey,
   options: OpenPanelOptions = {},
 ): Window | null {
   if (!isPopoutSupported()) {
@@ -392,7 +397,7 @@ function isValidMessage(msg: unknown): msg is PopoutMessage {
  * abonnés peuvent encore l'utiliser).
  */
 export function subscribePopout(
-  panelKey: string,
+  panelKey: PanelKey,
   onMessage: PopoutMessageHandler,
 ): () => void {
   const channel = getChannel();

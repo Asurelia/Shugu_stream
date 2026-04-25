@@ -27,6 +27,7 @@ import {
   DragDropContext,
   useDragDrop,
   type DockId,
+  type DockablePanelKey,
   type DragPayload,
   type PanelKey as SharedPanelKey,
 } from "./dnd-context";
@@ -160,6 +161,7 @@ type PanelMeta = { label: string; icon: IconName; title: string };
 const PANEL_META: Record<PanelKey, PanelMeta> = {
   scene:     { label: "Scene",     icon: "scene",     title: "Scene view" },
   live:      { label: "Live",      icon: "broadcast", title: "Live preview" },
+  hierarchy: { label: "Hierarchy", icon: "layers",    title: "Hierarchy" },
   inspector: { label: "Inspector", icon: "sliders",   title: "Inspector" },
   effects:   { label: "FX",        icon: "fx",        title: "Post-process" },
   stream:    { label: "Stream",    icon: "broadcast", title: "Stream" },
@@ -332,7 +334,7 @@ function MainToolbar({
  * appelé par `handlePopout` (MAIN APP) avec registration au tracking des
  * fenêtres ouvertes pour un cleanup propre à l'unmount.
  */
-function popOutPanel(panelKey: string): Window | null {
+function popOutPanel(panelKey: PanelKey): Window | null {
   return openPanelWindow(panelKey);
 }
 
@@ -350,6 +352,11 @@ function renderPanel(
   switch (key) {
     case "scene":     return <SceneViewPanel selectedId={ctx.selectedId} onSelect={ctx.onSelect} onPopout={pop} />;
     case "live":      return <GameViewPanel  onPopout={pop} />;
+    // Hierarchy n'est PAS un tab dockable — il vit dans sa colonne dédiée à
+    // gauche du shell. Ce case existe uniquement pour satisfaire le check
+    // exhaustif TS sur PanelKey ; en runtime on ne peut pas y arriver via
+    // Dock (les tabs hierarchy ne sont jamais ajoutés à un dock).
+    case "hierarchy": return <HierarchyPanel selectedId={ctx.selectedId} onSelect={ctx.onSelect} onPopout={pop} />;
     case "inspector": return <InspectorPanel selectedId={ctx.selectedId} onPopout={pop} />;
     case "effects":   return <FXPanel        onPopout={pop} />;
     case "stream":    return <StreamPanel    onPopout={pop} />;
@@ -365,8 +372,8 @@ function renderPanel(
 
 type DockProps = {
   dockId: DockId;
-  tabs: PanelKey[];
-  active: PanelKey;
+  tabs: DockablePanelKey[];
+  active: DockablePanelKey;
   layout: DockLayout;
   setLayout: (l: DockLayout) => void;
   selectedId: string | null;
@@ -383,11 +390,11 @@ function Dock(props: DockProps) {
   const isTabDrag = payload?.kind === "tab";
 
   const handleSelect = (id: string) => {
-    setLayout({ ...layout, [dockId]: { ...layout[dockId], active: id as PanelKey } });
+    setLayout({ ...layout, [dockId]: { ...layout[dockId], active: id as DockablePanelKey } });
   };
 
   // ── Tab-level drag & drop ─────────────────────────────────────────
-  const onTabDragStart = (panel: PanelKey) => (e: DragEvent<HTMLDivElement>) => {
+  const onTabDragStart = (panel: DockablePanelKey) => (e: DragEvent<HTMLDivElement>) => {
     setPayload({ kind: "tab", panel, fromDock: dockId });
     e.dataTransfer.effectAllowed = "move";
     e.dataTransfer.setData("text/plain", `shugu-tab:${panel}`);
@@ -990,9 +997,15 @@ export function SceneEditorApp({ onExit }: SceneEditorAppProps) {
 }
 
 function findDockFor(layout: DockLayout, key: PanelKey): DockId | null {
-  if (layout.viewport.tabs.includes(key)) return "viewport";
-  if (layout.right.tabs.includes(key)) return "right";
-  if (layout.bottom.tabs.includes(key)) return "bottom";
+  // `key` est un PanelKey élargi (peut être "hierarchy") mais les tabs
+  // d'un DockLayout sont strictement DockablePanelKey. On cast en string
+  // pour le includes — Array.prototype.includes accepte un comparand non
+  // assignable au type T en JS, mais TS strict refuse ; le check est
+  // sémantiquement correct (renvoie false sans faux positif).
+  const k = key as string;
+  if ((layout.viewport.tabs as readonly string[]).includes(k)) return "viewport";
+  if ((layout.right.tabs as readonly string[]).includes(k)) return "right";
+  if ((layout.bottom.tabs as readonly string[]).includes(k)) return "bottom";
   return null;
 }
 

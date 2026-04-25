@@ -37,8 +37,10 @@ import {
   subscribePopout,
   type PopoutMessage,
 } from "@/lib/editorPopout";
+import { CtxMenuProvider } from "./primitives";
 import {
   GameViewPanel,
+  HierarchyPanel,
   InspectorPanel,
   SceneViewPanel,
 } from "./panels-main";
@@ -59,6 +61,7 @@ import {
 const KNOWN_PANELS = [
   "scene",
   "live",
+  "hierarchy",
   "inspector",
   "effects",
   "stream",
@@ -93,6 +96,18 @@ function renderPanelStandalone(
       return <SceneViewPanel selectedId={selectedId} onSelect={onSelect} />;
     case "live":
       return <GameViewPanel />;
+    case "hierarchy":
+      // HierarchyPanel utilise `useCtxMenu()` qui throw hors d'un
+      // `<CtxMenuProvider>` — d'où le wrap au render root du popout (cf.
+      // SceneEditorPopoutApp.return). `onSelect` accepte (id: string | null)
+      // côté store mais HierarchyPanel attend (id: string) ; on ne refilte
+      // PAS le null — le clic Treeview fournit toujours un id non-null.
+      return (
+        <HierarchyPanel
+          selectedId={selectedId}
+          onSelect={(id) => onSelect(id)}
+        />
+      );
     case "inspector":
       return <InspectorPanel selectedId={selectedId} />;
     case "effects":
@@ -265,41 +280,46 @@ export function SceneEditorPopoutApp() {
     );
   }
 
+  // CtxMenuProvider est requis ici parce que `HierarchyPanel` consomme
+  // `useCtxMenu()` qui throw sans provider (cf. primitives.tsx). Wrap au
+  // root popout : harmless pour les panels qui ne s'en servent pas.
   return (
-    <div
-      className="ide-root"
-      style={{ height: "100vh", width: "100vw" }}
-      data-testid="popout-root"
-      data-panel-key={panelKey}
-    >
+    <CtxMenuProvider>
       <div
-        className="ide-menubar"
-        style={{ height: 28 }}
+        className="ide-root"
+        style={{ height: "100vh", width: "100vw" }}
+        data-testid="popout-root"
+        data-panel-key={panelKey}
       >
-        <div className="ide-menubar-brand">
-          <div className="mark">S</div>
-          <span style={{ fontSize: 12, color: "var(--ide-text)" }}>Shugu</span>
-          <span style={{ fontSize: 11, color: "var(--ide-text-dim)" }}>
-            {panelKey}
-          </span>
+        <div
+          className="ide-menubar"
+          style={{ height: 28 }}
+        >
+          <div className="ide-menubar-brand">
+            <div className="mark">S</div>
+            <span style={{ fontSize: 12, color: "var(--ide-text)" }}>Shugu</span>
+            <span style={{ fontSize: 11, color: "var(--ide-text-dim)" }}>
+              {panelKey}
+            </span>
+          </div>
+          <div className="ide-menubar-spacer" />
+          <div className="ide-menubar-status">
+            <span>Detached window · synced</span>
+          </div>
         </div>
-        <div className="ide-menubar-spacer" />
-        <div className="ide-menubar-status">
-          <span>Detached window · synced</span>
+        <div
+          style={{
+            flex: 1,
+            display: "flex",
+            padding: 8,
+            minHeight: 0,
+            height: "calc(100vh - 28px)",
+          }}
+        >
+          {renderPanelStandalone(panelKey, selectedId, setSelectedId)}
         </div>
       </div>
-      <div
-        style={{
-          flex: 1,
-          display: "flex",
-          padding: 8,
-          minHeight: 0,
-          height: "calc(100vh - 28px)",
-        }}
-      >
-        {renderPanelStandalone(panelKey, selectedId, setSelectedId)}
-      </div>
-    </div>
+    </CtxMenuProvider>
   );
 }
 
