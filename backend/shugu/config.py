@@ -222,6 +222,14 @@ class Settings(BaseSettings):
         description="Modèle Anthropic utilisé par l'orchestrator Director. "
                     "Défaut : Haiku 4.5 (latence ~500ms). Override via SHUGU_DIRECTOR_MODEL.",
     )
+    director_max_ticks_per_hour: int = Field(
+        default=200,
+        ge=1,
+        le=10000,
+        description="Cap horaire des ticks Director (LLM cost control). "
+                    "Fenêtre glissante 1h — au-delà, les ticks sont skippés avec warning. "
+                    "Défaut 200 (≈ 1 call/18s max). Bornes [1, 10000].",
+    )
 
     @field_validator("vip_usernames", mode="before")
     @classmethod

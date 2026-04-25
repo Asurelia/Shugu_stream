@@ -484,3 +484,119 @@ def test_merge_deltas_empty_patches_return_empty() -> None:
     """Tous les deltas vides → patch vide."""
     deltas = [StateDelta(patch={}), StateDelta(patch={})]
     assert _merge_deltas(deltas) == {}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Test M1 — Phase E2 hourly rate cap
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@respx.mock
+async def test_tick_hourly_rate_cap_skips_excess_ticks() -> None:
+    """Avec max_ticks_per_hour=2, le 3e tick est skippé avec warning."""
+    face_worker = _StubWorker("face", StateDelta(patch={"face": "joy"}))
+    workers = {"face": face_worker}
+
+    # Settings avec un cap très bas pour le test.
+    settings = Settings(
+        director_enabled=True,
+        anthropic_api_key="test-key",
+        director_model="claude-haiku-4-5-20251001",
+        director_max_ticks_per_hour=2,
+    )
+
+    http_client = httpx.AsyncClient()
+    llm_client = DirectorLLMClient(
+        api_key="test-key",
+        http=http_client,
+        model="claude-haiku-4-5-20251001",
+    )
+    store = DirectorStateStore()
+    bus = _StubEventBus()
+    orch = Orchestrator(
+        state_store=store,
+        workers=workers,
+        llm_client=llm_client,
+        event_bus=bus,
+        settings=settings,
+    )
+
+    respx.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(
+            200,
+            json=_anthropic_response("[face:joy]"),
+        )
+    )
+
+    trigger = TriggerEvent(kind="chat", payload={"sender": "alice", "text": "x"})
+
+    # Tick 1 — doit passer (count = 1).
+    # Mais il faut aussi respecter le rate limit 2s donc on ajoute un petit délai.
+    await orch.tick(trigger)
+    assert len(face_worker.calls) == 1
+
+    # Tick 2 — doit passer (count = 2), mais attend 2s pour bypass rate limit.
+    # On triche : on force _last_tick_at en arrière.
+    orch._last_tick_at = 0.0
+    await orch.tick(trigger)
+    assert len(face_worker.calls) == 2
+
+    # Tick 3 — doit être SKIPPÉ car cap horaire atteint (count >= 2).
+    orch._last_tick_at = 0.0
+    await orch.tick(trigger)
+    # Le worker ne doit pas avoir été appelé une 3e fois.
+    assert len(face_worker.calls) == 2
+
+    await http_client.aclose()
+
+
+@respx.mock
+async def test_tick_hourly_cap_vip_bypasses() -> None:
+    """Un trigger vip_arrival bypass le cap horaire."""
+    face_worker = _StubWorker("face", StateDelta(patch={"face": "surprised"}))
+    workers = {"face": face_worker}
+
+    settings = Settings(
+        director_enabled=True,
+        anthropic_api_key="test-key",
+        director_model="claude-haiku-4-5-20251001",
+        director_max_ticks_per_hour=1,  # Cap très strict pour le test.
+    )
+
+    http_client = httpx.AsyncClient()
+    llm_client = DirectorLLMClient(
+        api_key="test-key",
+        http=http_client,
+        model="claude-haiku-4-5-20251001",
+    )
+    store = DirectorStateStore()
+    bus = _StubEventBus()
+    orch = Orchestrator(
+        state_store=store,
+        workers=workers,
+        llm_client=llm_client,
+        event_bus=bus,
+        settings=settings,
+    )
+
+    respx.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(
+            200,
+            json=_anthropic_response("[face:surprised]"),
+        )
+    )
+
+    chat_trigger = TriggerEvent(kind="chat", payload={"sender": "alice", "text": "x"})
+    vip_trigger = TriggerEvent(kind="vip_arrival", payload={"sender": "spoukie"})
+
+    # Tick 1 (chat) — consomme le budget (count = 1).
+    await orch.tick(chat_trigger)
+    assert len(face_worker.calls) == 1
+
+    # Tick 2 (vip) — DOIT passer malgré le cap horaire atteint.
+    # Force aussi le rate limit bypass.
+    orch._last_tick_at = 0.0
+    await orch.tick(vip_trigger)
+    assert len(face_worker.calls) == 2
+
+    await http_client.aclose()

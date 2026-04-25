@@ -35,6 +35,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections import deque
 from datetime import datetime, timezone
 from typing import Callable, Optional
 
@@ -55,6 +56,49 @@ TICK_MIN_INTERVAL_S = 2.0
 
 # Fallback déterministe quand le LLM timeout ou échoue.
 _FALLBACK_TAG = ParsedTag(kind="say_emotion", value="neutral")
+
+
+class _TickRateCounter:
+    """Compteur atomique fenêtre glissante 1h pour cap coût LLM.
+
+    Permet de limiter le nombre de ticks par heure pour borner la consommation
+    API Anthropic. Utilise une fenêtre glissante (les timestamps expirés sont
+    trimés après chaque check).
+    """
+
+    def __init__(self, max_per_hour: int) -> None:
+        """Init le compteur.
+
+        Args:
+            max_per_hour: Max ticks par heure. Si <= 0, pas de limite.
+        """
+        self._max = max_per_hour
+        self._timestamps: deque[float] = deque()
+        self._lock = asyncio.Lock()
+
+    async def try_acquire(self) -> bool:
+        """Essaie d'acquérir une slot de tick.
+
+        Retourne True si la slot est accordée (count < max), False si on a
+        atteint le cap.
+
+        Thread-safe (asyncio.Lock).
+        """
+        async with self._lock:
+            now = time.monotonic()
+            # Trim entries plus vieilles que 3600s (1 heure).
+            while self._timestamps and now - self._timestamps[0] > 3600:
+                self._timestamps.popleft()
+            # Si max_per_hour <= 0, pas de limite.
+            if self._max <= 0:
+                self._timestamps.append(now)
+                return True
+            # Si on a atteint le cap, refuser.
+            if len(self._timestamps) >= self._max:
+                return False
+            # Sinon, ajouter le timestamp et accorder.
+            self._timestamps.append(now)
+            return True
 
 
 class Orchestrator:
@@ -89,6 +133,8 @@ class Orchestrator:
         self._tick_lock: asyncio.Lock = asyncio.Lock()
         self._dispose: Optional[Callable[[], None]] = None  # unsubscribe handle du TriggerBus
         self._current_task: Optional[asyncio.Task] = None
+        # Compteur horaire pour le cap coût LLM (M1).
+        self._tick_rate_counter = _TickRateCounter(settings.director_max_ticks_per_hour)
 
     async def tick(self, trigger: TriggerEvent) -> None:
         """Une réaction Shugu à un trigger.
@@ -105,6 +151,7 @@ class Orchestrator:
         Guard rails :
         - Feature flag OFF → no-op silencieux.
         - Rate limit 2s → skip (sauf vip_arrival).
+        - Cap houraire (M1) → skip avec warning si max ticks/h atteint.
         - Un seul tick concurrent (asyncio.Lock).
         - Timeout LLM 3s → fallback [say_emotion:neutral] sans mutation d'état.
         """
@@ -120,6 +167,16 @@ class Orchestrator:
                 extra={"kind": trigger.kind, "elapsed_s": round(now - self._last_tick_at, 3)},
             )
             return
+
+        # Cap horaire ticks (M1 — cost control). VIP bypasse aussi ce check.
+        if not is_vip:
+            can_tick = await self._tick_rate_counter.try_acquire()
+            if not can_tick:
+                log.warning(
+                    "director.orchestrator_tick_rate_capped_hourly",
+                    extra={"kind": trigger.kind, "max_per_hour": self._settings.director_max_ticks_per_hour},
+                )
+                return
 
         # Un seul tick à la fois — si un tick tourne déjà, on skip
         # (pas de queue : les triggers sont des signaux, pas des tâches).
