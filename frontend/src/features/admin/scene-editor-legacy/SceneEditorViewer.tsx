@@ -255,6 +255,40 @@ export function SceneEditorViewer({
       gizmoRef.current?.detach();
       gizmoRef.current?.dispose();
       orbitRef.current?.dispose();
+      // Phase F Hardening M2 — dispose des helpers Three.js (Grid / Axes /
+      // CameraHelper). Le cleanup historique disposait renderer / orbit /
+      // gizmo / VRM mais laissait fuir les helpers ci-dessous. Phase F
+      // monte le viewer 2× simultanés (SceneView + GameView) → leak
+      // doublé. Ordre : dispose AVANT renderer.dispose() pour libérer les
+      // buffers GL avant que le contexte soit perdu.
+      //
+      // GridHelper et AxesHelper exposent `geometry` + `material` (LineSegments).
+      // CameraHelper expose pareil mais sa material est un LineBasicMaterial
+      // unique partagé sur tous les segments.
+      const grid = gridRef.current;
+      if (grid) {
+        grid.geometry.dispose();
+        const gridMat = grid.material;
+        if (Array.isArray(gridMat)) gridMat.forEach((m) => m.dispose());
+        else (gridMat as THREE.Material).dispose();
+      }
+      const axes = axesRef.current;
+      if (axes) {
+        axes.geometry.dispose();
+        const axesMat = axes.material;
+        if (Array.isArray(axesMat)) axesMat.forEach((m) => m.dispose());
+        else (axesMat as THREE.Material).dispose();
+      }
+      const camHelper = camHelperRef.current;
+      if (camHelper) {
+        camHelper.geometry.dispose();
+        const camMat = camHelper.material;
+        if (Array.isArray(camMat)) camMat.forEach((m) => m.dispose());
+        else (camMat as THREE.Material).dispose();
+      }
+      gridRef.current = null;
+      axesRef.current = null;
+      camHelperRef.current = null;
       rendererRef.current?.dispose();
       const v = vrmRef.current;
       if (v) {
