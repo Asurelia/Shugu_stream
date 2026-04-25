@@ -181,6 +181,8 @@ async def lifespan(app: FastAPI):
         embed_dim=settings.memory_embed_dim,
         enabled=settings.memory_enabled,
         embedder_model=settings.memory_embedder_model if _need_embedder else None,
+        # Mémoire PR 2 — confirme que record_episode publiera memory.episode_stored.
+        episode_publish_wired=True,
     )
 
     personality_loader = MarkdownPersonalityLoader(

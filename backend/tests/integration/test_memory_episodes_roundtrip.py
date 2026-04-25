@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
 import pytest
@@ -50,6 +51,14 @@ async def session_factory_real() -> AsyncIterator[
     test gère son propre cleanup via DELETE FROM memory_episodes WHERE ...).
 
     Skip si pas de DSN configuré.
+
+    Note importante : on retourne `async_sessionmaker` pour que les tests
+    fassent leur SELECT directement (`async with SessionLocal() as ...`),
+    PAS pour le passer tel quel à `MemoryAgent`. L'agent attend un
+    contextmanager qui COMMIT (cf. `shugu.db.session.session_scope`) ;
+    `async_sessionmaker.__aexit__` ne commit PAS, il close uniquement.
+    Les tests qui instancient un `MemoryAgent` doivent utiliser
+    `_committing_factory(SessionLocal)` ci-dessous.
     """
     dsn = _dsn()
     if not dsn:
@@ -60,6 +69,30 @@ async def session_factory_real() -> AsyncIterator[
     )
     yield SessionLocal
     await engine.dispose()
+
+
+def _committing_factory(SessionLocal: "async_sessionmaker[AsyncSession]"):
+    """Wrap `async_sessionmaker` en factory qui commit en sortie de scope.
+
+    Reproduit la sémantique de `shugu.db.session.session_scope` (commit
+    on success, rollback on error), nécessaire pour que les rows ajoutées
+    par `MemoryAgent.record_episode()` soient visibles dans la DB.
+
+    Sans ce wrapper, les tests qui passaient `SessionLocal` direct comme
+    `session_factory` au `MemoryAgent` faisaient un `add()` puis un close()
+    sans commit → la row était silencieusement perdue. Bug subtil détecté
+    avant le run sur PG réel grâce au review adversarial.
+    """
+    @asynccontextmanager
+    async def factory():
+        async with SessionLocal() as session:
+            try:
+                yield session
+                await session.commit()
+            except Exception:
+                await session.rollback()
+                raise
+    return factory
 
 
 def _make_settings(memory_enabled: bool = True) -> Settings:
@@ -106,7 +139,7 @@ async def test_record_episode_inserts_row_in_db(
     # Cleanup pré-test (idempotence en cas de run précédent crashé).
     await _cleanup_episodes(SessionLocal, subject)
 
-    agent = MemoryAgent(session_factory=SessionLocal)
+    agent = MemoryAgent(session_factory=_committing_factory(SessionLocal))
     ep = MemoryEpisode.new(
         subject=subject,
         event_type="chat_in",
@@ -116,7 +149,7 @@ async def test_record_episode_inserts_row_in_db(
     )
     try:
         await agent.record_episode(ep)
-        # Force commit (le session_scope test n'a pas auto-commit ici).
+        # SELECT direct via SessionLocal (pas besoin de commit pour un read).
         async with SessionLocal() as session:
             stmt = select(MemoryEpisodeRow).where(
                 MemoryEpisodeRow.subject == subject,
@@ -145,7 +178,7 @@ async def test_recall_episodes_filters_by_subject_and_window(
     # Cleanup pré-test.
     await _cleanup_episodes(SessionLocal, "test:roundtrip_recall_")
 
-    agent = MemoryAgent(session_factory=SessionLocal)
+    agent = MemoryAgent(session_factory=_committing_factory(SessionLocal))
     try:
         # 3 episodes pour subject A, 1 pour B.
         for i in range(3):
@@ -196,7 +229,10 @@ async def test_sense_raw_event_creates_memory_episode(
 
     bus = InProcessEventBus()
     settings = _make_settings(memory_enabled=True)
-    agent = MemoryAgent(session_factory=SessionLocal, event_bus=bus)
+    agent = MemoryAgent(
+        session_factory=_committing_factory(SessionLocal),
+        event_bus=bus,
+    )
     worker = IngestionWorker(event_bus=bus, memory=agent, settings=settings)
 
     try:
