@@ -88,8 +88,10 @@ const SceneEditorViewer = dynamic(
 );
 import {
   useSceneEditorStore,
+  selectLastSceneApply,
   selectSelectedId,
   selectTool,
+  type SceneApplyEvent,
 } from "@/stores/useSceneEditorStore";
 
 /* ───────────────────────── TYPES ───────────────────────── */
@@ -131,6 +133,26 @@ type ViewerAdapterProps = {
 const DEFAULT_SCENE_CAMERA: Vec3 = { x: 0, y: 1.35, z: 1.2 };
 const DEFAULT_SCENE_LOOK_AT: Vec3 = { x: 0, y: 1.3, z: 0 };
 const DEFAULT_SCENE_FOV = 20;
+
+/**
+ * Phase E3 — résolution d'asset paths côté frontend. Conventions :
+ *  - outfit  : `/assets/vrm/outfits/{id}.png`  (texture VRM hot-swap)
+ *  - anim    : `/assets/vrma/{id}.vrma`        (animation VRMA)
+ *
+ * Le slug `id` est déjà validé côté worker backend (whitelist /
+ * `assets_available`) — pas besoin de re-sanitiser ici, mais on garde un
+ * dernier filtre `encodeURIComponent` pour éliminer tout caractère
+ * potentiellement dangereux dans une URL (slash, backtick, espace).
+ *
+ * Documentation détaillée : `docs/SCENE-EDITOR-EMBODIED-ASSETS.md`.
+ */
+export function resolveOutfitTextureUrl(id: string): string {
+  return `/assets/vrm/outfits/${encodeURIComponent(id)}.png`;
+}
+
+export function resolveAnimUrl(id: string): string {
+  return `/assets/vrma/${encodeURIComponent(id)}.vrma`;
+}
 
 /**
  * VRM fallback — `public/shugu_avatar.vrm` existe déjà (sert à la page
@@ -192,6 +214,82 @@ function toolToGizmoMode(tool: "move" | "rotate" | "scale"): GizmoMode {
       return "rotate";
     case "scale":
       return "scale";
+  }
+}
+
+/* ───────────────────────── SCENE APPLY DISPATCH ───────────────────────── */
+
+/**
+ * Phase E3 — applique un event `scene.apply` du store sur les méthodes
+ * impératives du viewer. Extrait dans une fonction pure pour qu'elle
+ * soit testable en isolation (mock du `handlers`) et ne soit PAS
+ * recréée à chaque render comme une closure inline.
+ *
+ * `lastFaceRef` est mutable : on tient la dernière `face` posée pour
+ * remettre son blendshape à 0 quand une nouvelle expression est demandée
+ * (le viewer legacy n'expose pas une API "set all blendshapes" — on se
+ * contente d'éteindre l'ancienne).
+ *
+ * Le tag `say_emotion` est délibérément un no-op visuel — l'émotion
+ * vocale est consommée par le pipeline TTS (E4) et n'a pas d'effet sur
+ * le viewer 3D. Les tests vérifient que les méthodes du handler ne sont
+ * PAS appelées pour ce kind.
+ *
+ * Le tag `scene` est aussi un no-op côté ViewerAdapter en Phase E3 : le
+ * change de scène est déjà routé via le topic `stage` (Phase D) côté
+ * visiteurs, et côté operators il sera surfaced par un autre composant
+ * (StageDirector futur). On ne touche pas au viewer ici pour ne pas
+ * dupliquer la responsabilité.
+ */
+export function applySceneApply(
+  event: SceneApplyEvent,
+  handlers: ViewerAdapterHandle,
+  lastFaceRef: { current: string | null },
+): void {
+  switch (event.kind) {
+    case "outfit":
+      handlers.swapTexture(resolveOutfitTextureUrl(event.id));
+      return;
+    case "vfx":
+      handlers.showVfxOverlay(event.id);
+      return;
+    case "anim":
+      handlers.playAnimation(resolveAnimUrl(event.id));
+      return;
+    case "face":
+      // Reset l'ancienne blendshape avant de poser la nouvelle. Évite
+      // d'avoir deux expressions qui se cumulent (le VRM blendshape
+      // manager additionne les valeurs sinon).
+      if (lastFaceRef.current && lastFaceRef.current !== event.id) {
+        handlers.setBlendshape(lastFaceRef.current, 0);
+      }
+      handlers.setBlendshape(event.id, 1.0);
+      lastFaceRef.current = event.id;
+      return;
+    case "camera":
+      // Le store ne tracke pas encore `cameraMode` (gap spec ↔ implé Phase
+      // F documenté). Tant qu'il n'est pas ajouté, on log uniquement —
+      // le ViewerAdapter ne casse pas si l'event arrive.
+      if (process.env.NODE_ENV !== "production") {
+        console.info("[ViewerAdapter] camera mode event (not wired)", {
+          mode: event.id,
+        });
+      }
+      return;
+    case "say_emotion":
+      // No-op visuel — consommé par le pipeline TTS en Phase E4.
+      return;
+    case "scene":
+      // No-op viewer — change de scène traité ailleurs (topic `stage`).
+      return;
+    default: {
+      // Exhaustiveness check côté TS : si on ajoute un kind sans le
+      // gérer ici, le switch ne compile plus (`event` aurait un type
+      // résiduel `never` impossible).
+      const _exhaustive: never = event.kind;
+      void _exhaustive;
+      return;
+    }
   }
 }
 
@@ -287,35 +385,62 @@ export const ViewerAdapter = forwardRef<ViewerAdapterHandle, ViewerAdapterProps>
 
     /* ── Imperative handle (Phase E3 hooks) ───────────────────────── */
 
-    useImperativeHandle(
-      ref,
-      () => ({
-        // Phase F : no-ops explicites — cf. commentaire en tête de fichier.
-        // Logger derrière un DEV guard permet de diagnostiquer un câblage
-        // prématuré sans polluer la console prod.
-        swapTexture: (url: string) => {
-          if (process.env.NODE_ENV !== "production") {
-            console.info("[ViewerAdapter] swapTexture stub", { url });
-          }
-        },
-        playAnimation: (url: string) => {
-          if (process.env.NODE_ENV !== "production") {
-            console.info("[ViewerAdapter] playAnimation stub", { url });
-          }
-        },
-        setBlendshape: (name: string, value: number) => {
-          if (process.env.NODE_ENV !== "production") {
-            console.info("[ViewerAdapter] setBlendshape stub", { name, value });
-          }
-        },
-        showVfxOverlay: (id: string) => {
-          if (process.env.NODE_ENV !== "production") {
-            console.info("[ViewerAdapter] showVfxOverlay stub", { id });
-          }
-        },
-      }),
-      [],
-    );
+    // Phase F : ces méthodes sont des stubs no-ops loggués derrière un
+    // DEV guard (la branche réelle Three.js arrivera quand le viewer
+    // legacy exposera ses primitives). On les déclare en dehors du
+    // `useImperativeHandle` pour pouvoir les réutiliser depuis le
+    // consumer interne `lastSceneApply` sans dupliquer le code.
+    const handlersRef = useRef<ViewerAdapterHandle>({
+      swapTexture: (url: string) => {
+        if (process.env.NODE_ENV !== "production") {
+          console.info("[ViewerAdapter] swapTexture stub", { url });
+        }
+      },
+      playAnimation: (url: string) => {
+        if (process.env.NODE_ENV !== "production") {
+          console.info("[ViewerAdapter] playAnimation stub", { url });
+        }
+      },
+      setBlendshape: (name: string, value: number) => {
+        if (process.env.NODE_ENV !== "production") {
+          console.info("[ViewerAdapter] setBlendshape stub", { name, value });
+        }
+      },
+      showVfxOverlay: (id: string) => {
+        if (process.env.NODE_ENV !== "production") {
+          console.info("[ViewerAdapter] showVfxOverlay stub", { id });
+        }
+      },
+    });
+
+    useImperativeHandle(ref, () => handlersRef.current, []);
+
+    /* ── Consume `scene.apply` events depuis le store ─────────────── */
+
+    // Phase E3 : un seul subscriber pour TOUS les ViewerAdapter montés
+    // (vue edit + preview dans `panels-main.tsx`). Chaque adapter applique
+    // l'effet sur son propre viewer ; le `seq` du store assure que deux
+    // events identiques (même kind/id) re-trigger bien le useEffect.
+    //
+    // Le store est la source ; le hook `useEditorWebSocket` (monté par
+    // `SceneEditorApp`) alimente le store via `dispatchSceneApply`.
+    const lastSceneApply = useSceneEditorStore(selectLastSceneApply);
+    // Track de la dernière `face` posée pour pouvoir la reset à 0 quand
+    // une nouvelle est demandée. `null` = aucune face active. Le viewer
+    // legacy ne sait pas (encore) quelle expression est active — on tient
+    // la mémoire ici pour Phase E3.
+    const lastFaceRef = useRef<string | null>(null);
+    // Track du `seq` déjà consommé pour court-circuiter les re-renders
+    // qui ne portent pas un nouvel event (le store peut ré-render pour
+    // d'autres raisons — selectedId, tool, etc. — sans nouvel event).
+    const consumedSeqRef = useRef<number>(0);
+
+    useEffect(() => {
+      if (!lastSceneApply) return;
+      if (lastSceneApply.seq <= consumedSeqRef.current) return;
+      consumedSeqRef.current = lastSceneApply.seq;
+      applySceneApply(lastSceneApply, handlersRef.current, lastFaceRef);
+    }, [lastSceneApply]);
 
     /* ── Cleanup au unmount ────────────────────────────────────────── */
 

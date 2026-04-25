@@ -98,6 +98,33 @@ export function useEditorWebSocket(
           // mais aucune surface opérator n'a besoin de l'afficher ; les
           // visiteurs l'ont déjà via le `stage` topic existant).
           break;
+        case "scene.apply":
+          // Phase E3 : broadcast déterministe du Director. On dispatch dans
+          // le store ; les `<ViewerAdapter>` montés (vue edit + preview, cf.
+          // `panels-main.tsx`) réagissent via un `useEffect([lastSceneApply])`
+          // pour appeler les méthodes impératives du viewer 3D.
+          //
+          // `kind` = "camera" utilise `mode` ; les autres kinds utilisent `id`.
+          // On normalise vers `id` côté store : pour camera on retombe sur
+          // `mode`, sinon `id`. Le store accepte ensuite n'importe quel
+          // string — la validation back/whitelist a déjà été faite côté
+          // worker (cf. `backend/shugu/director/workers/`).
+          {
+            const id =
+              event.kind === "camera"
+                ? event.mode ?? ""
+                : event.id ?? "";
+            if (id) {
+              store.dispatchSceneApply({
+                kind: event.kind,
+                id,
+                durationMs: event.duration_ms,
+                loop: event.loop,
+                ts: event.ts,
+              });
+            }
+          }
+          break;
         case "unsubscribed":
           // Reset la liste de peers quand on quitte la scène. `peers`
           // concerne uniquement la scène courante.

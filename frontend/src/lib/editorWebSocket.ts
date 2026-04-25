@@ -44,6 +44,20 @@ export type EditorErrorCode =
   | "not_subscribed"
   | "unauthorized";
 
+/**
+ * Phase E3 — kinds supportés par les broadcasts Director (`scene.apply`).
+ * Aligné sur `SceneApplyKind` côté store ; déclaré ici pour que la WS
+ * reste auto-suffisante (tests/wireshark sans dépendance store).
+ */
+export type SceneApplyKind =
+  | "outfit"
+  | "vfx"
+  | "anim"
+  | "face"
+  | "say_emotion"
+  | "camera"
+  | "scene";
+
 /** Ce que le client reçoit du serveur. */
 export type EditorServerEvent =
   | { type: "hello"; operator: string; protocol_version: number }
@@ -63,6 +77,31 @@ export type EditorServerEvent =
       scene_id: string;
       payload: Record<string, unknown>;
       origin: string;
+    }
+  | {
+      /**
+       * Phase E3 — broadcast Director déterministe. Émis par les workers
+       * backend en réaction aux tags inline du LLM Soul. Le forward loop
+       * éditeur (`_bus_forward_loop`) bypass le filtre `scene_id` pour
+       * cette famille — un client connecté reçoit l'event quel que soit
+       * la scène à laquelle il est subscribed.
+       *
+       * Champs payload :
+       *  - `kind`         discriminator (outfit | vfx | anim | face |
+       *                   say_emotion | camera | scene).
+       *  - `id`           slug pour outfit/vfx/anim/face/scene/say_emotion.
+       *  - `mode`         valeur pour `kind: camera` (auto, close_up, …).
+       *  - `duration_ms`  durée pour `kind: vfx` (par défaut 3000ms côté backend).
+       *  - `loop`         flag pour `kind: anim`.
+       *  - `ts`           timestamp ISO-8601 backend.
+       */
+      type: "scene.apply";
+      kind: SceneApplyKind;
+      id?: string;
+      mode?: string;
+      duration_ms?: number;
+      loop?: boolean;
+      ts?: string;
     }
   | { type: "ping"; t?: number }
   | { type: "pong"; nonce?: string }
