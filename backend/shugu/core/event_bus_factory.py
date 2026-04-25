@@ -31,7 +31,13 @@ log = structlog.get_logger(__name__)
 
 
 DEFAULT_BROADCAST_TOPICS: frozenset[str] = frozenset(
-    {"vip.events", "mood.change", "editor:broadcast"}
+    {
+        "vip.events",
+        "mood.change",
+        "editor:broadcast",
+        "sense.raw",              # PR 1 Mémoire : IngestionWorker subscribe
+        "memory.episode_stored",  # PR 1 Mémoire : préparé pour PR 3 fact extractor
+    }
 )
 # `editor:broadcast` — Phase D Scene Editor WebSocket. Topic unique partage
 # entre toutes les scenes : les subscribers filtrent localement par

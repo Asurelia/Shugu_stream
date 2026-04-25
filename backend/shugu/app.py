@@ -34,6 +34,7 @@ from .director.background import DirectorBackground
 from .memory import MemoryAgent
 from .pipeline.ambient import AmbientConfig, AmbientDaemon
 from .pipeline.body_router import BodyRouter, BodyRouterDeps
+from .pipeline.ingestion_worker import IngestionWorker
 from .pipeline.picker import Picker
 from .pipeline.queue import RedisQueue
 from .pipeline.workers import PrepWorker
@@ -94,9 +95,9 @@ def get_email_sender() -> EmailSender:
 def get_memory() -> MemoryAgent:
     """Retourne le MemoryAgent global — coordinateur mémoire long-terme.
 
-    Phase 1 : instance créée mais `settings.memory_enabled=False` par défaut,
-    donc les brains ne la consultent pas encore. Phase 2 flipera le flag et
-    branchera `recall()` dans les prompts des brains.
+    PR 1 (Phase 3.1) : `memory_enabled=True` par défaut. L'agent est câblé
+    dans Director Orchestrator via E4 H2 (recall pour chat/vip_arrival).
+    L'IngestionWorker écoute sense.raw — stockage effectif en PR 2.
     """
     assert _memory is not None, "memory not initialized"
     return _memory
@@ -221,6 +222,21 @@ async def lifespan(app: FastAPI):
     prep_task = asyncio.create_task(prep_worker.run(), name="prep_worker")
     picker_task = asyncio.create_task(picker.run(), name="picker")
     ambient_task = asyncio.create_task(ambient.run(), name="ambient_daemon")
+
+    # IngestionWorker — PR 1 Mémoire : subscribe sense.raw et logue les events.
+    # PR 2 ajoutera record_episode. Garde-fou : no-op si memory_enabled=False.
+    # start() crée la task interne et est idempotent.
+    ingestion_worker: Optional[IngestionWorker] = None
+    if settings.memory_enabled:
+        ingestion_worker = IngestionWorker(
+            event_bus=event_bus,
+            memory=_memory,
+            settings=settings,
+        )
+        await ingestion_worker.start()
+        log.info("memory.ingestion_worker_wired", topic="sense.raw")
+    else:
+        log.info("memory.ingestion_worker_disabled", reason="memory_enabled=False")
 
     body_router = BodyRouter(BodyRouterDeps(
         queue=queue, event_bus=event_bus, settings=settings, ambient=ambient,
@@ -373,6 +389,12 @@ async def lifespan(app: FastAPI):
         await prep_worker.stop()
         await picker.stop()
         await ambient.stop()
+        # IngestionWorker s'arrête AVANT event_bus.close() — il hold une
+        # subscription active sur sense.raw ; fermer le bus d'abord laisserait
+        # le générateur bloqué sur q.get() indéfiniment.
+        # stop() annule la task interne et attend sa complétion.
+        if ingestion_worker is not None:
+            await ingestion_worker.stop()
         prep_task.cancel()
         picker_task.cancel()
         ambient_task.cancel()

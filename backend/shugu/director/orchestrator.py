@@ -49,12 +49,14 @@ import logging
 import time
 from collections import deque
 from datetime import datetime, timezone
-from typing import Callable, Optional
+from typing import TYPE_CHECKING, Callable, Optional
 
 from ..config import Settings
-from ..memory.agent import MemoryAgent
 from ..memory.types import RecallQuery
 from .brain_provider import DirectorBrain
+
+if TYPE_CHECKING:
+    from ..core.protocols import MemoryService
 from .canned_responses import CANNED_ELIGIBLE_KINDS, CannedResponse, pick_canned
 from .debouncer import DEBOUNCEABLE_KINDS, TriggerDebouncer
 from .prompt import build_prompt
@@ -151,16 +153,16 @@ class Orchestrator:
         settings: Settings,
         tick_cache: Optional[TickCache] = None,
         debouncer: Optional[TriggerDebouncer] = None,
-        memory_agent: Optional[MemoryAgent] = None,
+        memory_agent: Optional["MemoryService"] = None,
     ) -> None:
         self._store = state_store
         self._workers = workers
         self._llm_client = llm_client
         self._event_bus = event_bus
         self._settings = settings
-        # Phase E4 H2 — MemoryAgent pour recall VIP/chat avant build_prompt.
+        # Phase E4 H2 — MemoryService pour recall VIP/chat avant build_prompt.
         # Si None (memory_enabled=False ou agent absent), skip silencieux.
-        self._memory_agent: Optional[MemoryAgent] = memory_agent
+        self._memory_agent: Optional["MemoryService"] = memory_agent
 
         self._last_tick_at: float = 0.0   # monotonic timestamp du dernier tick
         self._tick_lock: asyncio.Lock = asyncio.Lock()
