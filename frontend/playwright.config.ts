@@ -49,5 +49,20 @@ export default defineConfig({
     reuseExistingServer: !process.env.CI,
     stdout: "pipe",
     stderr: "pipe",
+    // Phase F Hardening H2 — flag de build explicite pour le bypass VRM.
+    // Le `viewer-adapter.tsx` lit `process.env.NEXT_PUBLIC_E2E` (inliné par
+    // Next.js au build) pour décider de skip le download du fichier 28 MB.
+    // Voir le commentaire de `resolveVrmUrl` pour le rationale (remplace
+    // l'ancien check `navigator.webdriver` qui faussait aussi pour
+    // Selenium / extensions anti-fingerprint en prod).
+    //
+    // ⚠ Local dev caveat : si un `npm run dev` tourne déjà sur le port et
+    // que `reuseExistingServer` est `true` (cas non-CI), le serveur réutilisé
+    // n'a PAS cette variable injectée → le bypass est inactif. Pour itérer
+    // localement sur les Playwright, kill le dev server existant ou set
+    // `CI=1` dans le shell pour forcer un boot frais.
+    env: {
+      NEXT_PUBLIC_E2E: "1",
+    },
   },
 });

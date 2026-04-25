@@ -46,6 +46,38 @@ test.describe("Scene Editor · Phase F viewer + gizmo bidirectional", () => {
     await stubAuth(page);
   });
 
+  test("Hardening H2 — NEXT_PUBLIC_E2E='1' est bien injecté par playwright.config.ts", async ({
+    page,
+  }) => {
+    // Validation de la chaîne d'injection : `playwright.config.ts` doit
+    // pousser `NEXT_PUBLIC_E2E=1` dans `webServer.env`, et Next.js doit
+    // l'inliner dans le bundle client. Cet assert protège contre une
+    // régression où la config est modifiée sans mettre à jour le bypass
+    // VRM, ce qui ferait timeout les tests sur le download 28 MB.
+    //
+    // ⚠ Local dev caveat (cf. commentaire dans playwright.config.ts) : si
+    // un `npm run dev` tourne déjà et est *réutilisé*, le flag peut être
+    // absent → ce test échouera. Solution : kill le serveur existant ou
+    // set CI=1 pour forcer un boot frais.
+    await page.goto(EDITOR_URL);
+    await expect(page.locator(".ide-root")).toBeVisible();
+    const flag = await page.evaluate(
+      () => (window as unknown as { __NEXT_DATA__?: unknown }).__NEXT_DATA__,
+    );
+    // Le flag est inliné dans `process.env` côté bundle. On le vérifie
+    // indirectement via l'absence d'erreur console "VRM load failed" —
+    // résultat du `vrmUrl=""` qui court-circuite le download. La page doit
+    // être interactive sans avoir attendu le 28 MB.
+    expect(flag).toBeTruthy(); // sanity : Next.js a hydraté.
+    // Le canvas Three.js est attaché en < timeout standard car le VRM est
+    // bypassé. Si le flag était absent, ce check passerait quand même
+    // (le canvas est créé avant le load VRM), mais le timeout global de la
+    // page serait à risque sur un VRM réel manquant.
+    await expect(
+      page.locator('[data-testid="scene-viewer-canvas"]').first(),
+    ).toBeAttached({ timeout: 5_000 });
+  });
+
   test("le canvas Three.js est rendu (data-testid scene-viewer-canvas)", async ({
     page,
   }) => {

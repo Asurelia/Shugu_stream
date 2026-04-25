@@ -138,19 +138,32 @@ const DEFAULT_SCENE_FOV = 20;
  * Ce chemin sera paramétrable par le store en Phase G quand la liste des
  * VRMs sera pluggée sur `/api/registry/avatars`.
  *
- * En environnement Playwright (`navigator.webdriver === true`), on
- * substitue une chaîne vide pour court-circuiter le download du fichier
- * 28 MB. La GLTFLoader retombe sur son error callback (logué, non-bloquant)
- * et la page redevient interactive immédiatement — sans ce by-pass, les
- * tests E2E timeout en attendant l'event `load` du `<canvas>` parent.
- * Ce shortcut N'AFFECTE PAS la prod (webdriver=false dans un browser
- * normal) et ne touche pas au legacy viewer (cf. discipline Phase F :
- * pas de patch hors scope).
+ * # Bypass E2E (`NEXT_PUBLIC_E2E === "1"`)
+ *
+ * En environnement Playwright, on substitue une chaîne vide pour
+ * court-circuiter le download du fichier 28 MB. La GLTFLoader retombe sur
+ * son error callback (logué, non-bloquant) et la page redevient
+ * interactive immédiatement — sans ce by-pass, les tests E2E timeout en
+ * attendant l'event `load` du `<canvas>` parent.
+ *
+ * Phase F Hardening H2 : on n'utilise plus `navigator.webdriver` comme
+ * détecteur. Cette propriété est aussi `true` pour Selenium, Puppeteer,
+ * extensions anti-fingerprinting (Brave Shields, DDG Privacy), et tout
+ * navigateur lancé avec `--enable-automation`. Un visiteur dans un de ces
+ * environnements voyait silencieusement un canvas vide en prod. On bascule
+ * donc sur un flag de build *explicite* injecté uniquement par
+ * `playwright.config.ts` (cf. `webServer.env.NEXT_PUBLIC_E2E`). Le préfixe
+ * `NEXT_PUBLIC_` est inliné par Next.js au build → la valeur est figée à
+ * la compilation et inactive en prod (env variable absente du build CI/CD).
  */
 export const DEFAULT_VRM_URL = "/shugu_avatar.vrm";
 
 function resolveVrmUrl(): string {
-  if (typeof navigator !== "undefined" && navigator.webdriver) return "";
+  // Bypass uniquement en mode E2E déterministe. `process.env.NEXT_PUBLIC_*`
+  // est inliné par Next.js → en prod le `if` est dead-code-eliminé. En
+  // tests Vitest (process Node) la variable est absente sauf override
+  // explicite, donc le bypass ne s'active pas non plus.
+  if (process.env.NEXT_PUBLIC_E2E === "1") return "";
   return DEFAULT_VRM_URL;
 }
 
