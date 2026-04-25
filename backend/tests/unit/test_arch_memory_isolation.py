@@ -128,3 +128,110 @@ def test_brain_and_director_dont_import_memory_implementation() -> None:
         "Violations d'isolation mémoire détectées :\n"
         + "\n".join(f"  • {v}" for v in violations)
     )
+
+
+# ====================================================================================
+# Single-Writer ORM Classes Rule
+# ====================================================================================
+#
+# Les ORM row classes de la mémoire sont partagées entre la couche logique
+# (MemoryAgent) et la couche modèle (db/models.py), mais AUCUN autre module
+# ne doit les importer.
+#
+# Justification : MemoryAgent est le single-writer de la table (seul responsable
+# des INSERT/UPDATE/DELETE). Toute autre logique qui veut accéder aux données
+# doit passer par le protocol public MemoryService ou faire du SELECT-only via
+# des fonctions partagées approuvées (comme recall_episodes dans db/queries.py).
+#
+# Cela garantit :
+# - Pas de mutations côté brains/director sans passer par MemoryAgent
+# - Audit clair : grep MemoryAgent trouvera tous les sites où on peut write
+# - Découplage : les brains ne savent rien de la structure DB des épisodes
+
+SINGLE_WRITER_ORM_CLASSES = {
+    "MemoryEpisodeRow": {
+        "allowed_modules": {
+            "shugu/memory/agent.py",
+            "shugu/db/models.py",
+        },
+        "reason": "Single-writer: MemoryAgent est responsable de tous INSERT/UPDATE/DELETE sur episodes.",
+    },
+}
+
+
+def test_single_writer_orm_classes_not_imported_elsewhere() -> None:
+    """Vérifie que les ORM rows mémoire ne sont importés que par MemoryAgent + models.
+
+    Single-writer rule: seul MemoryAgent peut faire INSERT/UPDATE/DELETE sur
+    les tables ORM mémoire. Tout autre code qui veut accéder aux données doit
+    utiliser le protocol public MemoryService ou des fonctions partagées en
+    lecture seule.
+
+    Violation détectée → cela signifie qu'un autre module s'approprie l'écriture
+    (mutation) de données mémoire, ce qui compromet l'audit et le découplage.
+    """
+    backend_dir = pathlib.Path(__file__).parent.parent.parent
+
+    violations: list[str] = []
+
+    for orm_class_name, config in SINGLE_WRITER_ORM_CLASSES.items():
+        allowed_modules = config["allowed_modules"]
+
+        # Scanner tous les fichiers .py du backend sauf les tests
+        for py_file in sorted(backend_dir.glob("shugu/**/*.py")):
+            # Ignorer les fichiers test
+            if "/tests/" in str(py_file).replace("\\", "/"):
+                continue
+
+            relative = py_file.relative_to(backend_dir)
+            relative_str = str(relative).replace("\\", "/")
+
+            # Skip si c'est un fichier autorisé
+            if relative_str in allowed_modules:
+                continue
+
+            try:
+                content = py_file.read_text(encoding="utf-8")
+            except Exception:
+                continue
+
+            # Chercher des imports ou utilisations du ORM class
+            # Patterns courants :
+            #   from ... import MemoryEpisodeRow
+            #   MemoryEpisodeRow(...)
+            #   isinstance(..., MemoryEpisodeRow)
+            #   : MemoryEpisodeRow  (type hint)
+
+            # Parse AST pour détecter les imports
+            try:
+                tree = ast.parse(content, filename=str(py_file))
+            except SyntaxError:
+                continue
+
+            for node in ast.walk(tree):
+                if isinstance(node, ast.ImportFrom):
+                    line_text = ast.unparse(node)
+                    if orm_class_name in line_text:
+                        violations.append(
+                            f"{relative_str} (ligne {node.lineno}): "
+                            f"importe {orm_class_name} — "
+                            f"violation single-writer (allowed: {allowed_modules}). "
+                            f"Raison: {config['reason']}"
+                        )
+                elif isinstance(node, ast.Import):
+                    line_text = ast.unparse(node)
+                    if orm_class_name in line_text:
+                        violations.append(
+                            f"{relative_str} (ligne {node.lineno}): "
+                            f"importe {orm_class_name} — "
+                            f"violation single-writer (allowed: {allowed_modules}). "
+                            f"Raison: {config['reason']}"
+                        )
+
+    assert not violations, (
+        "Violations single-writer ORM détectées :\n"
+        + "\n".join(f"  • {v}" for v in violations)
+        + "\n\n"
+        + "Les ORM rows mémoire doivent rester internes à MemoryAgent + models.py.\n"
+        + "Tout autre code utilise le protocol public MemoryService ou des fonctions partagées."
+    )
