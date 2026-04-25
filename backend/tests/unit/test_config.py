@@ -45,15 +45,25 @@ class TestIpHashSalt:
         s = Settings(env="production", ip_hash_salt="test_salt_32_chars_or_more123456")
         assert s.ip_hash_salt == "test_salt_32_chars_or_more123456"
 
-    def test_ip_hash_salt_default_env_is_production(self) -> None:
-        """Par défaut, env='production' (fail-safe)."""
+    def test_ip_hash_salt_default_env_is_production(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Par défaut (sans env var), env='production' (fail-safe)."""
+        # Clear env vars CI qui pourraient masquer le défaut Pydantic.
+        monkeypatch.delenv("ENV", raising=False)
+        monkeypatch.delenv("IP_HASH_SALT", raising=False)
         s = Settings(ip_hash_salt="valid_salt")
         assert s.env == "production"
         # Non-vide, donc pas d'erreur même avec env par défaut
         assert s.ip_hash_salt == "valid_salt"
 
-    def test_ip_hash_salt_default_empty_raises_on_default_env(self) -> None:
-        """Par défaut, env='production' + ip_hash_salt vide → ValidationError."""
+    def test_ip_hash_salt_default_empty_raises_on_default_env(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Par défaut (sans env var), env='production' + ip_hash_salt vide → ValidationError."""
+        # Clear env vars CI pour tester le vrai default Pydantic.
+        monkeypatch.delenv("ENV", raising=False)
+        monkeypatch.delenv("IP_HASH_SALT", raising=False)
         with pytest.raises(ValidationError) as exc_info:
             Settings(ip_hash_salt="")
 
