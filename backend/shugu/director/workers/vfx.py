@@ -56,13 +56,16 @@ class VfxWorker(Worker):
             "ts": datetime.now(timezone.utc).isoformat(),
         })
 
-        # Compose la nouvelle liste active_vfx avec append + FIFO trim.
+        # Compose la nouvelle liste active_vfx avec dedup + FIFO trim.
         # On part du snapshot fourni (lecture stable côté caller) et on
-        # construit un patch shallow : l'append se fait sur une COPIE pour
-        # ne pas muter l'instance source (le store fera lui-même un
-        # deepcopy via `update()`, mais autant rester correct ici).
+        # construit un patch shallow : si le slug est déjà actif, on ne
+        # l'ajoute pas (no-op idempotent pour les doublons rapides).
+        # Le FIFO trim reste limité à MAX_ACTIVE_VFX pour éviter le spam
+        # et garder le snapshot JSON sous le seuil de 500 bytes.
         new_active = list(state.active_vfx)
-        new_active.append(slug)
+        if slug not in new_active:
+            new_active.append(slug)
+        # FIFO trim — le plus ancien sort en cas de dépassement.
         if len(new_active) > MAX_ACTIVE_VFX:
             overflow = len(new_active) - MAX_ACTIVE_VFX
             del new_active[:overflow]
