@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     # Importé uniquement pour les annotations de type — aucune dépendance
     # runtime de `core` vers `memory`. Évite tout import circulaire futur si
     # `memory` venait à importer un type de `core`.
+    from ..memory.episodes import MemoryEpisode
     from ..memory.types import MemoryItem, RecallQuery
 
 Emotion = Literal["neutral", "happy", "angry", "sad", "relaxed"]
@@ -170,3 +171,30 @@ class MemoryService(Protocol):
     async def persona_get(self) -> dict: ...
 
     async def persona_set(self, patch: dict) -> None: ...
+
+    async def record_episode(self, ep: "MemoryEpisode") -> None:
+        """Persiste un épisode (Mémoire PR 2 — L2 épisodique).
+
+        Applique la redaction Phase 2.6 sur les champs textuels du payload,
+        INSERT la row, puis publie `memory.episode_stored` sur le bus pour la
+        future PR 3 (FactExtractor live). Fire-and-forget friendly côté caller
+        (pas de return) — le caller (IngestionWorker) peut log+swallow toute
+        exception sans casser le hot path.
+        """
+        ...
+
+    async def recall_episodes(
+        self,
+        subject: str,
+        *,
+        window_hours: int = 24,
+        limit: int = 20,
+    ) -> "list[MemoryEpisode]":
+        """Lookup épisodes par subject + fenêtre temporelle (PR 2).
+
+        Retourne les `limit` épisodes les plus récents pour `subject`,
+        filtrés par `ts >= now() - window_hours` ET `NOT archived`. Pas de
+        cosine ici — l'extraction sémantique vers `memory_facts` est faite
+        par PR 3 FactExtractor.
+        """
+        ...

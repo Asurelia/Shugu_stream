@@ -33,6 +33,8 @@ from sqlalchemy import (
     String,
     Text,
     func,
+)
+from sqlalchemy import (
     text as sa_text,
 )
 from sqlalchemy.dialects.postgresql import JSONB

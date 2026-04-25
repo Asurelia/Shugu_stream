@@ -172,6 +172,9 @@ async def lifespan(app: FastAPI):
         session_factory=session_scope,
         embedder=embedder,
         embed_dim=settings.memory_embed_dim,
+        # Mémoire PR 2 — bus optionnel pour publier `memory.episode_stored`
+        # après record_episode() (préparé pour PR 3 FactExtractor).
+        event_bus=event_bus,
     )
     log.info(
         "memory_agent.ready",
