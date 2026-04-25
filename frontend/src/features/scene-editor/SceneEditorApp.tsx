@@ -17,6 +17,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type CSSProperties,
   type DragEvent,
@@ -57,6 +58,16 @@ import {
   TimelinePanel,
 } from "./panels-aux";
 import { HotkeyToast, useHotkeys, useToast, type Tool } from "./hotkeys";
+// Phase G : helper popout multi-écran via BroadcastChannel. Remplace la
+// logique `window.open` inline qui vivait ici et ajoute la sync
+// bidirectionnelle parent ↔ popout.
+import {
+  openPanelWindow,
+  publishPopout,
+  subscribePopout,
+  flushPopout,
+  type PopoutMessage,
+} from "@/lib/editorPopout";
 // Phase B : le shell consomme maintenant les stores Zustand. useState locaux
 // supprimés au profit de selectors (plus testables, permettent undo/redo
 // global via zundo, et persistence du dock layout en localStorage).
@@ -311,94 +322,18 @@ function MainToolbar({
 
 /* ─────────────────────────── POP-OUT ─────────────────────────── */
 
-function popOutPanel(panelKey: string, title: string): Window | null {
-  const w = window.open(
-    "",
-    `shugu-${panelKey}`,
-    "width=520,height=640,menubar=no,toolbar=no,location=no,status=no",
-  );
-  if (!w) return null;
-
-  // Note Phase B (fix nit L1 review Phase A) : on construit le shell popout
-  // via DOM createElement + textContent plutôt que innerHTML pour neutraliser
-  // toute possibilité d'injection via `title`. Le design bundle utilisait
-  // innerHTML avec interpolation directe — acceptable car les call sites
-  // passent des chaînes statiques aujourd'hui, mais Phase D introduira des
-  // noms de scène user-controlled dans ce chemin. Les chaînes "styles"
-  // viennent du document parent (trusted, statiques au build Next) donc on
-  // les clone via `cloneNode(true)` qui préserve la structure sans parsing.
-  const doc = w.document;
-  doc.title = `Shugu · ${title}`;
-
-  // Wipe any pre-existing body content for idempotence (re-popping out the
-  // same panel name réutilise la même fenêtre par window.open convention).
-  while (doc.body.firstChild) doc.body.removeChild(doc.body.firstChild);
-
-  // Phase B (fix L-2 review) : les feuilles de style sont clonées dans
-  // `<head>` pour éviter un FOUC et respecter la sémantique HTML. Phase A
-  // les mettait dans `<body>` via innerHTML — non-bloquant mais théoriquement
-  // render-blocking hors head selon le user-agent.
-  const baseStyle = doc.createElement("style");
-  baseStyle.textContent = "body{margin:0;background:#05050a;color:#f4ecff;}";
-  doc.head.appendChild(baseStyle);
-
-  // Clone les feuilles de style du document parent pour que les classes
-  // `.ide-*` rendent identiquement dans la popup.
-  const parentStyles = document.querySelectorAll("link[rel=stylesheet], style");
-  parentStyles.forEach((el) => {
-    doc.head.appendChild(el.cloneNode(true));
-  });
-
-  // Root container
-  const root = doc.createElement("div");
-  root.className = "ide-root";
-  root.style.cssText = "height:100vh;width:100vw;";
-
-  // Menubar
-  const menubar = doc.createElement("div");
-  menubar.className = "ide-menubar";
-  menubar.style.height = "28px";
-
-  const brand = doc.createElement("div");
-  brand.className = "ide-menubar-brand";
-  const mark = doc.createElement("div");
-  mark.className = "mark";
-  mark.textContent = "S";
-  brand.appendChild(mark);
-  const titleSpan = doc.createElement("span");
-  titleSpan.style.fontSize = "11px";
-  // textContent = escape natif → aucun risque XSS même si `title` contient
-  // du HTML ou des guillemets. C'est la substance du fix L1.
-  titleSpan.textContent = title;
-  brand.appendChild(titleSpan);
-  menubar.appendChild(brand);
-
-  const spacer = doc.createElement("div");
-  spacer.className = "ide-menubar-spacer";
-  menubar.appendChild(spacer);
-
-  const status = doc.createElement("div");
-  status.className = "ide-menubar-status";
-  const statusSpan = doc.createElement("span");
-  statusSpan.textContent = "Detached window";
-  status.appendChild(statusSpan);
-  menubar.appendChild(status);
-
-  root.appendChild(menubar);
-
-  // Body area avec le popout-root que les consumers React peuvent cibler
-  // plus tard (Phase G — actuellement pas utilisé mais préservé pour compat).
-  const bodyWrap = doc.createElement("div");
-  bodyWrap.style.cssText = "flex:1;display:flex;padding:8px;min-height:0;";
-  const popoutRoot = doc.createElement("div");
-  popoutRoot.id = "popout-root";
-  popoutRoot.style.flex = "1";
-  bodyWrap.appendChild(popoutRoot);
-  root.appendChild(bodyWrap);
-
-  doc.body.appendChild(root);
-
-  return w;
+/**
+ * Phase G : la logique `window.open` + injection DOM manuelle qui vivait
+ * ici a été déplacée dans `@/lib/editorPopout` et s'appuie désormais sur
+ * une vraie route Next.js (`/shugu/admin/scene-editor-popout?panel=xxx`)
+ * qui monte React proprement et parle au parent via BroadcastChannel.
+ *
+ * On garde ce wrapper uniquement comme point d'entrée du shell — il est
+ * appelé par `handlePopout` (MAIN APP) avec registration au tracking des
+ * fenêtres ouvertes pour un cleanup propre à l'unmount.
+ */
+function popOutPanel(panelKey: string): Window | null {
+  return openPanelWindow(panelKey);
 }
 
 /* ─────────────────────────── PANEL RENDERER ─────────────────────────── */
@@ -687,9 +622,235 @@ export function SceneEditorApp({ onExit }: SceneEditorAppProps) {
     [dragPayload, droppedAsset, showToast],
   );
 
-  const handlePopout = useCallback((key: PanelKey) => {
-    popOutPanel(key, PANEL_META[key].title);
+  /* ────────── Phase G — Pop-out multi-écran via BroadcastChannel ────────── */
+
+  // Suivi des fenêtres popout ouvertes (une par panelKey max, car le
+  // `windowName` de `openPanelWindow` est stable par panel → rouvrir re-focus).
+  // On retient la ref pour pouvoir les close si le parent unmount, et pour
+  // publier l'état initial dès qu'un popout signale `popout-ready`.
+  const popoutWindowsRef = useRef<Map<PanelKey, Window>>(new Map());
+  // Liste des panelKeys actuellement détachés (popout vivant). Permet de
+  // re-publier un `state-sync` complet quand le store mute, sans spam si
+  // aucun popout n'est ouvert.
+  const [detachedPanels, setDetachedPanels] = useState<Set<PanelKey>>(
+    () => new Set(),
+  );
+  // Ref pour lire la valeur la plus récente de `detachedPanels` depuis des
+  // callbacks longs-vivants (subscribe Zustand). useState rerender mais les
+  // closures capturent l'ancien Set si on ne passe pas par une ref.
+  const detachedPanelsRef = useRef(detachedPanels);
+  detachedPanelsRef.current = detachedPanels;
+
+  // Flag anti-echo : quand on applique un `state-sync` reçu, on bypass le
+  // publish outbound pour ne pas rebondir indéfiniment entre parent et popout.
+  const applyingRemoteRef = useRef(false);
+
+  /**
+   * Construit un snapshot minimal du state à synchroniser. On n'envoie QUE
+   * les champs réellement utiles au popout (selectedId, tool, layoutPreset,
+   * currentScene). Pousser tout le store serait à la fois coûteux (mocks
+   * volumineux) et inutile pour l'UX Phase G.
+   */
+  const snapshotSyncState = useCallback(() => {
+    const s = useSceneEditorStore.getState();
+    return {
+      selectedId: s.selectedId,
+      tool: s.tool,
+      layoutPreset: s.layoutPreset,
+      currentScene: s.currentScene,
+    };
   }, []);
+
+  /**
+   * Applique un payload `state-sync` reçu au store Zustand. Protège contre
+   * l'echo : pendant l'application on désactive le publish outbound.
+   */
+  const applyRemoteSync = useCallback(
+    (payload: unknown) => {
+      if (!payload || typeof payload !== "object") return;
+      const p = payload as Partial<{
+        selectedId: string | null;
+        tool: Tool;
+        layoutPreset: LayoutPreset;
+        currentScene: string;
+      }>;
+      applyingRemoteRef.current = true;
+      try {
+        const store = useSceneEditorStore.getState();
+        if (p.selectedId !== undefined && p.selectedId !== store.selectedId) {
+          store.setSelectedId(p.selectedId);
+        }
+        if (p.tool !== undefined && p.tool !== store.tool) {
+          store.setTool(p.tool);
+        }
+        if (
+          p.layoutPreset !== undefined &&
+          LAYOUT_PRESETS.includes(p.layoutPreset) &&
+          p.layoutPreset !== store.layoutPreset
+        ) {
+          store.setLayoutPreset(p.layoutPreset);
+        }
+        if (
+          p.currentScene !== undefined &&
+          p.currentScene !== store.currentScene
+        ) {
+          store.setCurrentScene(p.currentScene);
+        }
+      } finally {
+        // Release sur microtask pour laisser le subscribe s'exécuter avant
+        // qu'on ne reprenne les publishes.
+        queueMicrotask(() => {
+          applyingRemoteRef.current = false;
+        });
+      }
+    },
+    [],
+  );
+
+  // Souscription globale au canal BroadcastChannel : tous les panels
+  // partagent le même routing ici. Monté une seule fois au mount du shell.
+  useEffect(() => {
+    // Un handler par panelKey qui peut avoir un popout — on subscribe lazy
+    // dès qu'un panel est détaché. Pour simplifier, on s'abonne à TOUS les
+    // panel keys connus : le surcoût est nul (le filtre se fait à la
+    // réception), et ça évite de gérer des subscribe/unsubscribe par cycle.
+    const allKeys: PanelKey[] = Object.keys(PANEL_META) as PanelKey[];
+    const unsubs: Array<() => void> = [];
+    for (const key of allKeys) {
+      const unsub = subscribePopout(key, (msg: PopoutMessage) => {
+        // On ignore ses propres publishes (origin === 'parent') pour éviter
+        // de s'auto-traiter. Seuls les messages venant du popout nous
+        // intéressent côté parent.
+        if (msg.origin !== "popout") return;
+        switch (msg.type) {
+          case "popout-ready":
+            // Le popout vient de monter — on lui pousse le snapshot complet
+            // pour qu'il parte aligné. Publish immédiat (debounce couvre
+            // `state-sync`, pas les signaux).
+            publishPopout({
+              type: "state-sync",
+              origin: "parent",
+              panelKey: key,
+              payload: snapshotSyncState(),
+            });
+            break;
+          case "state-sync":
+            // Mutation opérée dans le popout → on refléte côté parent.
+            applyRemoteSync(msg.payload);
+            break;
+          case "popout-closed":
+            // Fenêtre fermée proprement : on nettoie notre tracking.
+            popoutWindowsRef.current.delete(key);
+            setDetachedPanels((prev) => {
+              if (!prev.has(key)) return prev;
+              const next = new Set(prev);
+              next.delete(key);
+              return next;
+            });
+            break;
+          case "panel-action":
+            // Placeholder pour Phase G+ — pas d'usage dans Phase G strict.
+            break;
+        }
+      });
+      unsubs.push(unsub);
+    }
+    return () => {
+      unsubs.forEach((u) => u());
+    };
+  }, [applyRemoteSync, snapshotSyncState]);
+
+  // Republie les mutations locales vers les popouts quand le store change.
+  // On subscribe directement à Zustand pour observer TOUS les change events
+  // sans passer par un hook (ce qui causerait un re-render du shell entier).
+  useEffect(() => {
+    const unsub = useSceneEditorStore.subscribe((state, prev) => {
+      if (applyingRemoteRef.current) return;
+      const detached = detachedPanelsRef.current;
+      if (detached.size === 0) return;
+      // Ne publie que si un des champs sync a changé — évite du trafic
+      // superflu (ex : toggle visibility d'un node dans hierarchy ne doit
+      // pas déclencher de sync popout puisque ce champ n'est pas synced).
+      const changed =
+        state.selectedId !== prev.selectedId ||
+        state.tool !== prev.tool ||
+        state.layoutPreset !== prev.layoutPreset ||
+        state.currentScene !== prev.currentScene;
+      if (!changed) return;
+      const payload = snapshotSyncState();
+      detached.forEach((panelKey) => {
+        publishPopout({
+          type: "state-sync",
+          origin: "parent",
+          panelKey,
+          payload,
+        });
+      });
+    });
+    return () => {
+      unsub();
+    };
+  }, [snapshotSyncState]);
+
+  // Poll des windows popout : si le user ferme la fenêtre via l'OS (sans
+  // que le popout ait eu le temps d'envoyer `popout-closed`), on détecte
+  // ça via `win.closed` et on nettoie. Interval raisonnable — 1s suffit,
+  // pas besoin d'un check plus fin pour un détect de fermeture.
+  useEffect(() => {
+    if (detachedPanels.size === 0) return;
+    const interval = setInterval(() => {
+      const windows = popoutWindowsRef.current;
+      windows.forEach((win, key) => {
+        if (win.closed) {
+          windows.delete(key);
+          setDetachedPanels((prev) => {
+            if (!prev.has(key)) return prev;
+            const next = new Set(prev);
+            next.delete(key);
+            return next;
+          });
+        }
+      });
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [detachedPanels]);
+
+  // Cleanup final : flush le dernier state-sync en attente (debounce 50ms)
+  // pour ne pas perdre une mutation effectuée juste avant un unmount.
+  useEffect(() => {
+    return () => {
+      flushPopout();
+    };
+  }, []);
+
+  const handlePopout = useCallback(
+    (key: PanelKey) => {
+      const existing = popoutWindowsRef.current.get(key);
+      // Si la fenêtre existe encore et n'est pas closed, on re-focus au lieu
+      // de rouvrir (convention du browser : same windowName = même tab).
+      if (existing && !existing.closed) {
+        try {
+          existing.focus();
+        } catch {
+          /* certains browsers throw en focus cross-origin */
+        }
+        return;
+      }
+      const win = popOutPanel(key);
+      if (!win) return;
+      popoutWindowsRef.current.set(key, win);
+      setDetachedPanels((prev) => {
+        if (prev.has(key)) return prev;
+        const next = new Set(prev);
+        next.add(key);
+        return next;
+      });
+      // Ne push pas de snapshot ici : on attend que le popout signale
+      // `popout-ready` (sinon race condition — le popout peut ne pas encore
+      // avoir monté son `subscribePopout`).
+    },
+    [],
+  );
 
   // ── Hotkey wiring ────────────────────────────────────────────────
   const selectPanel = useCallback(
@@ -749,7 +910,7 @@ export function SceneEditorApp({ onExit }: SceneEditorAppProps) {
                 <HierarchyPanel
                   selectedId={selectedId}
                   onSelect={setSelectedId}
-                  onPopout={() => popOutPanel("hierarchy", "Hierarchy")}
+                  onPopout={() => popOutPanel("hierarchy")}
                 />
               </div>
               <Splitter

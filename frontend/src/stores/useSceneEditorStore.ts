@@ -420,6 +420,21 @@ export const useSceneEditorStore = create<SceneEditorState>()(
   ),
 );
 
+/* ─────────────────────────── DEV / TEST GLOBAL ─────────────────────────── */
+
+/**
+ * Phase G : on expose le store comme global `window.__SHUGU_SCENE_STORE__`
+ * hors production. Ça permet aux tests Playwright d'observer/muter l'état
+ * sans passer par une UI qui n'existe pas toujours dans le popout (qui ne
+ * rend qu'un seul panel). Le scope dev-only évite d'exposer le store à
+ * des scripts tiers en prod (même si le risque est faible : un attaquant
+ * a déjà un full XSS s'il peut écrire sur `window`).
+ */
+if (typeof window !== "undefined" && process.env.NODE_ENV !== "production") {
+  (window as unknown as Record<string, unknown>).__SHUGU_SCENE_STORE__ =
+    useSceneEditorStore;
+}
+
 /* ─────────────────────────── TEMPORAL HOOK ─────────────────────────── */
 
 /**
