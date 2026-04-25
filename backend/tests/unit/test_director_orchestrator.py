@@ -45,6 +45,8 @@ from shugu.memory.types import MemoryItem, RecallQuery
 def _settings(**kwargs) -> Settings:
     """Crée des Settings avec director_enabled par défaut."""
     return Settings(
+        env="test",
+        ip_hash_salt="test",
         director_enabled=kwargs.get("director_enabled", True),
         anthropic_api_key=kwargs.get("anthropic_api_key", "test-key-abc"),
         director_model=kwargs.get("director_model", "claude-haiku-4-5-20251001"),

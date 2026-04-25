@@ -20,6 +20,8 @@ from shugu.director.brain_provider import DirectorBrain, DirectorBrainError, mak
 
 def _settings(provider: str = "minimax", **kwargs) -> Settings:
     return Settings(
+        env="test",
+        ip_hash_salt="test",
         director_enabled=True,
         director_llm_provider=provider,
         anthropic_api_key=kwargs.get("anthropic_api_key", "test-key"),

@@ -23,6 +23,7 @@ from typing import Optional
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     DateTime,
     Float,
@@ -32,6 +33,9 @@ from sqlalchemy import (
     String,
     Text,
     func,
+)
+from sqlalchemy import (
+    text as sa_text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
@@ -134,4 +138,53 @@ class PersonaState(Base):
 
     __table_args__ = (
         CheckConstraint("id = 1", name="ck_persona_state_singleton"),
+    )
+
+
+class MemoryEpisodeRow(Base):
+    """Row ORM pour `memory_episodes` — L2 épisodique (Mémoire PR 2).
+
+    Un épisode = un event sensoriel horodaté (chat, voice, vip, etc.)
+    persisté append-only par `MemoryAgent.record_episode()`. Le payload brut
+    est conservé pour audit ; si la redaction Phase 2.6 a détecté des secrets,
+    la version propre est stockée dans `redacted_payload` (NULL = identique
+    au payload, pas de secrets détectés).
+
+    Single-writer rule : SEUL `MemoryAgent` insère/modifie/archive ces rows.
+    Les workers (IngestionWorker, ExtractionWorker PR 3, Compactor PR 4) lisent
+    via les méthodes publiques de l'agent, n'INSERT/UPDATE jamais directement.
+
+    Indexes (cf. migration 0009) :
+    - `idx_memory_episodes_subject_ts`  : recall par subject + ts DESC
+    - `idx_memory_episodes_session`     : debug + analytics par session
+    - `idx_memory_episodes_perf`        : jointure OutcomeDetector PR 5
+    - `idx_memory_episodes_active`      : index partiel ts DESC WHERE NOT archived
+    """
+    __tablename__ = "memory_episodes"
+
+    id: Mapped[str] = mapped_column(String(26), primary_key=True)  # ULID
+    ts: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False,
+    )
+    subject: Mapped[str] = mapped_column(String(128), nullable=False)
+    session_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    event_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    actor: Mapped[str] = mapped_column(String(64), nullable=False)
+    # JSONB natif PG. Pas de variant SQLite : memory_episodes n'est exercée
+    # qu'en integration suite (Postgres + pgvector requis).
+    payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    redacted_payload: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    performance_id: Mapped[Optional[str]] = mapped_column(String(26), nullable=True)
+    archived: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=sa_text("false"),
+    )
+
+    __table_args__ = (
+        Index("idx_memory_episodes_subject_ts", "subject", sa_text("ts DESC")),
+        Index("idx_memory_episodes_session", "session_id", "ts"),
+        Index("idx_memory_episodes_perf", "performance_id"),
+        # idx_memory_episodes_active : index partiel créé en raw SQL côté
+        # migration 0009 (CREATE INDEX ... WHERE NOT archived). Pas répliqué
+        # dans __table_args__ car SQLAlchemy n'expose pas la clause WHERE
+        # avec une expression de tri DESC en autogenerate fiable.
     )

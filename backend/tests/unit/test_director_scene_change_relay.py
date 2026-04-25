@@ -24,7 +24,7 @@ from shugu.director.triggers import TriggerBus, TriggerEvent
 
 
 def _make_settings(*, enabled: bool = True) -> Settings:
-    return Settings(director_enabled=enabled)
+    return Settings(env="test", ip_hash_salt="test", director_enabled=enabled)
 
 
 async def _drain_until(bus_events: list, count: int, timeout_s: float = 0.5) -> None:

@@ -23,6 +23,7 @@ from ..core.errors import AuthError
 from ..core.identity import OperatorIdentity, hash_ip
 from ..core.protocols import EventBus, ModerationLayer
 from ..director.wiring import publish_chat_trigger
+from ..memory.sense_publish import publish_sense_raw
 from ..pipeline.queue import QueuedMessage, RedisQueue, new_msg_id
 
 router = APIRouter()
@@ -153,6 +154,22 @@ async def _handle_operator_message(
 
     if _deps.ambient is not None:
         _deps.ambient.mark_human_input()
+
+    # Mémoire PR 2 — publish sense.raw pour l'opérateur, indépendamment du
+    # target (shugu ou hermes). L'input texte est un sens, peu importe son
+    # routing aval. Subject normalisé en lowercase (cohérent avec wiring.py
+    # publish_chat_trigger qui lowercase aussi le sender). No-op si
+    # memory_enabled=False. Choix await (cf. retour adversarial H2).
+    operator_username_lc = identity.username.lower()
+    await publish_sense_raw(
+        event_bus=_deps.event_bus,
+        settings=_deps.settings,
+        subject=f"operator:{operator_username_lc}",
+        event_type="chat_in",
+        actor=f"operator:{operator_username_lc}",
+        payload={"text": text, "target": target, "nonce": nonce},
+        session_id=identity.session_id,
+    )
 
     if target == "hermes":
         # Embodied path: Hermes drives Shugu's body directly via tool_calls.

@@ -26,6 +26,7 @@ from fastapi import APIRouter, Header, HTTPException, status
 from ..config import Settings
 from ..core.protocols import EventBus
 from ..core.vip_bridge import VipEventIn, VipToolCall, VipToolResult
+from ..memory.sense_publish import publish_sense_raw
 from ..pipeline.queue import QueuedMessage, RedisQueue, new_msg_id
 
 log = structlog.get_logger(__name__)
@@ -97,6 +98,21 @@ async def post_event(
     deps = _require_secret(x_internal_secret)
     payload = event.model_dump()
     await deps.event_bus.publish("vip.events", payload)
+
+    # Mémoire PR 2 — publish sense.raw event_type=vip_event. Subject = vip:<user_lc>
+    # (cohérent avec wiring.py publish_chat_trigger qui lowercase aussi le sender).
+    # No-op si memory_enabled=False.
+    user_lc = (event.user or "").strip().lower()
+    if user_lc:
+        await publish_sense_raw(
+            event_bus=deps.event_bus,
+            settings=deps.settings,
+            subject=f"vip:{user_lc}",
+            event_type="vip_event",
+            actor=f"vip:{user_lc}",
+            payload={"kind": event.kind, "room": event.room, "data": payload.get("payload", {})},
+        )
+
     log.debug("internal_vip.event_published", kind=event.kind, room=event.room)
     return {"ok": True}
 
@@ -122,6 +138,23 @@ async def post_tool(
                 status.HTTP_400_BAD_REQUEST, "chat.post requires non-empty text",
             )
         session_id = str(call.args.get("session_id", "vip"))
+        # Sender VIP — passé par le vip_agent dans args.sender (LiveKit identity).
+        # Subject = vip:<sender_lc> ; fallback vip:<session_id> si sender absent.
+        sender_lc = str(call.args.get("sender", "")).strip().lower() or session_id
+
+        # Mémoire PR 2 — publish sense.raw event_type=chat_in (un VIP qui chatte
+        # via le bridge LiveKit). Avant l'enqueue, comme visitor_ws / operator_ws.
+        # No-op si memory_enabled=False.
+        await publish_sense_raw(
+            event_bus=deps.event_bus,
+            settings=deps.settings,
+            subject=f"vip:{sender_lc}",
+            event_type="chat_in",
+            actor=f"vip:{sender_lc}",
+            payload={"text": text, "via": "internal_vip.chat_post"},
+            session_id=session_id,
+        )
+
         msg = QueuedMessage(
             msg_id=new_msg_id(),
             route="shugu_persona",

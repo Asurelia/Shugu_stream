@@ -1,7 +1,8 @@
 """IngestionWorker — récolte les events `sense.raw` et les transforme en épisodes mémoire.
 
-PR 1 : skeleton. Subscribe le topic `sense.raw`, logue chaque event reçu.
-PR 2 ajoutera : `await self._memory.store(...)` via `record_episode`.
+PR 2 (cette version) : appelle `MemoryAgent.record_episode()` pour persister
+chaque event dans `memory_episodes`. La redaction Phase 2.6 est appliquée
+côté agent, pas ici.
 
 Design :
 - Même pattern lifecycle que `AmbientDaemon` : `start()` / `run()` / `stop()`.
@@ -10,6 +11,9 @@ Design :
 - L'annulation de la task asyncio déclenche le `finally` du générateur
   `subscribe()` qui retire proprement la queue du bus (garantie par les deux
   impls `InProcessEventBus` et `RedisEventBus`).
+- Une exception sur record_episode (DB down, payload corrompu) est loguée en
+  warning et SWALLOWED — on ne casse pas la consommation pour autant. Le
+  worker reste up et continue à consommer le bus (best-effort ingestion).
 """
 from __future__ import annotations
 
@@ -20,6 +24,7 @@ import structlog
 
 from ..config import Settings
 from ..core.protocols import EventBus, MemoryService
+from ..memory.episodes import MemoryEpisode
 
 log = structlog.get_logger(__name__)
 
@@ -27,10 +32,7 @@ _TOPIC_SENSE_RAW = "sense.raw"
 
 
 class IngestionWorker:
-    """Récolte les events `sense.raw` du bus et les transforme en épisodes mémoire.
-
-    PR 1 : skeleton, log uniquement. PR 2 ajoutera record_episode.
-    """
+    """Récolte les events `sense.raw` du bus et les persiste comme épisodes mémoire."""
 
     def __init__(
         self,
@@ -65,23 +67,24 @@ class IngestionWorker:
         self._task = asyncio.create_task(self.run(), name="ingestion_worker")
 
     async def run(self) -> None:
-        """Boucle principale : consume les events sense.raw.
+        """Boucle principale : consume les events sense.raw et appelle record_episode.
 
-        PR 1 : logue chaque event reçu (WARN en debug, INFO en prod).
-        PR 2 ajoutera : await self._memory.store(...)  via record_episode.
+        Format d'event attendu (publié par les senses, cf. T5) :
+            {
+                "subject": "visitor:abc",
+                "event_type": "chat_in",
+                "actor": "viewer:alice",
+                "payload": {"text": "...", "ts": "..."},
+                "session_id": "01HX...",                # optionnel
+                "performance_id": "01HX...",            # optionnel
+            }
         """
         log.info("memory.ingestion_worker_started", topic=_TOPIC_SENSE_RAW)
         try:
             async for event in self._event_bus.subscribe(_TOPIC_SENSE_RAW):
                 if not self._running:
                     break
-                # PR 1 : log uniquement — pas encore de storage.
-                # PR 2 ajoutera record_episode ici.
-                log.info(
-                    "memory.ingestion_worker_event_received",
-                    topic=_TOPIC_SENSE_RAW,
-                    event_type=event.get("type"),
-                )
+                await self._on_sense_raw(event)
         except asyncio.CancelledError:
             # Propagation propre — le finally du générateur subscribe() nettoie.
             raise
@@ -92,6 +95,43 @@ class IngestionWorker:
             )
         finally:
             log.info("memory.ingestion_worker_stopped")
+
+    async def _on_sense_raw(self, event: dict) -> None:
+        """Callback subscriber sense.raw — transforme en MemoryEpisode et persiste.
+
+        Best-effort : toute exception est loguée en warning et swallowed
+        pour que le worker continue à consommer le bus. Un payload mal
+        formé (champ manquant) ne tue jamais la pipeline d'ingestion.
+        """
+        try:
+            episode = MemoryEpisode.new(
+                subject=event["subject"],
+                event_type=event["event_type"],
+                actor=event["actor"],
+                payload=event.get("payload", {}),
+                session_id=event.get("session_id"),
+                performance_id=event.get("performance_id"),
+            )
+            await self._memory.record_episode(episode)
+            log.info(
+                "memory.ingestion_worker_event_recorded",
+                episode_id=episode.id,
+                subject=episode.subject,
+                event_type=episode.event_type,
+            )
+        except KeyError as exc:
+            # Payload mal formé — on log explicitement pour aider au debug
+            # sans casser la consommation.
+            log.warning(
+                "memory.ingestion_worker_malformed_event",
+                missing_field=str(exc),
+                event_keys=sorted(event.keys()) if isinstance(event, dict) else None,
+            )
+        except Exception as exc:
+            log.warning(
+                "memory.ingestion_worker_record_episode_failed",
+                error=repr(exc),
+            )
 
     async def stop(self) -> None:
         """Cleanup propre du subscriber.

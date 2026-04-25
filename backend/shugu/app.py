@@ -172,12 +172,17 @@ async def lifespan(app: FastAPI):
         session_factory=session_scope,
         embedder=embedder,
         embed_dim=settings.memory_embed_dim,
+        # Mémoire PR 2 — bus optionnel pour publier `memory.episode_stored`
+        # après record_episode() (préparé pour PR 3 FactExtractor).
+        event_bus=event_bus,
     )
     log.info(
         "memory_agent.ready",
         embed_dim=settings.memory_embed_dim,
         enabled=settings.memory_enabled,
         embedder_model=settings.memory_embedder_model if _need_embedder else None,
+        # Mémoire PR 2 — confirme que record_episode publiera memory.episode_stored.
+        episode_publish_wired=True,
     )
 
     personality_loader = MarkdownPersonalityLoader(
@@ -280,6 +285,8 @@ async def lifespan(app: FastAPI):
         operator_voice_ws.set_deps(operator_voice_ws.VoiceWSDeps(
             settings=settings, redis=_redis, picker=picker,
             stt=stt, hermes_embodied=hermes_embodied, metrics=_metrics,
+            # Mémoire PR 2 — bus pour publier sense.raw sur le transcript STT.
+            event_bus=event_bus,
         ))
 
     # Director workers (Phase E3) — registry tag_name -> Worker injecté avec le bus.

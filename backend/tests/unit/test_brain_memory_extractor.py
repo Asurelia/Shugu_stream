@@ -28,6 +28,8 @@ from shugu.core.errors import BrainError
 
 def _settings() -> Settings:
     return Settings(
+        env="test",
+        ip_hash_salt="test",
         minimax_api_key="test-key",
         minimax_base_url="https://api.minimax.test/v1",
         minimax_model="minimax-m2.7",

@@ -156,8 +156,21 @@ class Settings(BaseSettings):
                     "Généré via `python -c \"import secrets; print(secrets.token_hex(32))\"`.",
     )
 
+    # Environment (dev, test, production) — défaut "production" pour fail-safe en prod.
+    env: str = Field(
+        default="production",
+        description="Environnement d'exécution : 'production', 'test', 'dev', 'ci'. "
+                    "Lit SHUGU_ENV, défaut 'production' pour sécurité.",
+    )
+
     # Crypto
-    ip_hash_salt: str = ""
+    ip_hash_salt: str = Field(
+        default="",
+        description="Sel pour hashing des IPs visiteurs (subject mémoire). "
+                    "OBLIGATOIRE en prod pour pseudonymat visitors. "
+                    "Génère un secret aléatoire 32+ chars : "
+                    "python -c 'import secrets; print(secrets.token_urlsafe(32))'",
+    )
 
     # Pipeline
     queue_pending_cap: int = 50
@@ -314,6 +327,24 @@ class Settings(BaseSettings):
                     "Gated par ce flag + auth operator. "
                     "OFF par défaut — uniquement pour CI/tests E2E Playwright.",
     )
+
+    @field_validator("ip_hash_salt", mode="after")
+    @classmethod
+    def _validate_ip_hash_salt(cls, v: str, info) -> str:
+        """Valide que ip_hash_salt est non-vide en production.
+
+        En prod, un salt vide permettrait à un attaquant de pré-calculer les hashes
+        d'IPs connues pour déanonymiser les viewers récurrents (subject mémoire
+        = 'visitor:<ip_hash>'). Cette vérification fail-fast à l'initialisation.
+        """
+        env = info.data.get("env", "production")
+        if not v.strip() and env not in ("test", "dev", "development", "ci"):
+            raise ValueError(
+                "SHUGU_IP_HASH_SALT obligatoire en production (sécurité pseudonymat viewers). "
+                "Génère un secret aléatoire 32+ chars : "
+                "python -c 'import secrets; print(secrets.token_urlsafe(32))'"
+            )
+        return v
 
     @field_validator("vip_usernames", mode="before")
     @classmethod

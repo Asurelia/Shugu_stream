@@ -31,6 +31,8 @@ from ..auth import jwt_tokens
 from ..config import Settings
 from ..core.errors import AuthError
 from ..core.identity import OperatorIdentity, hash_ip
+from ..core.protocols import EventBus
+from ..memory.sense_publish import publish_sense_raw
 from ..pipeline.voice_duplex import VoiceDuplex, VoiceEvent
 
 router = APIRouter()
@@ -45,6 +47,10 @@ class VoiceWSDeps:
     stt: "object"                    # FasterWhisperSTT
     hermes_embodied: "object"        # HermesEmbodiedBrain
     metrics: "object" = None         # core.observability.Metrics
+    # Mémoire PR 2 — bus pour publier sense.raw sur le transcript STT.
+    # Optionnel : si None (mode test sans memory), publish_sense_raw n'est
+    # pas appelé. En prod l'app.py wiring fournit toujours le bus.
+    event_bus: Optional[EventBus] = None
 
 
 # ─── Anti-abuse guards ───────────────────────────────────────────────────────
@@ -110,6 +116,21 @@ async def operator_voice_ws(
         the Picker's ready queue and streams TTS back to visitors. Nothing
         we need to return here; voice_duplex tracks the state transition."""
         log.info("voice.hermes_invoke", username=identity.username, chars=len(text))
+        # Mémoire PR 2 — publish sense.raw avec le transcript voice. C'est
+        # le seul moment où le texte materialise (avant on n'a que des PCM
+        # frames). No-op si event_bus=None ou memory_enabled=False. Choix
+        # await documenté côté retour adversarial H2.
+        if _deps.event_bus is not None:
+            operator_username_lc = identity.username.lower()
+            await publish_sense_raw(
+                event_bus=_deps.event_bus,
+                settings=_deps.settings,
+                subject=f"operator:{operator_username_lc}",
+                event_type="voice_in",
+                actor=f"operator:{operator_username_lc}",
+                payload={"text": text},
+                session_id=identity.session_id,
+            )
         try:
             await _deps.hermes_embodied.run_once(  # type: ignore[union-attr]
                 text, identity=identity, priority_tier=0,

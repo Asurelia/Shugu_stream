@@ -33,6 +33,8 @@ def _make_settings(
 ) -> Settings:
     """Settings minimal sans lire l'env file."""
     return Settings(
+        env="test",
+        ip_hash_salt="test",
         test_triggers_enabled=test_triggers_enabled,
         director_enabled=director_enabled,
     )

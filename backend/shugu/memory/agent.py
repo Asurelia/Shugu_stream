@@ -26,8 +26,8 @@ Design rules :
 from __future__ import annotations
 
 import dataclasses
-from datetime import timezone
-from typing import AsyncContextManager, Callable, Optional
+from datetime import datetime, timedelta, timezone
+from typing import TYPE_CHECKING, Any, AsyncContextManager, Callable, Optional
 
 import structlog
 from sqlalchemy import or_, select
@@ -35,6 +35,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .embedder import Embedder
+from .episodes import MemoryEpisode
 from .maintenance import (
     DECAY_FLOOR_DEFAULT,
     DEDUPE_DISTANCE_MAX_DEFAULT,
@@ -46,10 +47,13 @@ from .maintenance import (
     hard_delete_below_floor,
     semantic_dedupe,
 )
-from .models import MEMORY_EMBED_DIM, MemoryFact, PersonaState
+from .models import MEMORY_EMBED_DIM, MemoryEpisodeRow, MemoryFact, PersonaState
 from .query_expansion import build_expanded_terms
 from .redaction import redact
 from .types import MemoryItem, RecallQuery
+
+if TYPE_CHECKING:
+    from ..core.protocols import EventBus
 
 log = structlog.get_logger(__name__)
 
@@ -68,6 +72,7 @@ class MemoryAgent:
         embed_dim: int = MEMORY_EMBED_DIM,
         enable_query_expansion: bool = True,
         enable_redaction: bool = True,
+        event_bus: Optional["EventBus"] = None,
     ) -> None:
         if embed_dim != MEMORY_EMBED_DIM:
             # On n'empêche pas à la construction (les tests pourraient avoir une
@@ -92,6 +97,12 @@ class MemoryAgent:
         # securite. Desactivable uniquement pour les chemins qui ont deja
         # redacte (evite le double-pass) ou pour des tests specifiques.
         self._enable_redaction = enable_redaction
+        # Mémoire PR 2 — bus optionnel pour publier `memory.episode_stored`
+        # après record_episode(). Si None, la publication est skippée
+        # silencieusement (mode test ou config sans event_bus). Aucun coût
+        # côté store/recall existants — le bus n'est touché que par
+        # record_episode.
+        self._event_bus = event_bus
 
     # ── store ────────────────────────────────────────────────────────────────
 
@@ -315,6 +326,123 @@ class MemoryAgent:
             "dedupe_clusters": clusters,
         }
 
+    # ── episodes (L2 épisodique — Mémoire PR 2) ──────────────────────────────
+    #
+    # Single-writer rule : ces deux méthodes sont les SEULS points d'entrée qui
+    # INSERT / SELECT sur `memory_episodes`. Les workers (IngestionWorker PR 2,
+    # ExtractionWorker PR 3, Compactor PR 4) passent par ici et n'instancient
+    # jamais `MemoryEpisodeRow` directement. Préserve l'invariant single-writer
+    # qui rend la maintenance et le compactor déterministes (un seul code path
+    # à auditer pour la consistency).
+
+    async def record_episode(self, ep: MemoryEpisode) -> None:
+        """Persiste un épisode (Mémoire PR 2 — L2 épisodique).
+
+        Pipeline :
+        1. Redaction Phase 2.6 sur les champs textuels du `payload`. Si des
+           secrets sont détectés, le payload nettoyé est stocké dans
+           `redacted_payload` (le `payload` brut est conservé pour audit) ;
+           sinon `redacted_payload` reste `None` (NULL côté DB = identique).
+        2. INSERT dans `memory_episodes`.
+        3. Publish `memory.episode_stored` sur le bus (si event_bus configuré),
+           pour que la PR 3 FactExtractor puisse extraire des facts à la volée.
+
+        Le caller (IngestionWorker) peut log+swallow toute exception sans
+        casser le hot path — d'où l'absence de return value et le contrat
+        fire-and-forget friendly.
+        """
+        # 1) Redaction du payload (texte) — Phase 2.6 wiring.
+        redacted_payload: Optional[dict] = None
+        if self._enable_redaction:
+            cleaned, categories = _redact_payload(ep.payload)
+            if categories:
+                # Log WARNING avec les CATEGORIES UNIQUEMENT, jamais le secret.
+                log.warning(
+                    "memory_agent.episode_redacted_secrets",
+                    subject=ep.subject,
+                    event_type=ep.event_type,
+                    actor=ep.actor,
+                    categories=categories,
+                    episode_id=ep.id,
+                )
+                redacted_payload = cleaned
+
+        # 2) INSERT.
+        async with self._session_factory() as session:
+            row = MemoryEpisodeRow(
+                id=ep.id,
+                ts=ep.ts,
+                subject=ep.subject,
+                session_id=ep.session_id,
+                event_type=ep.event_type,
+                actor=ep.actor,
+                payload=ep.payload,
+                redacted_payload=redacted_payload,
+                performance_id=ep.performance_id,
+                archived=ep.archived,
+            )
+            session.add(row)
+
+        # 3) Publish memory.episode_stored — préparé pour PR 3 FactExtractor.
+        # Best-effort : une exception côté bus ne doit pas casser l'INSERT
+        # déjà committé. On log + swallow.
+        if self._event_bus is not None:
+            try:
+                await self._event_bus.publish(
+                    "memory.episode_stored",
+                    {
+                        "episode_id": ep.id,
+                        "subject": ep.subject,
+                        "event_type": ep.event_type,
+                        "actor": ep.actor,
+                        "ts": ep.ts.isoformat(),
+                        "session_id": ep.session_id,
+                        "performance_id": ep.performance_id,
+                        "had_redaction": redacted_payload is not None,
+                    },
+                )
+            except Exception as exc:
+                log.warning(
+                    "memory_agent.episode_publish_failed",
+                    episode_id=ep.id,
+                    error=repr(exc),
+                )
+
+    async def recall_episodes(
+        self,
+        subject: str,
+        *,
+        window_hours: int = 24,
+        limit: int = 20,
+    ) -> list[MemoryEpisode]:
+        """Lookup épisodes par subject + fenêtre glissante.
+
+        Filtre :
+        - `subject == subject` (exact match — le caller passe le subject
+          déjà normalisé, ex: `visitor:abc123` ou `vip:alice`).
+        - `ts >= now() - window_hours`.
+        - `archived = False`.
+
+        Ordre : `ts DESC` (plus récents d'abord). Hard cap `limit`.
+
+        Pas de cosine ici — l'extraction sémantique vers `memory_facts` est
+        faite par PR 3 FactExtractor.
+        """
+        if limit <= 0 or window_hours <= 0:
+            return []
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=window_hours)
+        async with self._session_factory() as session:
+            stmt = (
+                select(MemoryEpisodeRow)
+                .where(MemoryEpisodeRow.subject == subject)
+                .where(MemoryEpisodeRow.ts >= cutoff)
+                .where(MemoryEpisodeRow.archived.is_(False))
+                .order_by(MemoryEpisodeRow.ts.desc())
+                .limit(limit)
+            )
+            rows = (await session.execute(stmt)).scalars().all()
+            return [_row_to_episode(row) for row in rows]
+
     # ── persona ──────────────────────────────────────────────────────────────
 
     async def persona_get(self) -> dict:
@@ -370,6 +498,68 @@ def _row_to_item(row: MemoryFact) -> MemoryItem:
         last_used_at=last_used,
         embedding=embedding,
     )
+
+
+def _row_to_episode(row: MemoryEpisodeRow) -> MemoryEpisode:
+    """Convertit un ORM row episode en dataclass publique.
+
+    Force `tzinfo=UTC` si la DB renvoie un naive datetime (paranoia : la
+    colonne est TIMESTAMPTZ donc ça ne devrait pas arriver, mais on s'aligne
+    sur le pattern `_row_to_item`).
+    """
+    ts = row.ts
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    return MemoryEpisode(
+        id=row.id,
+        ts=ts,
+        subject=row.subject,
+        session_id=row.session_id,
+        event_type=row.event_type,        # type: ignore[arg-type]  -- DB libre, episodes.py Literal ferme
+        actor=row.actor,
+        payload=dict(row.payload) if row.payload else {},
+        redacted_payload=dict(row.redacted_payload) if row.redacted_payload else None,
+        performance_id=row.performance_id,
+        archived=bool(row.archived),
+    )
+
+
+def _redact_payload(payload: dict) -> tuple[dict, list[str]]:
+    """Walk un payload JSON-like et applique `redact()` sur les valeurs str.
+
+    Retourne `(cleaned_copy, sorted_unique_categories)`. Si aucune redaction
+    n'a touché, `cleaned_copy` est une copie défensive identique au payload
+    et `categories == []`.
+
+    Stratégie :
+    - dict / list : récursion (préserve la structure).
+    - str         : redact().
+    - autres      : passthrough (int, bool, None, float, etc.).
+
+    Note : on copie systématiquement les conteneurs pour éviter toute
+    mutation surprise du payload du caller (qui peut être une dataclass
+    `MemoryEpisode` ré-utilisée plus loin).
+    """
+    found: set[str] = set()
+
+    def _walk(v: Any) -> Any:
+        if isinstance(v, str):
+            cleaned, cats = redact(v)
+            if cats:
+                found.update(cats)
+            return cleaned
+        if isinstance(v, dict):
+            return {k: _walk(item) for k, item in v.items()}
+        if isinstance(v, list):
+            return [_walk(item) for item in v]
+        # tuple → list (JSONB ne distingue pas, et on évite l'asymétrie de
+        # type côté DB).
+        if isinstance(v, tuple):
+            return [_walk(item) for item in v]
+        return v
+
+    cleaned_payload = _walk(payload)
+    return cleaned_payload, sorted(found)
 
 
 __all__ = ["MemoryAgent", "SessionFactory"]

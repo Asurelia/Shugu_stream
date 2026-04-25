@@ -22,7 +22,16 @@ def test_memory_agent_implements_memory_service_protocol() -> None:
     from shugu.memory.agent import MemoryAgent
 
     # Méthodes publiques du Protocol MemoryService.
-    required_methods = ["store", "recall", "maintenance", "persona_get", "persona_set"]
+    # Mémoire PR 2 ajoute : record_episode + recall_episodes (L2 épisodique).
+    required_methods = [
+        "store",
+        "recall",
+        "maintenance",
+        "persona_get",
+        "persona_set",
+        "record_episode",
+        "recall_episodes",
+    ]
 
     missing = [m for m in required_methods if not hasattr(MemoryAgent, m)]
 
