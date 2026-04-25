@@ -51,6 +51,7 @@ from .routes import (
     operator_ws,
     registry_api,
     scene_editor_api,
+    test_director_api,
     visitor_ws,
 )
 
@@ -327,6 +328,19 @@ async def lifespan(app: FastAPI):
             debouncer=director_debouncer,
             tick_cache=director_tick_cache,
         )
+        # Phase E4 — Seed assets_available dans le state store au boot.
+        # Les workers OutfitWorker / VfxWorker / AnimWorker / SceneWorker
+        # valident le slug émis par le LLM contre cette liste.
+        # Si la liste est vide, TOUS les slugs LLM sont rejetés → silences.
+        await director_state_store.update({
+            "assets_available": {
+                "outfits": ["default", "vip_celebration", "cozy_pajama", "streamer_gear", "elegant"],
+                "vfx": ["confetti_gold", "sparkle_pink", "heart_rain", "star_burst", "fade_warm"],
+                "anims": ["wave", "excited_wave", "bow", "shy_giggle", "dance",
+                          "thinking", "clap", "thumbs_up", "peace_sign", "idle_loop"],
+                "scenes": ["main_talk", "intro", "outro"],
+            }
+        })
         await director_orchestrator.start(director_trigger_bus)
         app.state.director_orchestrator = director_orchestrator
         log.info(
@@ -378,6 +392,11 @@ def create_app() -> FastAPI:
     app.include_router(visitor_ws.router)
     app.include_router(operator_ws.router)
     app.include_router(editor_ws.router)   # /ws/editor — Phase D collab
+    # Phase E4 — route de test Director (gated par settings.test_triggers_enabled).
+    # La route retourne 404 si le flag est OFF, donc on peut toujours l'inclure —
+    # pas de risque de surface d'attaque en prod. L'inclusion inconditionnelle
+    # permet au processus de démarrer sans connaître le flag au boot.
+    app.include_router(test_director_api.router)
     # Only mount the voice-duplex route when the feature is enabled, otherwise
     # the route would accept WS upgrades but the handler's `_deps` would still
     # be None → assertion crash on first connect. Cleaner to 404 the upgrade.

@@ -294,6 +294,17 @@ class Settings(BaseSettings):
                     "Non implémenté Phase E2.5 — posé pour Phase E3.",
     )
 
+    # Phase E4 — route de test gated pour déclencher des triggers Director
+    # depuis les tests E2E Playwright sans ouvrir un WebSocket visitor.
+    # OFF par défaut — ne JAMAIS activer en prod (DoS LLM / amplification coût).
+    # Activer uniquement en CI avec SHUGU_TEST_TRIGGERS_ENABLED=true.
+    test_triggers_enabled: bool = Field(
+        default=False,
+        description="Active la route POST /api/test/director/trigger (operator-only). "
+                    "Gated par ce flag + auth operator. "
+                    "OFF par défaut — uniquement pour CI/tests E2E Playwright.",
+    )
+
     @field_validator("vip_usernames", mode="before")
     @classmethod
     def _normalize_vip_usernames(cls, value: object) -> object:
