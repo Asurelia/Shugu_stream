@@ -208,6 +208,21 @@ class Settings(BaseSettings):
                     "les valeurs dégénérées (busy-loop ou silence jamais détecté).",
     )
 
+    # Director LLM — Phase E2. Haiku 4.5 par défaut (latence ~500ms-1s,
+    # suffisant pour la sortie structurée courte du Soul). Override via
+    # SHUGU_DIRECTOR_MODEL pour passer sur Sonnet 4.6 si la qualité des
+    # réponses n'est pas suffisante.
+    anthropic_api_key: str = Field(
+        default="",
+        description="Clé API Anthropic pour le Director LLM Soul (Phase E2). "
+                    "Si vide, le Director est inactif même si director_enabled=True.",
+    )
+    director_model: str = Field(
+        default="claude-haiku-4-5-20251001",
+        description="Modèle Anthropic utilisé par l'orchestrator Director. "
+                    "Défaut : Haiku 4.5 (latence ~500ms). Override via SHUGU_DIRECTOR_MODEL.",
+    )
+
     @field_validator("vip_usernames", mode="before")
     @classmethod
     def _normalize_vip_usernames(cls, value: object) -> object:
