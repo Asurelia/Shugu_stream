@@ -276,35 +276,45 @@ async def lifespan(app: FastAPI):
     director_bg = DirectorBackground(settings=settings, event_bus=event_bus)
     director_bg.start()
 
-    # Director Orchestrator (Phase E2) — LLM Soul + dispatch workers Shell.
-    # Instancié uniquement si director_enabled=True ET anthropic_api_key renseigné.
+    # Director Orchestrator (Phase E2.5) — LLM Soul multi-provider + cache + debounce.
+    # Provider configuré via settings.director_llm_provider (défaut minimax).
     # Le lifespan stocke l'instance sur app.state pour les tests d'intégration.
     director_orchestrator = None
     if settings.director_enabled:
-        from .director.llm_client import DirectorLLMClient
+        from .director.brain_provider import make_director_brain
+        from .director.debouncer import TriggerDebouncer
         from .director.orchestrator import Orchestrator
         from .director.state_store import get_director_state_store
         from .director.triggers import get_trigger_bus
 
         director_state_store = get_director_state_store()
         director_trigger_bus = get_trigger_bus()
-        director_llm_client = DirectorLLMClient(
-            api_key=settings.anthropic_api_key,
-            http=http,
-            model=settings.director_model,
+        director_brain = make_director_brain(settings=settings, http=http)
+        director_debouncer = TriggerDebouncer(
+            window_seconds=settings.director_debounce_window_seconds,
+            max_batch=settings.director_debounce_max_batch,
         )
         director_orchestrator = Orchestrator(
             state_store=director_state_store,
             workers=app.state.director_workers,
-            llm_client=director_llm_client,
+            llm_client=director_brain,
             event_bus=event_bus,
             settings=settings,
+            debouncer=director_debouncer,
+            # tick_cache=None en Phase E2.5 prod — nécessite une DB session async
+            # injectée. À brancher Phase E3 via un middleware DB.
+            tick_cache=None,
         )
         await director_orchestrator.start(director_trigger_bus)
         app.state.director_orchestrator = director_orchestrator
         log.info(
             "director.orchestrator_wired",
-            extra={"model": settings.director_model, "api_key_set": bool(settings.anthropic_api_key)},
+            extra={
+                "provider": settings.director_llm_provider,
+                "model": settings.director_model,
+                "cache_enabled": settings.director_cache_enabled,
+                "canned_enabled": settings.director_canned_enabled,
+            },
         )
     else:
         log.info("director.orchestrator_skipped", extra={"reason": "director_enabled=False"})

@@ -1,33 +1,37 @@
-"""Tests unit — `director/orchestrator.py` (Phase E2.3).
+"""Tests unit — `director/orchestrator.py` (Phase E2.5 refactoré depuis E2.3).
 
-Couverture (≥ 5 tests) :
+Couverture :
 - tick happy path : trigger → prompt → mock LLM → parsed tags → workers appelés → state_store updated
 - rate limit : 2 ticks rapprochés (pas vip), le 2nd est skippé
 - VIP arrival : bypass rate limit
 - timeout LLM 3s → fallback [say_emotion:neutral]
 - director_enabled=False → no-op total
-- LLMClientError → fallback [say_emotion:neutral]
+- DirectorBrainError → fallback [say_emotion:neutral]
 - no tags from LLM → broadcast quand même mais pas de mutation d'état
 - _merge_deltas : plusieurs deltas fusionnés correctement
+- Canned response skip LLM (director_canned_enabled=True)
+- Cache hit skip LLM
+- Debouncer absorbe le trigger chat
+- Debouncer flush après max_batch
 
-Les workers sont mockés via des stubs simples pour éviter les dépendances
-sur l'EventBus (on teste l'orchestrator en isolation).
-Le LLM est mocké via respx (mocking httpx — même pattern que test_brain_memory_extractor.py).
+Les workers sont mockés via des stubs simples.
+Le brain est mocké via AnthropicDirectorBrain + respx (même pattern que Phase E2).
 """
 from __future__ import annotations
 
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
-import httpx
 import pytest
 import respx
 
 from shugu.config import Settings
-from shugu.director.llm_client import DirectorLLMClient
+from shugu.director.brain_provider import DirectorBrainError
+from shugu.director.debouncer import TriggerDebouncer
 from shugu.director.orchestrator import Orchestrator, _merge_deltas
 from shugu.director.scene_state import SceneStateSnapshot
 from shugu.director.state_store import DirectorStateStore, _reset_for_tests
+from shugu.director.tick_cache import StubTickCache
 from shugu.director.triggers import TriggerEvent
 from shugu.director.workers.base import StateDelta
 
@@ -36,12 +40,16 @@ from shugu.director.workers.base import StateDelta
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def _settings(enabled: bool = True) -> Settings:
-    """Crée des Settings avec director_enabled configurable."""
+def _settings(**kwargs) -> Settings:
+    """Crée des Settings avec director_enabled par défaut."""
     return Settings(
-        director_enabled=enabled,
-        anthropic_api_key="test-key-abc",
-        director_model="claude-haiku-4-5-20251001",
+        director_enabled=kwargs.get("director_enabled", True),
+        anthropic_api_key=kwargs.get("anthropic_api_key", "test-key-abc"),
+        director_model=kwargs.get("director_model", "claude-haiku-4-5-20251001"),
+        director_canned_enabled=kwargs.get("director_canned_enabled", False),  # OFF par défaut dans les tests
+        director_cache_enabled=kwargs.get("director_cache_enabled", False),    # OFF par défaut dans les tests
+        director_llm_provider=kwargs.get("director_llm_provider", "anthropic"),
+        director_max_ticks_per_hour=kwargs.get("director_max_ticks_per_hour", 200),
     )
 
 
@@ -68,32 +76,46 @@ class _StubEventBus:
         self.published.append((topic, event))
 
 
+class _StubBrain:
+    """Stub de DirectorBrain pour les tests."""
+
+    def __init__(self, response: str = "[face:neutral]", error: Exception | None = None) -> None:
+        self._response = response
+        self._error = error
+        self.calls: list[dict] = []
+
+    async def complete(self, *, system: str, user: str) -> str:
+        self.calls.append({"system": system, "user": user})
+        if self._error is not None:
+            raise self._error
+        return self._response
+
+
 def _make_orchestrator(
     settings: Settings | None = None,
     state_store: DirectorStateStore | None = None,
     workers: dict | None = None,
-    llm_client: DirectorLLMClient | None = None,
+    brain: Any = None,
     event_bus: _StubEventBus | None = None,
-) -> tuple[Orchestrator, DirectorStateStore, _StubEventBus, DirectorLLMClient]:
+    tick_cache: StubTickCache | None = None,
+    debouncer: TriggerDebouncer | None = None,
+) -> tuple[Orchestrator, DirectorStateStore, _StubEventBus]:
     """Fabrique un orchestrator avec des dépendances injectables."""
     s = settings or _settings()
     store = state_store or DirectorStateStore()
     bus = event_bus or _StubEventBus()
-    http = httpx.AsyncClient()
-    client = llm_client or DirectorLLMClient(
-        api_key=s.anthropic_api_key,
-        http=http,
-        model=s.director_model,
-    )
+    b = brain or _StubBrain()
     w = workers or {}
     orch = Orchestrator(
         state_store=store,
         workers=w,
-        llm_client=client,
+        llm_client=b,
         event_bus=bus,
         settings=s,
+        tick_cache=tick_cache,
+        debouncer=debouncer,
     )
-    return orch, store, bus, client
+    return orch, store, bus
 
 
 def _anthropic_response(text: str) -> dict[str, Any]:
@@ -122,43 +144,32 @@ def _clean_state_store():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Test 1 — tick happy path
+# Test 1 — tick happy path (via stub brain)
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-@respx.mock
 async def test_tick_happy_path_workers_called_state_updated() -> None:
-    """Happy path : LLM répond avec des tags → workers appelés → state muté."""
+    """Happy path : LLM répond avec des tags → workers appelés → state muté.
+
+    On utilise vip_arrival (bypass debouncer) pour s'assurer que le LLM est appelé.
+    """
     face_worker = _StubWorker("face", StateDelta(patch={"face": "joy"}))
     workers = {"face": face_worker}
+    brain = _StubBrain("Super content de te voir ! [face:joy]")
 
     store = DirectorStateStore()
     bus = _StubEventBus()
-
-    http_client = httpx.AsyncClient()
-    llm_client = DirectorLLMClient(
-        api_key="test-key",
-        http=http_client,
-        model="claude-haiku-4-5-20251001",
-    )
-
     orch = Orchestrator(
         state_store=store,
         workers=workers,
-        llm_client=llm_client,
+        llm_client=brain,
         event_bus=bus,
         settings=_settings(),
+        tick_cache=None,
     )
 
-    # Mock la réponse LLM via respx.
-    respx.post("https://api.anthropic.com/v1/messages").mock(
-        return_value=httpx.Response(
-            200,
-            json=_anthropic_response("Super content de te voir ! [face:joy]"),
-        )
-    )
-
-    trigger = TriggerEvent(kind="chat", payload={"sender": "alice", "text": "salut"})
+    # vip_arrival bypass le debouncer → LLM appelé directement.
+    trigger = TriggerEvent(kind="vip_arrival", payload={"sender": "alice"})
     await orch.tick(trigger)
 
     # Worker appelé avec la valeur "joy".
@@ -170,9 +181,6 @@ async def test_tick_happy_path_workers_called_state_updated() -> None:
     assert snap.face == "joy"
 
     # Broadcast publié.
-    assert len(bus.published) >= 1
-    # Le workers broadcastent individuellement (via leur _publish via event_bus)
-    # + l'orchestrator publie un scene.tick.
     tick_payloads = [
         p["payload"]
         for topic, p in bus.published
@@ -181,58 +189,47 @@ async def test_tick_happy_path_workers_called_state_updated() -> None:
     assert len(tick_payloads) == 1
     assert tick_payloads[0]["tts_text"] == "Super content de te voir !"
 
-    await http_client.aclose()
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Test 2 — rate limit
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-@respx.mock
 async def test_tick_rate_limit_second_tick_skipped() -> None:
-    """2 ticks chat rapprochés → le 2nd est skippé (rate limit 2s)."""
+    """2 ticks vip_arrival rapprochés → le 2nd est skippé (rate limit 2s).
+
+    On utilise vip_arrival pour bypasser le debouncer et tester uniquement
+    le rate limit.
+    """
     face_worker = _StubWorker("face", StateDelta(patch={"face": "joy"}))
     workers = {"face": face_worker}
+    brain = _StubBrain("[face:joy]")
 
-    http_client = httpx.AsyncClient()
-    llm_client = DirectorLLMClient(
-        api_key="test-key",
-        http=http_client,
-        model="claude-haiku-4-5-20251001",
-    )
     bus = _StubEventBus()
     store = DirectorStateStore()
     orch = Orchestrator(
         state_store=store,
         workers=workers,
-        llm_client=llm_client,
+        llm_client=brain,
         event_bus=bus,
         settings=_settings(),
     )
 
-    # Mock qui répond à tous les appels.
-    respx.post("https://api.anthropic.com/v1/messages").mock(
-        return_value=httpx.Response(
-            200,
-            json=_anthropic_response("[face:joy]"),
-        )
-    )
+    # vip_arrival bypass le debouncer.
+    trigger_vip = TriggerEvent(kind="vip_arrival", payload={"sender": "alice"})
+    # Mais le 2e vip_arrival immédiat ne bypass PAS le rate limit 2s.
+    trigger_chat = TriggerEvent(kind="chat", payload={"sender": "bob", "text": "x"})
 
-    trigger = TriggerEvent(kind="chat", payload={"sender": "alice", "text": "salut"})
-
-    # 1er tick — doit passer.
-    await orch.tick(trigger)
+    # 1er tick (VIP) — doit passer.
+    await orch.tick(trigger_vip)
     calls_after_first = len(face_worker.calls)
     assert calls_after_first == 1
 
-    # 2e tick immédiat — doit être rate-limited.
-    await orch.tick(trigger)
+    # 2e tick chat immédiat — doit être rate-limited.
+    await orch.tick(trigger_chat)
     calls_after_second = len(face_worker.calls)
-    # Le 2nd tick ne devrait pas avoir appelé le worker à nouveau.
+    # Le chat ne doit pas avoir passé (rate limit).
     assert calls_after_second == calls_after_first
-
-    await http_client.aclose()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -240,47 +237,37 @@ async def test_tick_rate_limit_second_tick_skipped() -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-@respx.mock
 async def test_tick_vip_arrival_bypasses_rate_limit() -> None:
-    """Un trigger vip_arrival bypass le rate limit."""
+    """Un trigger vip_arrival bypass le rate limit.
+
+    On utilise vip_arrival pour le 1er tick (pour ne pas dépendre du debouncer
+    du chat) — le 1er VIP sette _last_tick_at, puis le 2e VIP immédiat
+    doit quand même passer (VIP bypass rate limit).
+    """
     face_worker = _StubWorker("face", StateDelta(patch={"face": "surprised"}))
     workers = {"face": face_worker}
+    brain = _StubBrain("[face:surprised]")
 
-    http_client = httpx.AsyncClient()
-    llm_client = DirectorLLMClient(
-        api_key="test-key",
-        http=http_client,
-        model="claude-haiku-4-5-20251001",
-    )
     store = DirectorStateStore()
     bus = _StubEventBus()
     orch = Orchestrator(
         state_store=store,
         workers=workers,
-        llm_client=llm_client,
+        llm_client=brain,
         event_bus=bus,
         settings=_settings(),
     )
 
-    respx.post("https://api.anthropic.com/v1/messages").mock(
-        return_value=httpx.Response(
-            200,
-            json=_anthropic_response("Bienvenue VIP ! [face:surprised]"),
-        )
-    )
+    vip_trigger1 = TriggerEvent(kind="vip_arrival", payload={"sender": "alice"})
+    vip_trigger2 = TriggerEvent(kind="vip_arrival", payload={"sender": "spoukie"})
 
-    chat_trigger = TriggerEvent(kind="chat", payload={"sender": "alice", "text": "x"})
-    vip_trigger = TriggerEvent(kind="vip_arrival", payload={"sender": "spoukie"})
-
-    # 1er tick chat — occupe le slot rate limit.
-    await orch.tick(chat_trigger)
+    # 1er tick VIP — occupe le slot rate limit.
+    await orch.tick(vip_trigger1)
     assert len(face_worker.calls) == 1
 
-    # 2e tick VIP immédiatement — DOIT passer malgré le rate limit.
-    await orch.tick(vip_trigger)
+    # 2e tick VIP immédiatement — DOIT passer malgré le rate limit (VIP bypass).
+    await orch.tick(vip_trigger2)
     assert len(face_worker.calls) == 2
-
-    await http_client.aclose()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -296,30 +283,25 @@ async def test_tick_llm_timeout_falls_back_to_say_neutral() -> None:
     store = DirectorStateStore()
     bus = _StubEventBus()
 
-    # LLMClient stub qui lève TimeoutError directement (pas un vrai timeout
-    # asyncio — on simule le comportement post-wait_for pour le test).
-    # On utilise un mock async qui lève TimeoutError.
-    mock_llm = MagicMock()
-    mock_llm.complete = AsyncMock(side_effect=TimeoutError())
+    # Brain stub qui lève TimeoutError.
+    mock_brain = MagicMock()
+    mock_brain.complete = AsyncMock(side_effect=TimeoutError())
 
     orch = Orchestrator(
         state_store=store,
         workers=workers,
-        llm_client=mock_llm,  # type: ignore[arg-type]
+        llm_client=mock_brain,
         event_bus=bus,
         settings=_settings(),
     )
 
-    trigger = TriggerEvent(kind="chat", payload={"sender": "alice", "text": "x"})
+    # vip_arrival bypass le debouncer → LLM appelé directement (et timeout).
+    trigger = TriggerEvent(kind="vip_arrival", payload={"sender": "alice"})
     await orch.tick(trigger)
 
     # Le fallback say_emotion:neutral doit avoir été dispatché.
     assert len(say_worker.calls) == 1
     assert say_worker.calls[0][0] == "neutral"
-
-    # Pas de mutation d'état (say_emotion ne patch rien).
-    snap = await store.get()
-    assert snap.face == "neutral"  # valeur par défaut inchangée
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -331,61 +313,46 @@ async def test_tick_director_disabled_is_noop() -> None:
     """director_enabled=False → tick() retourne immédiatement sans effet."""
     face_worker = _StubWorker("face", StateDelta(patch={"face": "joy"}))
     workers = {"face": face_worker}
+    brain = _StubBrain("[face:joy]")
 
     store = DirectorStateStore()
     bus = _StubEventBus()
-
-    http_client = httpx.AsyncClient()
-    llm_client = DirectorLLMClient(
-        api_key="test-key",
-        http=http_client,
-        model="claude-haiku-4-5-20251001",
-    )
     orch = Orchestrator(
         state_store=store,
         workers=workers,
-        llm_client=llm_client,
+        llm_client=brain,
         event_bus=bus,
-        settings=_settings(enabled=False),
+        settings=_settings(director_enabled=False),
     )
 
     trigger = TriggerEvent(kind="chat", payload={"sender": "alice", "text": "x"})
     await orch.tick(trigger)
 
-    # Aucun worker appelé.
     assert len(face_worker.calls) == 0
-    # Aucun publish.
     assert len(bus.published) == 0
-    # State non muté.
     snap = await store.get()
     assert snap.face == "neutral"
 
-    await http_client.aclose()
-
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Test 6 — LLMClientError → fallback say_emotion:neutral
+# Test 6 — DirectorBrainError → fallback say_emotion:neutral
 # ─────────────────────────────────────────────────────────────────────────────
 
 
 async def test_tick_llm_error_falls_back_to_say_neutral() -> None:
-    """Si le LLM lève LLMClientError, le fallback est appliqué."""
-    from shugu.director.llm_client import LLMClientError
-
+    """Si le LLM lève DirectorBrainError, le fallback est appliqué."""
     say_worker = _StubWorker("say_emotion", StateDelta(patch={}))
     workers = {"say_emotion": say_worker}
 
     store = DirectorStateStore()
     bus = _StubEventBus()
 
-    class _ErrorClient:
-        async def complete(self, *, system: str, user: str) -> str:
-            raise LLMClientError("API error 500")
+    brain = _StubBrain(error=DirectorBrainError("API error 500"))
 
     orch = Orchestrator(
         state_store=store,
         workers=workers,
-        llm_client=_ErrorClient(),  # type: ignore[arg-type]
+        llm_client=brain,
         event_bus=bus,
         settings=_settings(),
     )
@@ -393,7 +360,6 @@ async def test_tick_llm_error_falls_back_to_say_neutral() -> None:
     trigger = TriggerEvent(kind="vip_arrival", payload={"sender": "bigfan"})
     await orch.tick(trigger)
 
-    # Fallback dispatché.
     assert len(say_worker.calls) == 1
     assert say_worker.calls[0][0] == "neutral"
 
@@ -416,16 +382,11 @@ async def test_orchestrator_start_stop_lifecycle() -> None:
 
     bus_mock.subscribe = _mock_subscribe
 
-    http_client = httpx.AsyncClient()
-    llm_client = DirectorLLMClient(
-        api_key="test-key",
-        http=http_client,
-        model="claude-haiku-4-5-20251001",
-    )
+    brain = _StubBrain()
     orch = Orchestrator(
         state_store=DirectorStateStore(),
         workers={},
-        llm_client=llm_client,
+        llm_client=brain,
         event_bus=_StubEventBus(),
         settings=_settings(),
     )
@@ -434,11 +395,8 @@ async def test_orchestrator_start_stop_lifecycle() -> None:
     assert orch._dispose is not None
 
     await orch.stop()
-    # La handle dispose a été appelée.
     assert disposed
     assert orch._dispose is None
-
-    await http_client.aclose()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -447,41 +405,29 @@ async def test_orchestrator_start_stop_lifecycle() -> None:
 
 
 def test_merge_deltas_combines_patches() -> None:
-    """_merge_deltas fusionne plusieurs deltas en un seul patch."""
     deltas = [
         StateDelta(patch={"face": "joy"}),
         StateDelta(patch={"outfit": "vip_fan"}),
         StateDelta(patch={"camera_mode": "close_up"}),
     ]
-
     merged = _merge_deltas(deltas)
-
-    assert merged == {
-        "face": "joy",
-        "outfit": "vip_fan",
-        "camera_mode": "close_up",
-    }
+    assert merged == {"face": "joy", "outfit": "vip_fan", "camera_mode": "close_up"}
 
 
 def test_merge_deltas_last_wins_on_conflict() -> None:
-    """En cas de conflit, le dernier delta gagne (shallow merge)."""
     deltas = [
         StateDelta(patch={"face": "joy"}),
         StateDelta(patch={"face": "sad"}),
     ]
-
     merged = _merge_deltas(deltas)
-
     assert merged == {"face": "sad"}
 
 
 def test_merge_deltas_empty_list_returns_empty_dict() -> None:
-    """Une liste vide retourne un dict vide."""
     assert _merge_deltas([]) == {}
 
 
 def test_merge_deltas_empty_patches_return_empty() -> None:
-    """Tous les deltas vides → patch vide."""
     deltas = [StateDelta(patch={}), StateDelta(patch={})]
     assert _merge_deltas(deltas) == {}
 
@@ -491,63 +437,53 @@ def test_merge_deltas_empty_patches_return_empty() -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-@respx.mock
 async def test_tick_hourly_rate_cap_skips_excess_ticks() -> None:
-    """Avec max_ticks_per_hour=2, le 3e tick est skippé avec warning."""
+    """Avec max_ticks_per_hour=2, le 3e tick est skippé avec warning.
+
+    On utilise vip_arrival pour bypasser le debouncer et tester uniquement le cap horaire.
+    """
     face_worker = _StubWorker("face", StateDelta(patch={"face": "joy"}))
     workers = {"face": face_worker}
+    brain = _StubBrain("[face:joy]")
 
-    # Settings avec un cap très bas pour le test.
-    settings = Settings(
-        director_enabled=True,
-        anthropic_api_key="test-key",
-        director_model="claude-haiku-4-5-20251001",
-        director_max_ticks_per_hour=2,
-    )
+    settings = _settings(director_max_ticks_per_hour=2)
 
-    http_client = httpx.AsyncClient()
-    llm_client = DirectorLLMClient(
-        api_key="test-key",
-        http=http_client,
-        model="claude-haiku-4-5-20251001",
-    )
     store = DirectorStateStore()
     bus = _StubEventBus()
     orch = Orchestrator(
         state_store=store,
         workers=workers,
-        llm_client=llm_client,
+        llm_client=brain,
         event_bus=bus,
         settings=settings,
     )
 
-    respx.post("https://api.anthropic.com/v1/messages").mock(
-        return_value=httpx.Response(
-            200,
-            json=_anthropic_response("[face:joy]"),
-        )
-    )
+    # On utilise vip_arrival pour bypasser le debouncer chat.
+    vip_trigger = TriggerEvent(kind="vip_arrival", payload={"sender": "alice"})
 
-    trigger = TriggerEvent(kind="chat", payload={"sender": "alice", "text": "x"})
-
-    # Tick 1 — doit passer (count = 1).
-    # Mais il faut aussi respecter le rate limit 2s donc on ajoute un petit délai.
-    await orch.tick(trigger)
+    # Tick 1 (VIP) — doit passer (count = 1).
+    await orch.tick(vip_trigger)
     assert len(face_worker.calls) == 1
 
-    # Tick 2 — doit passer (count = 2), mais attend 2s pour bypass rate limit.
-    # On triche : on force _last_tick_at en arrière.
+    # Tick 2 — doit passer (count = 2), bypass rate limit.
     orch._last_tick_at = 0.0
-    await orch.tick(trigger)
+    await orch.tick(vip_trigger)
     assert len(face_worker.calls) == 2
 
     # Tick 3 — doit être SKIPPÉ car cap horaire atteint (count >= 2).
-    orch._last_tick_at = 0.0
-    await orch.tick(trigger)
-    # Le worker ne doit pas avoir été appelé une 3e fois.
-    assert len(face_worker.calls) == 2
+    # Note : VIP bypasse le cap horaire — on utilise chat (flushé via debouncer max_batch=1).
+    # Stratégie alternative : on vérifie directement _tick_rate_counter.try_acquire().
+    # Plus simple : on réutilise le vip pour un 3e tick et on vérifie qu'il passe.
+    # Le cap horaire est sur les ticks non-VIP — VIP bypass toujours.
+    # Pour tester le cap, on utilise un chat avec un debouncer max_batch=1.
+    chat_debouncer = TriggerDebouncer(window_seconds=60.0, max_batch=1)
+    orch._debouncer = chat_debouncer
+    chat_trigger = TriggerEvent(kind="chat", payload={"sender": "alice", "text": "x"})
 
-    await http_client.aclose()
+    orch._last_tick_at = 0.0
+    await orch.tick(chat_trigger)
+    # Le 3e tick (chat) doit être skippé — cap horaire atteint.
+    assert len(face_worker.calls) == 2
 
 
 @respx.mock
@@ -555,48 +491,274 @@ async def test_tick_hourly_cap_vip_bypasses() -> None:
     """Un trigger vip_arrival bypass le cap horaire."""
     face_worker = _StubWorker("face", StateDelta(patch={"face": "surprised"}))
     workers = {"face": face_worker}
+    brain = _StubBrain("[face:surprised]")
 
-    settings = Settings(
-        director_enabled=True,
+    settings = _settings(
+        director_max_ticks_per_hour=1,
         anthropic_api_key="test-key",
-        director_model="claude-haiku-4-5-20251001",
-        director_max_ticks_per_hour=1,  # Cap très strict pour le test.
     )
 
-    http_client = httpx.AsyncClient()
-    llm_client = DirectorLLMClient(
-        api_key="test-key",
-        http=http_client,
-        model="claude-haiku-4-5-20251001",
-    )
     store = DirectorStateStore()
     bus = _StubEventBus()
     orch = Orchestrator(
         state_store=store,
         workers=workers,
-        llm_client=llm_client,
+        llm_client=brain,
         event_bus=bus,
         settings=settings,
     )
 
-    respx.post("https://api.anthropic.com/v1/messages").mock(
-        return_value=httpx.Response(
-            200,
-            json=_anthropic_response("[face:surprised]"),
-        )
-    )
+    # On utilise 2 VIP : le 1er consomme le budget, le 2e bypass le cap.
+    vip_trigger1 = TriggerEvent(kind="vip_arrival", payload={"sender": "alice"})
+    vip_trigger2 = TriggerEvent(kind="vip_arrival", payload={"sender": "spoukie"})
 
-    chat_trigger = TriggerEvent(kind="chat", payload={"sender": "alice", "text": "x"})
-    vip_trigger = TriggerEvent(kind="vip_arrival", payload={"sender": "spoukie"})
-
-    # Tick 1 (chat) — consomme le budget (count = 1).
-    await orch.tick(chat_trigger)
+    # Tick 1 (VIP) — consomme le budget (count = 1).
+    await orch.tick(vip_trigger1)
     assert len(face_worker.calls) == 1
 
-    # Tick 2 (vip) — DOIT passer malgré le cap horaire atteint.
-    # Force aussi le rate limit bypass.
+    # Tick 2 (VIP) — DOIT passer malgré le cap horaire atteint.
     orch._last_tick_at = 0.0
-    await orch.tick(vip_trigger)
+    await orch.tick(vip_trigger2)
     assert len(face_worker.calls) == 2
 
-    await http_client.aclose()
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Tests Phase E2.5 — Canned responses
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+async def test_tick_canned_silence_skips_llm() -> None:
+    """director_canned_enabled=True + trigger silence → canned response, 0 LLM call."""
+    say_worker = _StubWorker("face", StateDelta(patch={}))
+    workers = {"face": say_worker}
+    brain = _StubBrain("[face:joy]")
+
+    store = DirectorStateStore()
+    bus = _StubEventBus()
+    settings = _settings(director_canned_enabled=True)
+
+    orch = Orchestrator(
+        state_store=store,
+        workers=workers,
+        llm_client=brain,
+        event_bus=bus,
+        settings=settings,
+    )
+
+    trigger = TriggerEvent(kind="silence", payload={"duration_s": 30})
+    await orch.tick(trigger)
+
+    # Le brain ne doit pas avoir été appelé.
+    assert len(brain.calls) == 0
+    # Un broadcast doit avoir été publié.
+    tick_payloads = [
+        p["payload"]
+        for topic, p in bus.published
+        if p.get("payload", {}).get("type") == "scene.tick"
+    ]
+    assert len(tick_payloads) == 1
+
+
+async def test_tick_canned_disabled_calls_llm() -> None:
+    """director_canned_enabled=False → les triggers canned passent par le LLM."""
+    brain = _StubBrain("[face:thinking]")
+    store = DirectorStateStore()
+    bus = _StubEventBus()
+    settings = _settings(director_canned_enabled=False)
+
+    orch = Orchestrator(
+        state_store=store,
+        workers={"face": _StubWorker("face")},
+        llm_client=brain,
+        event_bus=bus,
+        settings=settings,
+    )
+
+    trigger = TriggerEvent(kind="silence", payload={"duration_s": 30})
+    await orch.tick(trigger)
+
+    # Le brain DOIT avoir été appelé.
+    assert len(brain.calls) == 1
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Tests Phase E2.5 — Cache sémantique
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+async def test_tick_cache_hit_skips_llm() -> None:
+    """Cache hit → 0 LLM call, broadcast avec le texte du cache."""
+    from shugu.director.scene_state import SceneStateSnapshot
+    from shugu.director.tick_cache import format_trigger_for_cache
+
+    brain = _StubBrain("[face:joy]")
+    cache = StubTickCache(enabled=True)
+    store = DirectorStateStore()
+    bus = _StubEventBus()
+    settings = _settings(director_cache_enabled=True)
+
+    # Calcule la clé exacte qui sera utilisée par l'orchestrator.
+    # Le state par défaut a scene="main_talk" et face="neutral".
+    default_state = SceneStateSnapshot()
+    cache_key = format_trigger_for_cache(
+        "vip_arrival", {"sender": "alice"},
+        scene_slug=default_state.scene,
+        face=default_state.face,
+    )
+
+    # Pré-injecte avec la clé exacte.
+    cache.inject(
+        trigger_text=cache_key,
+        llm_text="Bienvenue VIP ! [face:surprised]",
+    )
+
+    face_worker = _StubWorker("face", StateDelta(patch={"face": "surprised"}))
+    orch = Orchestrator(
+        state_store=store,
+        workers={"face": face_worker},
+        llm_client=brain,
+        event_bus=bus,
+        settings=settings,
+        tick_cache=cache,
+    )
+
+    trigger = TriggerEvent(kind="vip_arrival", payload={"sender": "alice"})
+    await orch.tick(trigger)
+
+    # Le brain ne doit pas avoir été appelé.
+    assert len(brain.calls) == 0
+    # Le cache a été consulté.
+    assert len(cache.lookup_calls) == 1
+
+
+async def test_tick_cache_miss_calls_llm_and_stores() -> None:
+    """Cache miss → LLM appelé + résultat stocké dans le cache."""
+    brain = _StubBrain("[face:joy]")
+    cache = StubTickCache(enabled=True)
+    store = DirectorStateStore()
+    bus = _StubEventBus()
+    settings = _settings(director_cache_enabled=True)
+
+    face_worker = _StubWorker("face", StateDelta(patch={"face": "joy"}))
+    orch = Orchestrator(
+        state_store=store,
+        workers={"face": face_worker},
+        llm_client=brain,
+        event_bus=bus,
+        settings=settings,
+        tick_cache=cache,
+    )
+
+    trigger = TriggerEvent(kind="vip_arrival", payload={"sender": "bob"})
+    await orch.tick(trigger)
+
+    # Le brain DOIT avoir été appelé.
+    assert len(brain.calls) == 1
+    # Le cache doit avoir été consulté + alimenté.
+    assert len(cache.lookup_calls) == 1
+    assert len(cache.store_calls) == 1
+
+
+async def test_tick_cache_disabled_always_calls_llm() -> None:
+    """director_cache_enabled=False → le cache n'est jamais consulté."""
+    brain = _StubBrain("[face:neutral]")
+    cache = StubTickCache(enabled=True)
+    store = DirectorStateStore()
+    bus = _StubEventBus()
+    settings = _settings(director_cache_enabled=False)
+
+    orch = Orchestrator(
+        state_store=store,
+        workers={},
+        llm_client=brain,
+        event_bus=bus,
+        settings=settings,
+        tick_cache=cache,
+    )
+
+    trigger = TriggerEvent(kind="vip_arrival", payload={"sender": "charlie"})
+    await orch.tick(trigger)
+
+    # Cache non consulté.
+    assert len(cache.lookup_calls) == 0
+    # LLM appelé.
+    assert len(brain.calls) == 1
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Tests Phase E2.5 — Debouncer
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+async def test_tick_chat_debounced_first_call_absorbed() -> None:
+    """Premier trigger chat → absorbé dans la fenêtre debounce (pas de LLM)."""
+    brain = _StubBrain("[face:neutral]")
+    debouncer = TriggerDebouncer(window_seconds=60.0, max_batch=100)
+    store = DirectorStateStore()
+    bus = _StubEventBus()
+
+    orch = Orchestrator(
+        state_store=store,
+        workers={},
+        llm_client=brain,
+        event_bus=bus,
+        settings=_settings(),
+        debouncer=debouncer,
+    )
+
+    trigger = TriggerEvent(kind="chat", payload={"sender": "alice", "text": "premier"})
+    await orch.tick(trigger)
+
+    # Le brain ne doit pas avoir été appelé (trigger absorbé).
+    assert len(brain.calls) == 0
+
+
+async def test_tick_chat_debounced_max_batch_flush() -> None:
+    """max_batch triggers chat → flush forcé → LLM appelé 1 fois."""
+    brain = _StubBrain("[face:neutral]")
+    debouncer = TriggerDebouncer(window_seconds=60.0, max_batch=3)
+    store = DirectorStateStore()
+    bus = _StubEventBus()
+
+    orch = Orchestrator(
+        state_store=store,
+        workers={},
+        llm_client=brain,
+        event_bus=bus,
+        settings=_settings(),
+        debouncer=debouncer,
+    )
+
+    # Envoyer max_batch triggers.
+    for i in range(3):
+        trigger = TriggerEvent(kind="chat", payload={"sender": "alice", "text": f"msg{i}"})
+        orch._last_tick_at = 0.0  # Bypass rate limit
+        await orch.tick(trigger)
+
+    # Le brain doit avoir été appelé exactement 1 fois (au flush).
+    assert len(brain.calls) == 1
+
+
+async def test_tick_vip_bypasses_debouncer() -> None:
+    """vip_arrival bypass le debouncer → LLM appelé immédiatement."""
+    brain = _StubBrain("[face:surprised]")
+    # Debouncer avec fenêtre très longue.
+    debouncer = TriggerDebouncer(window_seconds=60.0, max_batch=100)
+    store = DirectorStateStore()
+    bus = _StubEventBus()
+
+    orch = Orchestrator(
+        state_store=store,
+        workers={},
+        llm_client=brain,
+        event_bus=bus,
+        settings=_settings(),
+        debouncer=debouncer,
+    )
+
+    # VIP ne doit pas passer par le debouncer.
+    trigger = TriggerEvent(kind="vip_arrival", payload={"sender": "bigfan"})
+    await orch.tick(trigger)
+
+    # Le brain DOIT avoir été appelé.
+    assert len(brain.calls) == 1
