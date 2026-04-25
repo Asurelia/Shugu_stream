@@ -132,6 +132,27 @@ class Settings(BaseSettings):
             "Director Embodied Shugu."
         ),
     )
+    # Mémoire PR 3 — ExtractionWorker câble les épisodes vers les facts.
+    # fact_extractor_enabled=True active la chaîne complète mémoire vivante
+    # par défaut (épisode → fact → cosine recall).
+    # fact_extractor_llm_fallback_enabled=False : le LLM est coûteux et lent ;
+    # la regex seule suffit pour le MVP. Opt-in via env FACT_EXTRACTOR_LLM_FALLBACK_ENABLED=true.
+    fact_extractor_enabled: bool = Field(
+        default=True,
+        description=(
+            "Active l'extraction automatique de facts depuis les épisodes (PR 3 mémoire). "
+            "Si False, l'ExtractionWorker ne démarre pas (no-op silencieux)."
+        ),
+    )
+    fact_extractor_llm_fallback_enabled: bool = Field(
+        default=False,
+        description=(
+            "Active le fallback LLM dans FactExtractor (lent, coûteux). "
+            "Defaults False — la regex seule suffit pour le MVP. "
+            "Opt-in via env FACT_EXTRACTOR_LLM_FALLBACK_ENABLED=true."
+        ),
+    )
+
     memory_embed_dim: int = 1024
     # Phase 2.1 : modèle d'embedding par défaut. intfloat/multilingual-e5-large
     # = 1024 dim (matche memory_embed_dim), ~100 langues dont FR/EN, 512 tokens max.

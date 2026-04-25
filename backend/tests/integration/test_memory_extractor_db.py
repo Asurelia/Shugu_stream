@@ -13,13 +13,18 @@ Couvre :
     `source="extraction_regex"`
   - LLM stub hit (via `SupportsFactExtraction`) -> meme pipeline -> item
     stocke avec `source="extraction_llm"`
+
+Note M2 : La fixture `session_factory` utilise session_scope-like avec sessionmaker
+test-spécifique au lieu de partager une session globale. Cela valide le contrat
+prod : chaque call à agent.store()/agent.recall() reçoit sa propre AsyncSession,
+ce qui valide la lisibilité cross-session.
 """
 from __future__ import annotations
 
 import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from typing import AsyncIterator
+from typing import AsyncIterator, Callable
 
 import pytest
 import pytest_asyncio
@@ -39,28 +44,40 @@ def _dsn() -> str | None:
 
 
 @pytest_asyncio.fixture
-async def db_session() -> AsyncIterator[AsyncSession]:
-    """Session async sur DB reelle, rollback par test."""
+async def session_factory() -> AsyncIterator[Callable]:
+    """Factory de session transactionnelles pour tests — chaque appel crée une nouvelle session.
+
+    Au lieu de partager une seule AsyncSession partagée (pattern ancien M2),
+    on utilise une vraie session_scope-like qui crée une session fraîche à
+    chaque appel et la commite/rollback automatiquement. Cela valide le contrat
+    prod : MemoryAgent + workers ont chacun leur propre session.
+
+    Chaque appel à la factory:
+    1. Ouvre une nouvelle AsyncSession via SessionLocal
+    2. Execute la logique utilisateur
+    3. Commite ou rollback selon succès/exception
+    """
     dsn = _dsn()
     if not dsn:
         pytest.skip("pas de TEST_DATABASE_URL ni DATABASE_URL — test DB skip")
+
     engine = create_async_engine(dsn, pool_pre_ping=True)
     SessionLocal = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
-    async with SessionLocal() as session:
-        trans = await session.begin()
-        try:
-            yield session
-        finally:
-            await trans.rollback()
-    await engine.dispose()
 
-
-def _mk_session_factory(session: AsyncSession):
-    """Yield la meme session sans rollback interne (lecture intra-test)."""
     @asynccontextmanager
-    async def factory():
-        yield session
-    return factory
+    async def scoped_session() -> AsyncIterator[AsyncSession]:
+        async with SessionLocal() as session:
+            try:
+                yield session
+                await session.commit()
+            except Exception:
+                await session.rollback()
+                raise
+
+    try:
+        yield scoped_session
+    finally:
+        await engine.dispose()
 
 
 class _StubLlmExtractor:
@@ -84,10 +101,14 @@ class _StubLlmExtractor:
 
 
 async def test_regex_extracted_fact_roundtrips_through_memory_agent(
-    db_session: AsyncSession,
+    session_factory: Callable,
 ) -> None:
-    """Extract regex -> store -> recall : item doit ressortir avec source=extraction_regex."""
-    agent = MemoryAgent(session_factory=_mk_session_factory(db_session))
+    """Extract regex -> store -> recall : item doit ressortir avec source=extraction_regex.
+
+    Utilise session_factory (session_scope-like) : chaque agent.store() et agent.recall()
+    reçoit sa propre AsyncSession, validant la lisibilité cross-session.
+    """
+    agent = MemoryAgent(session_factory=session_factory)
     extractor = FactExtractor(regex_extractor=RegexFactExtractor())
 
     items = await extractor.extract("I'm Alice", subject="visitor:int-test-regex")
@@ -108,10 +129,14 @@ async def test_regex_extracted_fact_roundtrips_through_memory_agent(
 
 
 async def test_llm_fallback_extracted_fact_roundtrips_through_memory_agent(
-    db_session: AsyncSession,
+    session_factory: Callable,
 ) -> None:
-    """Stub LLM via `SupportsFactExtraction` -> pipeline fallback -> store -> recall."""
-    agent = MemoryAgent(session_factory=_mk_session_factory(db_session))
+    """Stub LLM via `SupportsFactExtraction` -> pipeline fallback -> store -> recall.
+
+    Utilise session_factory (session_scope-like) : chaque appel agent.store()/recall()
+    reçoit sa propre AsyncSession, validant la lisibilité cross-session en prod.
+    """
+    agent = MemoryAgent(session_factory=session_factory)
     extractor = FactExtractor(
         regex_extractor=RegexFactExtractor(),
         llm_extractor=_StubLlmExtractor(item_text="occupation: civil engineer"),

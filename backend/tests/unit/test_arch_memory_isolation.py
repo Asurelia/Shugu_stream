@@ -156,6 +156,14 @@ SINGLE_WRITER_ORM_CLASSES = {
         },
         "reason": "Single-writer: MemoryAgent est responsable de tous INSERT/UPDATE/DELETE sur episodes.",
     },
+    "MemoryFact": {
+        "allowed_modules": {
+            "shugu/memory/agent.py",
+            "shugu/memory/models.py",
+            "shugu/memory/maintenance.py",
+        },
+        "reason": "Single-writer: seul MemoryAgent insère les facts via store(). maintenance.py est invoqué exclusivement via MemoryAgent.maintenance().",
+    },
 }
 
 
