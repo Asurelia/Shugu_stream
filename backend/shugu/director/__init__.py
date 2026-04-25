@@ -30,6 +30,7 @@ from __future__ import annotations
 from .scene_state import SceneStateSnapshot
 from .state_store import DirectorStateStore, get_director_state_store
 from .triggers import TriggerBus, TriggerEvent, TriggerKind, get_trigger_bus
+from .wiring import publish_chat_trigger, publish_scene_change_trigger
 
 __all__ = [
     "SceneStateSnapshot",
@@ -39,4 +40,6 @@ __all__ = [
     "TriggerEvent",
     "TriggerKind",
     "get_trigger_bus",
+    "publish_chat_trigger",
+    "publish_scene_change_trigger",
 ]

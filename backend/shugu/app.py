@@ -30,6 +30,7 @@ from .core.quota import QuotaTracker
 from .core.registry import init_registry
 from .core.viewer_count import ViewerCounter
 from .db.session import session_scope
+from .director.background import DirectorBackground
 from .memory import MemoryAgent
 from .pipeline.ambient import AmbientConfig, AmbientDaemon
 from .pipeline.body_router import BodyRouter, BodyRouterDeps
@@ -263,11 +264,18 @@ async def lifespan(app: FastAPI):
             stt=stt, hermes_embodied=hermes_embodied, metrics=_metrics,
         ))
 
+    # Director (Phase E1) — background tasks Silence + SceneChangeRelay.
+    # `start()` est un no-op tant que `settings.director_enabled=False`
+    # (défaut), donc aucun impact prod sur les déploiements actuels.
+    director_bg = DirectorBackground(settings=settings, event_bus=event_bus)
+    director_bg.start()
+
     log.info("shugu.ready", host=settings.shugu_host, port=settings.shugu_port)
     try:
         yield
     finally:
         log.info("shugu.shutdown")
+        await director_bg.stop()
         await viewer_counter.stop()
         await prep_worker.stop()
         await picker.stop()

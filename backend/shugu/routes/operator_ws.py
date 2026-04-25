@@ -22,6 +22,7 @@ from ..config import Settings
 from ..core.errors import AuthError
 from ..core.identity import OperatorIdentity, hash_ip
 from ..core.protocols import EventBus, ModerationLayer
+from ..director.wiring import publish_chat_trigger
 from ..pipeline.queue import QueuedMessage, RedisQueue, new_msg_id
 
 router = APIRouter()
@@ -208,6 +209,16 @@ async def _handle_operator_message(
             "nonce": nonce,
             "reason": "backpressure",
         }))
+        return
+
+    # Director trigger (Phase E1) — publie `chat` (+ `vip_arrival` si VIP)
+    # après l'enqueue réussi. No-op si `director_enabled` OFF. L'operator a
+    # un username authentifié, donc la whitelist VIP matche proprement.
+    await publish_chat_trigger(
+        settings=_deps.settings,
+        sender=identity.username,
+        text=text,
+    )
 
 
 async def _send_error(ws: WebSocket, *, nonce, reason: str) -> None:
