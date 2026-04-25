@@ -1,0 +1,19 @@
+{
+  "slug": "outro",
+  "label": "Outro",
+  "background_color": "#16213e",
+  "camera": {
+    "position": [
+      0,
+      1.2,
+      1.4
+    ],
+    "look_at": [
+      0,
+      1.1,
+      0
+    ],
+    "fov": 22
+  },
+  "ambient_light": 0.3
+}

@@ -1,0 +1,19 @@
+{
+  "slug": "intro",
+  "label": "Intro",
+  "background_color": "#0d1117",
+  "camera": {
+    "position": [
+      0,
+      1.5,
+      1.5
+    ],
+    "look_at": [
+      0,
+      1.2,
+      0
+    ],
+    "fov": 25
+  },
+  "ambient_light": 0.5
+}

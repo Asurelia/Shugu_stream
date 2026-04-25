@@ -1,0 +1,6 @@
+{
+  "type": "rain",
+  "color": "#FF1493",
+  "density": 40,
+  "duration_ms": 4000
+}

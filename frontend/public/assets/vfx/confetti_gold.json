@@ -1,0 +1,6 @@
+{
+  "type": "particle_burst",
+  "color": "#FFD700",
+  "density": 80,
+  "duration_ms": 3000
+}
