@@ -36,7 +36,7 @@ import asyncio
 import logging
 import time
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Callable, Optional
 
 from ..config import Settings
 from .llm_client import DirectorLLMClient, LLMClientError
@@ -87,7 +87,7 @@ class Orchestrator:
 
         self._last_tick_at: float = 0.0   # monotonic timestamp du dernier tick
         self._tick_lock: asyncio.Lock = asyncio.Lock()
-        self._dispose: Optional[callable] = None  # unsubscribe handle du TriggerBus
+        self._dispose: Optional[Callable[[], None]] = None  # unsubscribe handle du TriggerBus
         self._current_task: Optional[asyncio.Task] = None
 
     async def tick(self, trigger: TriggerEvent) -> None:

@@ -179,7 +179,7 @@ async def test_tick_happy_path_workers_called_state_updated() -> None:
         if p.get("payload", {}).get("type") == "scene.tick"
     ]
     assert len(tick_payloads) == 1
-    assert "joy" in tick_payloads[0]["tts_text"] or tick_payloads[0]["tts_text"] == "Super content de te voir !"
+    assert tick_payloads[0]["tts_text"] == "Super content de te voir !"
 
     await http_client.aclose()
 
