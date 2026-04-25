@@ -218,6 +218,24 @@ async def test_vfx_worker_invalid_slug_no_publish() -> None:
     assert delta == StateDelta(patch={})
 
 
+async def test_vfx_worker_dedup_active_vfx_no_duplicates() -> None:
+    """Applique le même VFX 2 fois → aucun doublon (M3 dedup)."""
+    bus = InProcessEventBus()
+    state = _make_state(vfx=["confetti_gold"], active_vfx=["confetti_gold"])
+    worker = VfxWorker(event_bus=bus)
+
+    task, received = await _subscribe_and_collect(bus, expected=1)
+    delta = await worker.apply("confetti_gold", state)
+    await asyncio.wait_for(task, timeout=0.5)
+
+    # Si le slug est déjà actif, le delta doit le garder en l'état (pas de doublon).
+    assert delta.patch == {"active_vfx": ["confetti_gold"]}
+    # Le payload est quand même publié.
+    assert len(received) == 1
+    payload = _assert_envelope(received[0], kind="vfx")
+    assert payload["id"] == "confetti_gold"
+
+
 # ───────────────────────────────────────────────────────────────────────
 # AnimWorker
 # ───────────────────────────────────────────────────────────────────────
@@ -466,3 +484,19 @@ async def test_envelope_uses_director_sentinel_scene_id() -> None:
     env = received[0]
     assert env["scene_id"] == DIRECTOR_SCENE_ID_SENTINEL
     assert env["origin"] == "director"
+
+
+async def test_scene_apply_payload_includes_version_field() -> None:
+    """M2 — tous les payloads scene.apply embarquent un champ version=1."""
+    bus = InProcessEventBus()
+    state = _make_state(outfits=["default"])
+    worker = OutfitWorker(event_bus=bus)
+
+    task, received = await _subscribe_and_collect(bus, expected=1)
+    await worker.apply("default", state)
+    await asyncio.wait_for(task, timeout=0.5)
+
+    assert len(received) == 1
+    payload = received[0]["payload"]
+    assert payload.get("type") == "scene.apply"
+    assert payload.get("version") == 1

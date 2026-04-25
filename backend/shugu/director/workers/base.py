@@ -105,6 +105,10 @@ class Worker(ABC):
         `wiring.publish_chat_trigger`) : un broadcast raté ne doit JAMAIS
         casser le pipeline orchestrator.
         """
+        # Ajoute versioning au payload pour les évolutions rétro-compatibles (Phase E3+).
+        if payload.get("type") == "scene.apply" and "version" not in payload:
+            payload["version"] = 1
+
         envelope = {
             "scene_id": DIRECTOR_SCENE_ID_SENTINEL,
             "origin": "director",
