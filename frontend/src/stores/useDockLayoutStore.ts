@@ -27,21 +27,18 @@
 import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
 
+import type { DockablePanelKey } from "@/features/scene-editor/dnd-context";
+
 /* ─────────────────────────── TYPES ─────────────────────────── */
 
 export type DockId = "viewport" | "right" | "bottom";
 
-export type PanelKey =
-  | "scene"
-  | "live"
-  | "inspector"
-  | "effects"
-  | "stream"
-  | "perf"
-  | "assets"
-  | "timeline"
-  | "patterns"
-  | "mixer";
+/**
+ * Re-export pour les consumers historiques de ce store. La source de vérité
+ * pour le set de panels est `dnd-context.DockablePanelKey` — ce store ne
+ * gère QUE les panels qui peuvent vivre dans un dock (donc pas `hierarchy`).
+ */
+export type PanelKey = DockablePanelKey;
 
 export type DockLayout = Record<DockId, { tabs: PanelKey[]; active: PanelKey }>;
 
