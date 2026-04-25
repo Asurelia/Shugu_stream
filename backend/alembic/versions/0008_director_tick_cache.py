@@ -47,6 +47,7 @@ from typing import Sequence, Union
 
 import sqlalchemy as sa
 from pgvector.sqlalchemy import Vector
+from sqlalchemy.dialects.postgresql import JSONB
 
 from alembic import op
 
@@ -70,7 +71,7 @@ def upgrade() -> None:
         sa.Column("llm_text", sa.Text(), nullable=False),
         sa.Column(
             "tags",
-            sa.dialects.postgresql.JSONB(),
+            JSONB(),
             nullable=True,
             server_default=sa.text("'[]'::jsonb"),
         ),
