@@ -233,7 +233,12 @@ test.describe("Scene Editor · Phase G pop-out multi-écran", () => {
 
       // Depuis la popup on publie un message forgé : senderOrigin différent
       // de window.location.origin (ici "http://localhost:3005" en dev).
+      // On lit le nonce depuis la URL de la popup pour que le message passe
+      // le form-check (sinon il serait rejeté en isValidMessage avant
+      // d'atteindre le check origin → pas de warn "mismatched origin").
       await popup.evaluate(() => {
+        const params = new URLSearchParams(window.location.search);
+        const nonce = params.get("nonce") ?? "";
         const bc = new BroadcastChannel("scene-editor");
         bc.postMessage({
           type: "state-sync",
@@ -241,6 +246,7 @@ test.describe("Scene Editor · Phase G pop-out multi-écran", () => {
           panelKey: "scene",
           ts: Date.now(),
           senderOrigin: "http://evil.attacker.example",
+          senderNonce: nonce,
           payload: { tool: "rotate" },
         });
         bc.close();
@@ -255,6 +261,58 @@ test.describe("Scene Editor · Phase G pop-out multi-écran", () => {
       ).toHaveClass(/active/);
       // Et au moins un warning "mismatched origin" a été logué côté parent.
       const matched = warnings.some((w) => w.includes("mismatched origin"));
+      expect(matched).toBe(true);
+    } finally {
+      await context.close();
+    }
+  });
+
+  test("scenario 5 (security H2): cross-tab forgery sans nonce est rejeté", async ({
+    browser,
+  }) => {
+    // Simule un onglet "frère" same-origin qui ne possède PAS le nonce de
+    // notre session (ex: XSS sur autre route, autre Scene Editor ouvert
+    // dans un autre tab). Il publie un message avec un senderOrigin valide
+    // (forcément, par spec same-origin de BroadcastChannel) mais un nonce
+    // inconnu. Doit être droppé + warn "mismatched nonce" côté parent.
+    const context = await browser.newContext();
+    try {
+      await stubAuth(context);
+      const page = await context.newPage();
+      const warnings: string[] = [];
+      page.on("console", (msg) => {
+        if (msg.type() === "warning") warnings.push(msg.text());
+      });
+      await openEditor(page);
+
+      // On pop out pour mettre en place les subscribers parent (nonce
+      // installé en sessionStorage du parent).
+      const popup = await popoutViewportPanel(context, page);
+
+      // Depuis la popup on publie un message forgé avec un senderOrigin
+      // valide ET un nonce **inconnu** (cas du tab frère). On bypass le
+      // nonce de la popup (qui serait valide) en hardcodant un autre.
+      await popup.evaluate(() => {
+        const bc = new BroadcastChannel("scene-editor");
+        bc.postMessage({
+          type: "state-sync",
+          origin: "popout",
+          panelKey: "scene",
+          ts: Date.now(),
+          senderOrigin: window.location.origin,
+          senderNonce: "00000000-0000-0000-0000-impostor-nonce",
+          payload: { tool: "rotate" },
+        });
+        bc.close();
+      });
+
+      await page.waitForTimeout(300);
+      // Le parent ne doit pas avoir muté.
+      await expect(
+        page.locator('.ide-toolbar .ide-tb-btn[title^="Move"]'),
+      ).toHaveClass(/active/);
+      // Le warn dédié au mismatch nonce doit avoir été logué.
+      const matched = warnings.some((w) => w.includes("mismatched nonce"));
       expect(matched).toBe(true);
     } finally {
       await context.close();

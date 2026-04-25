@@ -33,7 +33,9 @@ import {
 } from "@/stores/useSceneEditorStore";
 import {
   flushPopout,
+  POPOUT_NONCE_QUERY_PARAM,
   publishPopout,
+  setPopoutNonce,
   subscribePopout,
   type PopoutMessage,
 } from "@/lib/editorPopout";
@@ -130,10 +132,32 @@ function renderPanelStandalone(
 export function SceneEditorPopoutApp() {
   const router = useRouter();
   const rawPanel = router.query.panel;
+  const rawNonce = router.query[POPOUT_NONCE_QUERY_PARAM];
   const panelKey = useMemo<KnownPanel | null>(() => {
     const v = Array.isArray(rawPanel) ? rawPanel[0] : rawPanel;
     return isKnownPanel(v) ? v : null;
   }, [rawPanel]);
+  const nonce = useMemo<string | null>(() => {
+    const v = Array.isArray(rawNonce) ? rawNonce[0] : rawNonce;
+    return typeof v === "string" && v.length > 0 ? v : null;
+  }, [rawNonce]);
+
+  // ─── Install le nonce de session AVANT toute opération publish/subscribe.
+  // Indispensable côté popout : les subscribers parent rejettent tout
+  // message dont senderNonce ne matche pas. On installe via `useMemo`
+  // synchronisé sur `nonce` — ça garantit que dès que router.query devient
+  // populé (1er render after `router.isReady`), le nonce est posé module-
+  // level avant que les useEffect ci-dessous ne s'exécutent (les effects
+  // tournent toujours APRÈS render, donc après ce useMemo).
+  useMemo(() => {
+    if (nonce !== null) setPopoutNonce(nonce);
+    // Pas de retour : useMemo est utilisé ici comme "synchronous side
+    // effect" — c'est techniquement un anti-pattern React, mais c'est
+    // idempotent (setPopoutNonce écrit la même valeur module-scoped à
+    // chaque appel) et ça nous donne la garantie d'ordering qu'un
+    // useEffect ne donnerait pas.
+    return undefined;
+  }, [nonce]);
 
   // Sélecteurs stables : on lit les 4 champs synced avec le parent.
   const selectedId = useSceneEditorStore((s) => s.selectedId);
@@ -144,8 +168,10 @@ export function SceneEditorPopoutApp() {
   const applyingRemoteRef = useRef(false);
 
   // ─── Subscribe : reçoit les state-sync du parent ─────────────────────
+  // On gate sur `nonce` aussi : sans nonce, les messages du parent seraient
+  // tous droppés par notre subscriber — autant ne pas s'abonner.
   useEffect(() => {
-    if (!panelKey) return;
+    if (!panelKey || nonce === null) return;
     const unsub = subscribePopout(panelKey, (msg: PopoutMessage) => {
       // On ignore les messages venant de nous-même (un popout ne doit pas
       // se re-traiter). Seuls les messages `origin: 'parent'` nous
@@ -189,11 +215,14 @@ export function SceneEditorPopoutApp() {
       }
     });
     return unsub;
-  }, [panelKey]);
+  }, [panelKey, nonce]);
 
   // ─── Signale popout-ready au mount + popout-closed au unload ────────
+  // Gate aussi sur `nonce` : envoyer popout-ready avant que le nonce ne
+  // soit installé serait un message dont senderNonce serait soit absent
+  // soit auto-généré (et donc différent du nonce parent) → drop côté parent.
   useEffect(() => {
-    if (!panelKey) return;
+    if (!panelKey || nonce === null) return;
     // Au mount : on annonce au parent qu'on est prêt à recevoir l'état initial.
     publishPopout({
       type: "popout-ready",
@@ -214,11 +243,11 @@ export function SceneEditorPopoutApp() {
     return () => {
       window.removeEventListener("beforeunload", onBeforeUnload);
     };
-  }, [panelKey]);
+  }, [panelKey, nonce]);
 
   // ─── Republie les mutations locales vers le parent ──────────────────
   useEffect(() => {
-    if (!panelKey) return;
+    if (!panelKey || nonce === null) return;
     const unsub = useSceneEditorStore.subscribe((state, prev) => {
       if (applyingRemoteRef.current) return;
       const changed =
@@ -240,7 +269,7 @@ export function SceneEditorPopoutApp() {
       });
     });
     return unsub;
-  }, [panelKey]);
+  }, [panelKey, nonce]);
 
   // ─── Cleanup global : flush le dernier debounce avant unmount ───────
   useEffect(() => {

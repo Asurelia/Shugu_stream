@@ -9,12 +9,13 @@
  * Coverage :
  *  - publishPopout : debounce `state-sync` (collapse N appels → 1 message)
  *  - publishPopout : signaux ponctuels envoyés immédiatement (pas de debounce)
- *  - publishPopout : injection automatique de `ts` et `senderOrigin`
+ *  - publishPopout : injection automatique de `ts`, `senderOrigin`, `senderNonce`
  *  - subscribePopout : dispatch seulement si panelKey match
- *  - subscribePopout : rejet si senderOrigin mismatch (sécurité)
+ *  - subscribePopout : rejet si senderOrigin mismatch (sécurité tab-scope)
+ *  - subscribePopout : rejet si senderNonce mismatch (sécurité cross-tab — H2)
  *  - subscribePopout : rejet si forme invalide (missing fields)
  *  - subscribePopout : cleanup retire le listener (pas de double-dispatch)
- *  - openPanelWindow : appelle window.open avec l'URL + features attendues
+ *  - openPanelWindow : appelle window.open avec l'URL + nonce + features attendus
  *  - openPanelWindow : retourne null si BroadcastChannel indisponible
  *  - flushPopout : flush le dernier state-sync queued
  */
@@ -99,6 +100,14 @@ class MockBroadcastChannel {
 
 /* ────────── TEST FIXTURE ────────── */
 
+/**
+ * Nonce fixture déterministe utilisé par tous les tests. On le pose côté
+ * helper via `setPopoutNonce` AVANT toute opération publish/subscribe
+ * (sinon le helper lazy-init un nonce aléatoire qui ne matchera pas avec
+ * nos messages forgés).
+ */
+const TEST_NONCE = "test-nonce-fixture-uuid-0000";
+
 beforeEach(() => {
   // Swap global BroadcastChannel pour notre mock. jsdom en ship un stub no-op
   // via vitest.setup.ts — on l'écrase pour obtenir un vrai fanout.
@@ -111,6 +120,16 @@ beforeEach(() => {
       value: { ...window.location, origin: "http://localhost:3005" },
       writable: true,
     });
+    // Clean sessionStorage pour que chaque test reparte sur un nonce frais
+    // (pas de fuite via la clé POPOUT_NONCE_STORAGE_KEY persistée par un
+    // test précédent).
+    if (window.sessionStorage) {
+      try {
+        window.sessionStorage.clear();
+      } catch {
+        /* certains envs jsdom restreignent l'accès */
+      }
+    }
   }
   vi.useFakeTimers();
 });
@@ -122,10 +141,14 @@ afterEach(() => {
 
 // Import APRÈS le setup pour que le helper voie le mock dès son init.
 // On re-importe fraîchement à chaque test via vi.resetModules() pour purger
-// le singleton interne.
+// le singleton interne. On installe le nonce de test juste après l'import
+// pour figer la valeur — sinon le lazy-init du helper génèrerait un UUID
+// random qui ne matcherait pas nos fixtures.
 async function loadHelper() {
   vi.resetModules();
-  return await import("../editorPopout");
+  const helper = await import("../editorPopout");
+  helper.setPopoutNonce(TEST_NONCE);
+  return helper;
 }
 
 /* ────────── TESTS ────────── */
@@ -167,11 +190,14 @@ describe("editorPopout — publishPopout debounce", () => {
       type: string;
       payload: { foo: number };
       senderOrigin: string;
+      senderNonce: string;
     };
     expect(msg.type).toBe("state-sync");
     // Seul le dernier payload survit — c'est tout l'intérêt du debounce.
     expect(msg.payload).toEqual({ foo: 3 });
     expect(msg.senderOrigin).toBe("http://localhost:3005");
+    // Le nonce est injecté automatiquement par publishPopout.
+    expect(msg.senderNonce).toBe(TEST_NONCE);
   });
 
   it("envoie immédiatement les signaux ponctuels (popout-ready, etc.)", async () => {
@@ -236,6 +262,7 @@ describe("editorPopout — subscribePopout dispatch", () => {
       panelKey: "inspector",
       ts: Date.now(),
       senderOrigin: "http://localhost:3005",
+      senderNonce: TEST_NONCE,
       payload: { hello: "world" },
     });
 
@@ -255,6 +282,7 @@ describe("editorPopout — subscribePopout dispatch", () => {
       panelKey: "scene", // ≠ inspector
       ts: Date.now(),
       senderOrigin: "http://localhost:3005",
+      senderNonce: TEST_NONCE,
       payload: { x: 1 },
     });
 
@@ -275,6 +303,7 @@ describe("editorPopout — subscribePopout dispatch", () => {
       panelKey: "inspector",
       ts: Date.now(),
       senderOrigin: "http://evil.attacker.example", // forgerie
+      senderNonce: TEST_NONCE,
       payload: { evil: true },
     });
 
@@ -283,6 +312,37 @@ describe("editorPopout — subscribePopout dispatch", () => {
     expect(warnSpy).toHaveBeenCalled();
     const warnCall = warnSpy.mock.calls[0];
     expect(String(warnCall[0])).toContain("mismatched origin");
+    warnSpy.mockRestore();
+  });
+
+  it("rejette un message dont senderNonce ne matche pas le nonce courant (H2 cross-tab forgery)", async () => {
+    // Scénario : un onglet "frère" same-origin (ex: XSS sur autre route)
+    // tente de publier un message avec un senderOrigin valide (puisque
+    // forcément same-origin par spec BroadcastChannel) mais sans connaître
+    // le nonce de notre tab. Doit être droppé + warn.
+    const helper = await loadHelper();
+    const received: unknown[] = [];
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    helper.subscribePopout("inspector", (msg) => received.push(msg));
+
+    const sender = new MockBroadcastChannel("scene-editor");
+    sender.postMessage({
+      type: "state-sync",
+      origin: "popout",
+      panelKey: "inspector",
+      ts: Date.now(),
+      senderOrigin: "http://localhost:3005", // origin valide
+      senderNonce: "wrong-nonce-from-other-tab", // mais nonce inconnu
+      payload: { evil: true },
+    });
+
+    expect(received).toHaveLength(0);
+    // Warn dédié — on vérifie qu'on a bien le message "mismatched nonce"
+    // (différent du "mismatched origin" du test précédent).
+    expect(warnSpy).toHaveBeenCalled();
+    const warnTexts = warnSpy.mock.calls.map((c) => String(c[0]));
+    expect(warnTexts.some((t) => t.includes("mismatched nonce"))).toBe(true);
     warnSpy.mockRestore();
   });
 
@@ -298,9 +358,21 @@ describe("editorPopout — subscribePopout dispatch", () => {
     sender.postMessage({ type: "state-sync" }); // manque origin + panelKey etc.
     sender.postMessage(null);
     sender.postMessage(42);
+    // Cas spécifique H2 : un message presque-bien-formé mais sans
+    // senderNonce → considéré malformé par isValidMessage (drop silencieux).
+    sender.postMessage({
+      type: "state-sync",
+      origin: "popout",
+      panelKey: "inspector",
+      ts: Date.now(),
+      senderOrigin: "http://localhost:3005",
+      // senderNonce manquant — invariant violé
+      payload: { a: 1 },
+    });
 
     expect(received).toHaveLength(0);
-    // Malformé = drop silencieux (PAS de warn, seul senderOrigin mismatch warn).
+    // Malformé = drop silencieux (PAS de warn ; les warn sont réservés
+    // aux mismatch origin/nonce, qui supposent un message bien-formé).
     expect(warnSpy).not.toHaveBeenCalled();
     warnSpy.mockRestore();
   });
@@ -319,6 +391,7 @@ describe("editorPopout — subscribePopout dispatch", () => {
       panelKey: "inspector",
       ts: Date.now(),
       senderOrigin: "http://localhost:3005",
+      senderNonce: TEST_NONCE,
       payload: { a: 1 },
     });
     expect(received).toHaveLength(1);
@@ -331,6 +404,7 @@ describe("editorPopout — subscribePopout dispatch", () => {
       panelKey: "inspector",
       ts: Date.now(),
       senderOrigin: "http://localhost:3005",
+      senderNonce: TEST_NONCE,
       payload: { a: 2 },
     });
     // Toujours 1 — le unsubscribe a bien remove le listener.
@@ -339,7 +413,7 @@ describe("editorPopout — subscribePopout dispatch", () => {
 });
 
 describe("editorPopout — openPanelWindow", () => {
-  it("appelle window.open avec l'URL relative et un nom par panel", async () => {
+  it("appelle window.open avec l'URL relative + nonce et un nom par panel", async () => {
     const helper = await loadHelper();
     const openSpy = vi
       .spyOn(window, "open")
@@ -349,7 +423,13 @@ describe("editorPopout — openPanelWindow", () => {
     expect(win).not.toBeNull();
     expect(openSpy).toHaveBeenCalledTimes(1);
     const [url, name, features] = openSpy.mock.calls[0];
-    expect(url).toBe("/shugu/admin/scene-editor-popout?panel=inspector");
+    // Format attendu : `?panel=inspector&nonce=<TEST_NONCE>`. Le nonce est
+    // url-encoded — comme TEST_NONCE ne contient pas de caractères spéciaux,
+    // l'encodage est identité.
+    expect(url).toBe(
+      `/shugu/admin/scene-editor-popout?panel=inspector&` +
+        `${helper.POPOUT_NONCE_QUERY_PARAM}=${encodeURIComponent(TEST_NONCE)}`,
+    );
     expect(name).toBe("shugu-scene-editor-popout-inspector");
     expect(String(features)).toContain("width=800");
     expect(String(features)).toContain("height=600");
