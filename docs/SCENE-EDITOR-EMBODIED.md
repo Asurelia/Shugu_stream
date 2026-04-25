@@ -306,6 +306,7 @@ Projection : 5-8k appels LLM/jour avec cache + canned + debounce sur un stream d
 7. **VRMA placeholders** : les fichiers `.vrma` dans `public/assets/vrma/` sont des
    fichiers vides. Le viewer aura des erreurs GLTF silencieuses — comportement voulu
    jusqu'à la livraison des vrais assets.
+   VRMA placeholders (0-byte) : les animations sont dispatched mais le viewer-adapter `playAnimation` est un stub no-op (Phase F future). Aucun mouvement 3D visible.
 
 ---
 
