@@ -25,6 +25,14 @@ Phase 2 — état :
 from __future__ import annotations
 
 from .agent import MemoryAgent
+from .episodes import EventType, MemoryEpisode
 from .types import MemoryItem, MemoryKind, RecallQuery
 
-__all__ = ["MemoryAgent", "MemoryItem", "MemoryKind", "RecallQuery"]
+__all__ = [
+    "EventType",
+    "MemoryAgent",
+    "MemoryEpisode",
+    "MemoryItem",
+    "MemoryKind",
+    "RecallQuery",
+]
