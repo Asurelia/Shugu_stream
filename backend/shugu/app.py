@@ -276,11 +276,47 @@ async def lifespan(app: FastAPI):
     director_bg = DirectorBackground(settings=settings, event_bus=event_bus)
     director_bg.start()
 
+    # Director Orchestrator (Phase E2) — LLM Soul + dispatch workers Shell.
+    # Instancié uniquement si director_enabled=True ET anthropic_api_key renseigné.
+    # Le lifespan stocke l'instance sur app.state pour les tests d'intégration.
+    director_orchestrator = None
+    if settings.director_enabled:
+        from .director.llm_client import DirectorLLMClient
+        from .director.orchestrator import Orchestrator
+        from .director.state_store import get_director_state_store
+        from .director.triggers import get_trigger_bus
+
+        director_state_store = get_director_state_store()
+        director_trigger_bus = get_trigger_bus()
+        director_llm_client = DirectorLLMClient(
+            api_key=settings.anthropic_api_key,
+            http=http,
+            model=settings.director_model,
+        )
+        director_orchestrator = Orchestrator(
+            state_store=director_state_store,
+            workers=app.state.director_workers,
+            llm_client=director_llm_client,
+            event_bus=event_bus,
+            settings=settings,
+        )
+        await director_orchestrator.start(director_trigger_bus)
+        app.state.director_orchestrator = director_orchestrator
+        log.info(
+            "director.orchestrator_wired",
+            extra={"model": settings.director_model, "api_key_set": bool(settings.anthropic_api_key)},
+        )
+    else:
+        log.info("director.orchestrator_skipped", extra={"reason": "director_enabled=False"})
+
     log.info("shugu.ready", host=settings.shugu_host, port=settings.shugu_port)
     try:
         yield
     finally:
         log.info("shugu.shutdown")
+        # Orchestrator s'arrête AVANT le background et le bus (il peut encore publier).
+        if director_orchestrator is not None:
+            await director_orchestrator.stop()
         await director_bg.stop()
         await viewer_counter.stop()
         await prep_worker.stop()
