@@ -21,6 +21,8 @@ from shugu.director.brain_provider import DirectorBrainError
 
 def _make_settings(**kwargs) -> Settings:
     return Settings(
+        env="test",
+        ip_hash_salt="test",
         director_enabled=True,
         anthropic_api_key=kwargs.get("anthropic_api_key", "test-key"),
         director_model=kwargs.get("director_model", "claude-haiku-4-5-20251001"),

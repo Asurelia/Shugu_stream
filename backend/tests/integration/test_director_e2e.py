@@ -55,6 +55,8 @@ async def test_director_e2e_vip_arrival_produces_tags_and_state_mutation() -> No
     # Priorité Anthropic, fallback MiniMax.
     if os.getenv("ANTHROPIC_API_KEY"):
         settings = Settings(
+            env="test",
+            ip_hash_salt="test",
             director_enabled=True,
             anthropic_api_key=os.environ["ANTHROPIC_API_KEY"],
             director_model="claude-haiku-4-5-20251001",
@@ -64,6 +66,8 @@ async def test_director_e2e_vip_arrival_produces_tags_and_state_mutation() -> No
         )
     else:
         settings = Settings(
+            env="test",
+            ip_hash_salt="test",
             director_enabled=True,
             minimax_api_key=os.environ["MINIMAX_API_KEY"],
             director_llm_provider="minimax",
