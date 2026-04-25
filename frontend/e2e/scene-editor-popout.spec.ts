@@ -117,11 +117,16 @@ test.describe("Scene Editor · Phase G pop-out multi-écran", () => {
 
       // Attend que le parent reflète — on observe le toolbar button "rotate"
       // qui passe .active quand le store.tool === "rotate".
+      // Budget : <500ms (debounce 50ms + fanout BroadcastChannel ~quasi-
+      // instantané, on observe ~100ms en pratique). Si le test devient
+      // flaky sur Windows CI, déplacer en suite "@perf" plutôt que de
+      // relâcher l'assertion — sinon on perd la capacité à détecter une
+      // régression 4× du chemin parent↔popout.
       await expect(
         page.locator('.ide-toolbar .ide-tb-btn[title^="Rotate"]'),
-      ).toHaveClass(/active/, { timeout: 2000 });
+      ).toHaveClass(/active/, { timeout: 500 });
       const elapsed = Date.now() - startTs;
-      expect(elapsed).toBeLessThan(2000);
+      expect(elapsed).toBeLessThan(500);
     } finally {
       await context.close();
     }
