@@ -34,6 +34,7 @@ from .director.background import DirectorBackground
 from .memory import MemoryAgent
 from .pipeline.ambient import AmbientConfig, AmbientDaemon
 from .pipeline.body_router import BodyRouter, BodyRouterDeps
+from .pipeline.extraction_worker import ExtractionWorker
 from .pipeline.ingestion_worker import IngestionWorker
 from .pipeline.picker import Picker
 from .pipeline.queue import RedisQueue
@@ -243,6 +244,48 @@ async def lifespan(app: FastAPI):
     else:
         log.info("memory.ingestion_worker_disabled", reason="memory_enabled=False")
 
+    # ExtractionWorker — PR 3 Mémoire : subscribe memory.episode_stored et extrait
+    # des facts via FactExtractor (regex-first, LLM-fallback opt-in). Câble la
+    # chaîne complète épisode → fact → cosine recall. Garde-fou double :
+    # no-op si memory_enabled=False OU fact_extractor_enabled=False.
+    extraction_worker: Optional[ExtractionWorker] = None
+    if settings.memory_enabled and settings.fact_extractor_enabled:
+        from .memory.extractors.pipeline import FactExtractor
+        from .memory.extractors.regex import RegexFactExtractor
+
+        # LLM fallback : opt-in via fact_extractor_llm_fallback_enabled=True.
+        # OFF par défaut (coûteux, lent) — la regex seule suffit pour le MVP.
+        llm_extractor = None
+        if settings.fact_extractor_llm_fallback_enabled:
+            from .adapters.brain_memory_extractor import MemoryExtractorBrain
+            from .memory.extractors.llm import LlmFactExtractor
+            llm_extractor = LlmFactExtractor(
+                MemoryExtractorBrain(settings=settings, http=http)
+            )
+
+        fact_extractor = FactExtractor(
+            regex_extractor=RegexFactExtractor(),
+            llm_extractor=llm_extractor,
+        )
+        extraction_worker = ExtractionWorker(
+            event_bus=event_bus,
+            memory=_memory,
+            fact_extractor=fact_extractor,
+            settings=settings,
+        )
+        await extraction_worker.start()
+        log.info(
+            "memory.extraction_worker_wired",
+            topic="memory.episode_stored",
+            llm_fallback=settings.fact_extractor_llm_fallback_enabled,
+        )
+    else:
+        log.info(
+            "memory.extraction_worker_disabled",
+            memory_enabled=settings.memory_enabled,
+            fact_extractor_enabled=settings.fact_extractor_enabled,
+        )
+
     body_router = BodyRouter(BodyRouterDeps(
         queue=queue, event_bus=event_bus, settings=settings, ambient=ambient,
         rate_limiter=_rate_limiter, metrics=_metrics,
@@ -402,6 +445,10 @@ async def lifespan(app: FastAPI):
         # stop() annule la task interne et attend sa complétion.
         if ingestion_worker is not None:
             await ingestion_worker.stop()
+        # ExtractionWorker s'arrête AVANT event_bus.close() — même raison que
+        # l'IngestionWorker (subscription active sur memory.episode_stored).
+        if extraction_worker is not None:
+            await extraction_worker.stop()
         prep_task.cancel()
         picker_task.cancel()
         ambient_task.cancel()
