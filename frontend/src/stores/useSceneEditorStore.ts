@@ -41,6 +41,7 @@ import { create } from "zustand";
 import { temporal } from "zundo";
 import type { TemporalState } from "zundo";
 import { useStore } from "zustand";
+import { produce } from "immer";
 import {
   MOCK_ASSETS,
   MOCK_AUDIO_CHANNELS,
@@ -141,6 +142,31 @@ export interface SceneEditorState {
   /** Toggle lock d'un node (verrouillage édition). */
   toggleNodeLock: (nodeId: string) => void;
 
+  /* ---- Phase F — Inspector deep patch ---- */
+  /**
+   * Met à jour un champ profond de `inspectorById[nodeId]` via un chemin
+   * dot-separated (ex: "transform.pos.0", "transform.pos", "render.opacity").
+   * L'intégration Immer assure que les snapshots zundo voient bien un
+   * changement de référence sur `inspectorById` à chaque appel (sinon
+   * l'historique ne verrait que la première mutation d'une série et ne
+   * re-snapshot plus tant que la ref est identique).
+   *
+   * Les `path` acceptés :
+   *  - "transform.pos"        → value = [x, y, z]
+   *  - "transform.pos.0"      → value = number (index array)
+   *  - "transform.rot"        → value = [x, y, z]
+   *  - "transform.scale"      → value = [x, y, z]
+   *  - "render.opacity"       → value = number
+   *  - "vrm.expression"       → value = string
+   *  - … (tout chemin valide dans `InspectorData`)
+   *
+   * Un path qui pointe sur un segment inexistant est un no-op silencieux
+   * (impossible d'ajouter `camera` à un node qui n'en a pas via ce chemin
+   * pour éviter de corrompre la shape du type). Les consumers doivent
+   * initialiser les sous-sections via `setInspectorData` (Phase H).
+   */
+  updateInspectorField: (nodeId: string, path: string, value: unknown) => void;
+
   /* ---- Phase D — WS collab actions ---- */
   /** Remplace la liste des peers (appelé par `useEditorWebSocket` au `subscribed`). */
   setPeers: (peers: string[]) => void;
@@ -188,6 +214,36 @@ function mapTree(
     return n;
   });
   return changed ? out : nodes;
+}
+
+/**
+ * Pose un value à un chemin dot-separated dans un draft Immer. Renvoie
+ * `true` si l'écriture a eu lieu, `false` si le segment parent est absent
+ * (on n'écrase jamais un objet qui n'existe pas).
+ *
+ * Les segments numériques (`"0"`, `"1"`) sont interprétés comme index
+ * d'array — pratique pour mutter `transform.pos.0` sans réécrire tout le
+ * triplet.
+ */
+function setDeepPath(
+  draft: Record<string, unknown>,
+  path: string,
+  value: unknown,
+): boolean {
+  const segments = path.split(".");
+  if (segments.length === 0) return false;
+  let cursor: unknown = draft;
+  for (let i = 0; i < segments.length - 1; i++) {
+    if (cursor === null || typeof cursor !== "object") return false;
+    const key = segments[i];
+    const next = (cursor as Record<string, unknown>)[key];
+    if (next === undefined) return false;
+    cursor = next;
+  }
+  if (cursor === null || typeof cursor !== "object") return false;
+  const last = segments[segments.length - 1];
+  (cursor as Record<string, unknown>)[last] = value;
+  return true;
 }
 
 /* ─────────────────────────── INITIAL STATE ─────────────────────────── */
@@ -255,6 +311,25 @@ export const useSceneEditorStore = create<SceneEditorState>()(
           ),
         })),
 
+      /* ─── Phase F — Inspector deep patch (Immer) ─── */
+      updateInspectorField: (nodeId, path, value) =>
+        set((state) => {
+          const existing = state.inspectorById[nodeId];
+          if (!existing) return state;
+          const nextEntry = produce(existing, (draft) => {
+            setDeepPath(draft as unknown as Record<string, unknown>, path, value);
+          });
+          // Si rien n'a bougé (segment parent absent p.ex.), on garde la même
+          // ref pour éviter un snapshot zundo vide.
+          if (nextEntry === existing) return state;
+          return {
+            inspectorById: {
+              ...state.inspectorById,
+              [nodeId]: nextEntry,
+            },
+          };
+        }),
+
       /* ─── Phase D — WS collab actions ─── */
       setPeers: (peers) => set({ peers: [...peers] }),
       addPeer: (operator) =>
@@ -279,21 +354,27 @@ export const useSceneEditorStore = create<SceneEditorState>()(
       // undoable. Tool et selectedId ne rentrent pas (gestes éphémères).
       // `hierarchy` rentre car le toggle visibility est une action cataloguée
       // comme édition utilisateur.
+      // Phase F : `inspectorById` rejoint le partialize pour que les edits
+      // de transform (gizmo drag, slider) soient undoables par ⌘Z. Sans ça,
+      // les mutations via `updateInspectorField` passeraient sous le radar
+      // de zundo et seraient perdues pour l'historique.
       partialize: (state) => ({
         currentScene: state.currentScene,
         layoutPreset: state.layoutPreset,
         hierarchy: state.hierarchy,
+        inspectorById: state.inspectorById,
       }),
       limit: 50,
       // Par défaut zundo compare par référence (`Object.is`), mais partialize
       // retourne un nouvel objet à chaque `set()` → un changement de `tool`
       // créerait un snapshot vide. On utilise donc une égalité "shallow" sur
-      // les 3 champs partialized : un snapshot n'est ajouté que si une des
+      // les 4 champs partialized : un snapshot n'est ajouté que si une des
       // valeurs trackées change réellement.
       equality: (pastState, currentState) =>
         pastState.currentScene === currentState.currentScene &&
         pastState.layoutPreset === currentState.layoutPreset &&
-        pastState.hierarchy === currentState.hierarchy,
+        pastState.hierarchy === currentState.hierarchy &&
+        pastState.inspectorById === currentState.inspectorById,
     },
   ),
 );
@@ -306,7 +387,14 @@ export const useSceneEditorStore = create<SceneEditorState>()(
  * Pratique pour greyer les boutons Undo/Redo sans abonner au store entier.
  */
 export function useSceneEditorTemporal<T>(
-  selector: (state: TemporalState<Pick<SceneEditorState, "currentScene" | "layoutPreset" | "hierarchy">>) => T,
+  selector: (
+    state: TemporalState<
+      Pick<
+        SceneEditorState,
+        "currentScene" | "layoutPreset" | "hierarchy" | "inspectorById"
+      >
+    >,
+  ) => T,
 ): T {
   return useStore(useSceneEditorStore.temporal, selector);
 }

@@ -35,7 +35,13 @@ import {
   useSceneEditorStore,
   selectHierarchy,
   selectCurrentInspector,
+  selectSelectedId,
 } from "@/stores/useSceneEditorStore";
+// Phase F : SceneView & GameView driverisés par le Three.js viewer legacy
+// via l'adapter `viewer-adapter.tsx`. Le mock 2D CSS Phase A (silhouettes
+// SVG + gizmos HTML) disparaît au profit du vrai canvas Three.js qui rend
+// le VRM, la scène, le gizmo, et réagit à l'inspector.
+import { ViewerAdapter } from "./viewer-adapter";
 
 /* ═══════════════════════════════ SCENE VIEW ═══════════════════════════════ */
 
@@ -66,6 +72,11 @@ type SceneViewProps = {
 };
 
 export function SceneViewPanel({ selectedId, onSelect, onPopout }: SceneViewProps) {
+  // Phase F : la toolbar intra-panel continue de driver les mêmes toggles
+  // UX (tool, grid, safe zones) que Phase A. Le `tool` local est ré-aligné
+  // avec le store côté main toolbar, mais on conserve ce state pour
+  // préserver l'ergonomie "chaque panel a son mini-bouton" du design
+  // bundle (évite le coupling serré entre les panels et main toolbar).
   const [tool, setTool] = useState<"move" | "rotate" | "scale">("move");
   const [zoom] = useState(100);
   const [showGrid, setShowGrid] = useState(true);
@@ -75,6 +86,14 @@ export function SceneViewPanel({ selectedId, onSelect, onPopout }: SceneViewProp
   const [dropCoords, setDropCoords] = useState<{ x: number; y: number } | null>(null);
   const [dropActive, setDropActive] = useState(false);
   const isAssetDrag = payload?.kind === "asset";
+
+  // NB Phase F : `selectedId` / `onSelect` restent reçus en props pour
+  // rétro-compat avec `SceneEditorApp` (le shell les passe depuis le store
+  // déjà — cf. `renderPanel`). Ils alimentent l'overlay de bordure
+  // "selected" sur le drop marker (pas l'interaction 3D qui passe par le
+  // gizmo Three.js directement via `ViewerAdapter`).
+  void selectedId;
+  void onSelect;
 
   const onViewportDragOver = (e: DragEvent<HTMLDivElement>) => {
     if (!isAssetDrag) return;
@@ -143,8 +162,12 @@ export function SceneViewPanel({ selectedId, onSelect, onPopout }: SceneViewProp
           <TBBtn label={`${zoom}%`} title="Zoom" />
         </div>
 
-        <div className="ide-scene-canvas" onClick={() => onSelect?.(null)}>
-          <SceneSilhouettes />
+        {/* Phase F : le canvas Three.js remplace le mock 2D (silhouettes
+            SVG + gizmos HTML). Le wrapper `.ide-scene-canvas` est conservé
+            pour que les CSS du design bundle (background gradient,
+            inset overlays safe-zones, label bas) trouvent leur conteneur. */}
+        <div className="ide-scene-canvas">
+          <ViewerAdapter viewMode="edit" />
 
           {showSafe && (
             <>
@@ -152,41 +175,6 @@ export function SceneViewPanel({ selectedId, onSelect, onPopout }: SceneViewProp
               <div style={{ position: "absolute", inset: "10% 10%", border: "1px dashed rgba(127,227,176,0.2)", pointerEvents: "none" }} />
             </>
           )}
-
-          {SCENE_OBJECTS.map((o) => (
-            <div
-              key={o.id}
-              className={`ide-gizmo ${selectedId === o.id ? "selected" : ""}`}
-              style={{
-                left: `${o.x}%`,
-                top: `${o.y}%`,
-                width: `${o.w}%`,
-                height: `${o.h}%`,
-                zIndex: 10 + o.z,
-              }}
-              onClick={(e) => {
-                e.stopPropagation();
-                onSelect?.(o.id);
-              }}
-            >
-              <div className="gizmo-label">
-                {o.label} · {o.id}
-              </div>
-              {selectedId === o.id && (
-                <>
-                  <span className="handle tl" />
-                  <span className="handle tr" />
-                  <span className="handle bl" />
-                  <span className="handle br" />
-                  <span className="handle t" />
-                  <span className="handle b" />
-                  <span className="handle l" />
-                  <span className="handle r" />
-                  <span className="handle rot" />
-                </>
-              )}
-            </div>
-          ))}
 
           {droppedAsset && (
             <div
@@ -199,6 +187,7 @@ export function SceneViewPanel({ selectedId, onSelect, onPopout }: SceneViewProp
                 zIndex: 40,
                 borderColor: "var(--ide-hot-pink)",
                 background: "rgba(253,108,156,0.12)",
+                pointerEvents: "none",
               }}
             >
               <div className="gizmo-label">{droppedAsset.label} · NEW</div>
@@ -231,6 +220,11 @@ export function SceneViewPanel({ selectedId, onSelect, onPopout }: SceneViewProp
   );
 }
 
+// SceneSilhouettes — conservé pour référence du design bundle, utilisé
+// par les tests de régression visuelle (Phase 8). Pas rendu en Phase F+
+// dans le flow principal — le canvas Three.js prend sa place dans la
+// scène live.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function SceneSilhouettes() {
   return (
     <svg
@@ -324,44 +318,14 @@ export function GameViewPanel({ onPopout }: { onPopout?: () => void }) {
       }
     >
       <div className="ide-viewport">
+        {/* Phase F : la Live preview rend le même canvas Three.js que
+            SceneView mais en mode "preview" — gizmos cachés, caméra figée
+            sur DEFAULT_SCENE_CAMERA de l'adapter. La SVG silhouette Phase A
+            est retirée : on montre ce que le viewer verra réellement, pas
+            un mock. Les overlays "chat" et "title" sont conservés car ils
+            simulent l'UI OBS (hors scope du viewer 3D). */}
         <div className="ide-scene-canvas game-view">
-          <svg
-            viewBox="0 0 160 90"
-            preserveAspectRatio="xMidYMid slice"
-            style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }}
-          >
-            <defs>
-              <radialGradient id="liveGrad" cx="50%" cy="50%" r="70%">
-                <stop offset="0%" stopColor="#1a1530" />
-                <stop offset="100%" stopColor="#0a0614" />
-              </radialGradient>
-              <filter id="liveBloom">
-                <feGaussianBlur stdDeviation="1" />
-              </filter>
-            </defs>
-            <rect width="160" height="90" fill="url(#liveGrad)" />
-            <circle cx="40" cy="30" r="35" fill="#fd6c9c" opacity="0.15" filter="url(#liveBloom)" />
-            <circle cx="110" cy="40" r="30" fill="#b585ff" opacity="0.15" filter="url(#liveBloom)" />
-            <path d="M12 82 L14 60 Q18 55 22 60 L24 82 Z" fill="#7fe3b0" opacity="0.6" />
-            <ellipse cx="18" cy="56" rx="6" ry="5" fill="#7fe3b0" opacity="0.5" />
-            <g transform="translate(55 80)">
-              <ellipse cx="0" cy="-1" rx="10" ry="3" fill="#000" opacity="0.4" />
-              <path d="M-5 -4 Q-5 -25 0 -28 Q5 -25 5 -4 Z" fill="#fd6c9c" />
-              <circle cx="0" cy="-35" r="8" fill="#f9ecff" />
-              <path d="M-10 -30 Q-8 -44 0 -45 Q8 -44 10 -30 Q6 -34 0 -33 Q-6 -34 -10 -30 Z" fill="#fd6c9c" />
-              <circle cx="-2" cy="-36" r="1.2" fill="#0b0714" />
-              <circle cx="3" cy="-36" r="1.2" fill="#0b0714" />
-              <path d="M-2 -33 Q0 -32 2 -33" stroke="#0b0714" strokeWidth="0.3" fill="none" />
-            </g>
-            <g transform="translate(100 80)">
-              <ellipse cx="0" cy="-1" rx="9" ry="3" fill="#000" opacity="0.4" />
-              <path d="M-5 -4 Q-5 -23 0 -25 Q5 -23 5 -4 Z" fill="#b585ff" />
-              <circle cx="0" cy="-32" r="7" fill="#f9ecff" />
-              <path d="M-8 -28 Q-6 -40 0 -41 Q6 -40 8 -28 Q5 -32 0 -31 Q-5 -32 -8 -28 Z" fill="#81ecff" />
-              <circle cx="-2" cy="-33" r="1" fill="#0b0714" />
-              <circle cx="2" cy="-33" r="1" fill="#0b0714" />
-            </g>
-          </svg>
+          <ViewerAdapter viewMode="preview" />
 
           <div
             style={{
@@ -510,6 +474,11 @@ export function InspectorPanel({ selectedId: _selectedId, onPopout }: InspectorP
   // utilise `useSceneEditorStore.setSelectedId` (ce qui est le cas depuis
   // SceneEditorApp refactor).
   const data: InspectorData | null = useSceneEditorStore(selectCurrentInspector);
+  // Phase F : on lit selectedId du store pour que l'attribute
+  // `data-inspector-selected-id` soit **la** vérité observable par les tests
+  // E2E (pas le prop legacy qui est devenu un fossile d'API).
+  const selectedId = useSceneEditorStore(selectSelectedId);
+  void _selectedId;
 
   if (!data) {
     return (
@@ -555,18 +524,32 @@ export function InspectorPanel({ selectedId: _selectedId, onPopout }: InspectorP
         <Switch checked />
       </div>
 
-      <PropSection
-        title="Transform"
-        actions={
-          <button className="ide-panel-btn" title="Reset">
-            <Icon name="undo" size={10} />
-          </button>
-        }
+      {/* Phase F : data-attributes exposent les valeurs transform courantes
+          pour que les tests E2E (gizmo drag → Inspector) puissent asserter
+          sans traverser le DOM complexe de `XYZ` (6 inputs). On met à 3
+          décimales pour que la comparaison de tests reste déterministe
+          face aux float64 roundings du TransformControls. */}
+      <div
+        data-testid="inspector-transform"
+        data-inspector-selected-id={selectedId ?? ""}
+        data-inspector-pos-x={data.transform.pos[0].toFixed(3)}
+        data-inspector-pos-y={data.transform.pos[1].toFixed(3)}
+        data-inspector-pos-z={data.transform.pos[2].toFixed(3)}
+        data-inspector-rot-y={data.transform.rot[1].toFixed(3)}
       >
-        <PropRow label="Position"><XYZ value={data.transform.pos} /></PropRow>
-        <PropRow label="Rotation"><XYZ value={data.transform.rot} /></PropRow>
-        <PropRow label="Scale"><XYZ value={data.transform.scale} /></PropRow>
-      </PropSection>
+        <PropSection
+          title="Transform"
+          actions={
+            <button className="ide-panel-btn" title="Reset">
+              <Icon name="undo" size={10} />
+            </button>
+          }
+        >
+          <PropRow label="Position"><XYZ value={data.transform.pos} /></PropRow>
+          <PropRow label="Rotation"><XYZ value={data.transform.rot} /></PropRow>
+          <PropRow label="Scale"><XYZ value={data.transform.scale} /></PropRow>
+        </PropSection>
+      </div>
 
       {data.vrm && (
         <PropSection title="VRM Avatar">

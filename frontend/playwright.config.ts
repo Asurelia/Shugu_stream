@@ -21,8 +21,15 @@ const BASE_URL = process.env.PLAYWRIGHT_BASE_URL || `http://localhost:${PORT}`;
 
 export default defineConfig({
   testDir: "./e2e",
-  timeout: 30_000,
-  expect: { timeout: 5_000 },
+  // Phase F : la timeout passe de 30s à 60s. Le bundle Scene Editor inclut
+  // maintenant Three.js + @pixiv/three-vrm en chunk dynamique (cf.
+  // viewer-adapter.tsx). Le premier `goto()` qui hit la page compile ce
+  // chunk dans `next dev` (~25-40s sous Windows), ce qui peut faire
+  // dépasser l'ancien budget de 30s. La marge supplémentaire couvre le
+  // worst case sans masquer les vraies regressions (les tests qui
+  // tournent réellement prennent toujours 1-5s).
+  timeout: 60_000,
+  expect: { timeout: 10_000 },
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
   workers: process.env.CI ? 1 : undefined,

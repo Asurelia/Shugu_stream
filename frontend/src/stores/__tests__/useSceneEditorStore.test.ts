@@ -16,9 +16,19 @@ import {
   useSceneEditorStore,
   selectCurrentInspector,
 } from "../useSceneEditorStore";
+import { MOCK_INSPECTOR, MOCK_HIERARCHY } from "@/features/scene-editor/mock-data";
 
 beforeEach(() => {
   useSceneEditorStore.getState().resetUI();
+  useSceneEditorStore.temporal.getState().clear();
+  // Phase F : l'action updateInspectorField mute inspectorById entre tests.
+  // On re-seed via un set direct (Zustand ne fournit pas d'action
+  // setInspectorById pour éviter que la prod appelle ça par erreur). Même
+  // chose pour hierarchy dont les toggles mutent.
+  useSceneEditorStore.setState({
+    inspectorById: JSON.parse(JSON.stringify(MOCK_INSPECTOR)),
+    hierarchy: JSON.parse(JSON.stringify(MOCK_HIERARCHY)),
+  });
   useSceneEditorStore.temporal.getState().clear();
 });
 
@@ -225,6 +235,100 @@ describe("useSceneEditorStore · temporal (zundo undo/redo)", () => {
     // Le passé ne dépasse pas 50.
     const pastLen = useSceneEditorStore.temporal.getState().pastStates.length;
     expect(pastLen).toBeLessThanOrEqual(50);
+  });
+});
+
+/* ═════════════════ Phase F — updateInspectorField ═════════════════ */
+
+describe("useSceneEditorStore · updateInspectorField (Phase F)", () => {
+  it("update deep path transform.pos sur shugu", () => {
+    useSceneEditorStore
+      .getState()
+      .updateInspectorField("shugu", "transform.pos", [1, 2, 3]);
+    const state = useSceneEditorStore.getState();
+    expect(state.inspectorById.shugu.transform.pos).toEqual([1, 2, 3]);
+    // Les autres champs transform ne sont pas modifiés.
+    expect(state.inspectorById.shugu.transform.rot).toEqual([0, 12, 0]);
+    expect(state.inspectorById.shugu.transform.scale).toEqual([1, 1, 1]);
+  });
+
+  it("update via index numeric dans path : transform.pos.1 = 42", () => {
+    useSceneEditorStore
+      .getState()
+      .updateInspectorField("shugu", "transform.pos.1", 42);
+    const state = useSceneEditorStore.getState();
+    expect(state.inspectorById.shugu.transform.pos).toEqual([-0.6, 42, 0.2]);
+  });
+
+  it("update une propriété simple : render.opacity", () => {
+    useSceneEditorStore
+      .getState()
+      .updateInspectorField("shugu", "render.opacity", 0.5);
+    const state = useSceneEditorStore.getState();
+    expect(state.inspectorById.shugu.render?.opacity).toBe(0.5);
+  });
+
+  it("nodeId inexistant : no-op silencieux (aucune mutation)", () => {
+    const before = useSceneEditorStore.getState().inspectorById;
+    useSceneEditorStore
+      .getState()
+      .updateInspectorField("ghost", "transform.pos", [9, 9, 9]);
+    const after = useSceneEditorStore.getState().inspectorById;
+    expect(after).toBe(before); // même ref = no-op
+  });
+
+  it("path pointant sur segment parent inexistant : no-op (ne crée pas la section)", () => {
+    // `camera1` a `camera` mais pas `vrm`. Writer `vrm.expression` ne doit
+    // PAS créer la section `vrm` — shape protection.
+    const beforeCam = useSceneEditorStore.getState().inspectorById.camera1;
+    expect(beforeCam.vrm).toBeUndefined();
+    useSceneEditorStore
+      .getState()
+      .updateInspectorField("camera1", "vrm.expression", "Happy");
+    const afterCam = useSceneEditorStore.getState().inspectorById.camera1;
+    expect(afterCam.vrm).toBeUndefined();
+  });
+
+  it("update GÉNÈRE un snapshot zundo (undoable via ⌘Z)", () => {
+    const beforeLen = useSceneEditorStore.temporal.getState().pastStates.length;
+    useSceneEditorStore
+      .getState()
+      .updateInspectorField("shugu", "transform.pos", [5, 5, 5]);
+    const afterLen = useSceneEditorStore.temporal.getState().pastStates.length;
+    expect(afterLen).toBe(beforeLen + 1);
+
+    // Undo restaure la position initiale.
+    useSceneEditorStore.temporal.getState().undo();
+    const restored = useSceneEditorStore.getState().inspectorById.shugu;
+    expect(restored.transform.pos).toEqual([-0.6, 0, 0.2]);
+  });
+
+  it("batch de 3 updates → 3 snapshots distincts (granularity zundo)", () => {
+    const before = useSceneEditorStore.temporal.getState().pastStates.length;
+    useSceneEditorStore
+      .getState()
+      .updateInspectorField("shugu", "transform.pos.0", 1);
+    useSceneEditorStore
+      .getState()
+      .updateInspectorField("shugu", "transform.pos.0", 2);
+    useSceneEditorStore
+      .getState()
+      .updateInspectorField("shugu", "transform.pos.0", 3);
+    const after = useSceneEditorStore.temporal.getState().pastStates.length;
+    expect(after - before).toBe(3);
+    expect(useSceneEditorStore.getState().inspectorById.shugu.transform.pos[0]).toBe(
+      3,
+    );
+  });
+
+  it("immutabilité : l'entry d'un autre node n'est pas touché", () => {
+    const auraBefore = useSceneEditorStore.getState().inspectorById.aura;
+    useSceneEditorStore
+      .getState()
+      .updateInspectorField("shugu", "transform.pos", [9, 9, 9]);
+    const auraAfter = useSceneEditorStore.getState().inspectorById.aura;
+    // Même REF : aucune mutation sur aura.
+    expect(auraAfter).toBe(auraBefore);
   });
 });
 
