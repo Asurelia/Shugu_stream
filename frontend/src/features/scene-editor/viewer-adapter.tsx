@@ -56,6 +56,7 @@ import {
   useEffect,
   useImperativeHandle,
   useRef,
+  useState,
 } from "react";
 import dynamic from "next/dynamic";
 // Le chemin `@/features/admin/scene-editor-legacy/*` pointe sur le viewer
@@ -435,10 +436,38 @@ export const ViewerAdapter = forwardRef<ViewerAdapterHandle, ViewerAdapterProps>
     // d'autres raisons — selectedId, tool, etc. — sans nouvel event).
     const consumedSeqRef = useRef<number>(0);
 
+    // Phase E4 — état accumulé pour les data-attributes d'observabilité E2E.
+    // useState plutôt que useRef pour que les mutations entraînent un re-render
+    // qui met à jour les data-attributes dans le DOM — nécessaire pour que
+    // les assertions Playwright (expect.poll) voient les nouvelles valeurs.
+    // Coût de render acceptable : un seul setState par event Director.
+    const [observedOutfit, setObservedOutfit] = useState<string>("default");
+    const [observedFace, setObservedFace] = useState<string>("neutral");
+    const [observedScene, setObservedScene] = useState<string>("main_talk");
+    const [observedVfxCount, setObservedVfxCount] = useState<number>(0);
+
     useEffect(() => {
       if (!lastSceneApply) return;
       if (lastSceneApply.seq <= consumedSeqRef.current) return;
       consumedSeqRef.current = lastSceneApply.seq;
+      // Accumulation des data-attributes selon le kind.
+      switch (lastSceneApply.kind) {
+        case "outfit":
+          setObservedOutfit(lastSceneApply.id);
+          break;
+        case "face":
+          setObservedFace(lastSceneApply.id);
+          break;
+        case "vfx":
+          setObservedVfxCount((c) => c + 1);
+          break;
+        case "scene":
+          setObservedScene(lastSceneApply.id);
+          setObservedVfxCount(0); // Reset VFX au changement de scène.
+          break;
+        default:
+          break;
+      }
       applySceneApply(lastSceneApply, handlersRef.current, lastFaceRef);
     }, [lastSceneApply]);
 
@@ -465,9 +494,18 @@ export const ViewerAdapter = forwardRef<ViewerAdapterHandle, ViewerAdapterProps>
     // et de simuler un drag dessus. Le wrapper est un `<div>` plutôt qu'un
     // fragment pour que les styles CSS du dock (`flex:1`) aient un parent
     // sur lequel s'appliquer — sans ça le canvas part à 0×0.
+    //
+    // Phase E4 — data-attributes d'observabilité pour les assertions Playwright.
+    // Les valeurs accumulées depuis tous les events `scene.apply` reçus via le
+    // Director. Permettent à `expect.poll(getAttribute(...))` de détecter les
+    // changements sans polling CSS fragile.
     return (
       <div
         data-testid="scene-viewer-adapter"
+        data-current-outfit={observedOutfit}
+        data-current-face={observedFace}
+        data-active-vfx-count={String(observedVfxCount)}
+        data-current-scene={observedScene}
         style={{ position: "relative", width: "100%", height: "100%", minHeight: 0 }}
       >
         <div

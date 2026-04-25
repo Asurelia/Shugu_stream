@@ -13,6 +13,7 @@ Couverture :
 - Cache hit skip LLM
 - Debouncer absorbe le trigger chat
 - Debouncer flush après max_batch
+- Phase E4 H2 : memory_agent.recall() appelé pour vip_arrival + chat
 
 Les workers sont mockés via des stubs simples.
 Le brain est mocké via AnthropicDirectorBrain + respx (même pattern que Phase E2).
@@ -34,6 +35,7 @@ from shugu.director.state_store import DirectorStateStore, _reset_for_tests
 from shugu.director.tick_cache import StubTickCache
 from shugu.director.triggers import TriggerEvent
 from shugu.director.workers.base import StateDelta
+from shugu.memory.types import MemoryItem, RecallQuery
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Helpers / Stubs
@@ -764,3 +766,159 @@ async def test_tick_vip_bypasses_debouncer() -> None:
 
     # Le brain DOIT avoir été appelé.
     assert len(brain.calls) == 1
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Phase E4 H2 — Memory recall wired dans l'orchestrator
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _make_memory_item(text: str, subject: str = "vip:spoukie") -> MemoryItem:
+    """Construit un MemoryItem minimal pour les tests."""
+    from datetime import datetime, timezone
+    return MemoryItem(
+        id="test-ulid-001",
+        kind="fact",
+        subject=subject,
+        text=text,
+        confidence=0.9,
+        source="persona_seed",
+        created_at=datetime.now(timezone.utc),
+    )
+
+
+async def test_orchestrator_recall_memories_for_vip_arrival() -> None:
+    """memory_agent.recall() est appelé pour les triggers vip_arrival (H2).
+
+    Vérifie que :
+    1. recall() est appelé avec un RecallQuery(subject="vip:<sender>").
+    2. Les facts retournés apparaissent dans le system prompt envoyé au brain.
+    """
+    brain = _StubBrain("[face:joy]")
+    store = DirectorStateStore()
+    bus = _StubEventBus()
+
+    # Mock du MemoryAgent.
+    mock_memory_agent = MagicMock()
+    fact_text = "Spoukie adore les confettis dorés et wave"
+    mock_memory_agent.recall = AsyncMock(
+        return_value=[_make_memory_item(fact_text, subject="vip:spoukie")]
+    )
+
+    orch = Orchestrator(
+        state_store=store,
+        workers={"face": _StubWorker("face")},
+        llm_client=brain,
+        event_bus=bus,
+        settings=_settings(),
+        memory_agent=mock_memory_agent,
+    )
+
+    trigger = TriggerEvent(kind="vip_arrival", payload={"sender": "spoukie"})
+    await orch.tick(trigger)
+
+    # recall() doit avoir été appelé une fois.
+    mock_memory_agent.recall.assert_called_once()
+    call_args = mock_memory_agent.recall.call_args[0][0]
+    assert isinstance(call_args, RecallQuery)
+    assert call_args.subject == "vip:spoukie"
+    assert call_args.limit == 5
+
+    # Le fait mémoire doit apparaître dans le system prompt envoyé au brain.
+    assert len(brain.calls) == 1
+    system_prompt = brain.calls[0]["system"]
+    assert fact_text in system_prompt
+
+
+async def test_orchestrator_recall_memories_for_chat_trigger() -> None:
+    """memory_agent.recall() est appelé pour les triggers chat (H2).
+
+    Vérifie que le subject est "vip:<sender_lc>" même pour un trigger chat.
+    On appelle directement `_execute_tick_post_debounce` pour bypasser le
+    debouncer (qui absorberait le premier message dans la fenêtre).
+    """
+    brain = _StubBrain("[face:neutral]")
+    store = DirectorStateStore()
+    bus = _StubEventBus()
+
+    mock_memory_agent = MagicMock()
+    fact_text = "Alice préfère les tenues élégantes"
+    mock_memory_agent.recall = AsyncMock(
+        return_value=[_make_memory_item(fact_text, subject="vip:alice")]
+    )
+
+    orch = Orchestrator(
+        state_store=store,
+        workers={"face": _StubWorker("face")},
+        llm_client=brain,
+        event_bus=bus,
+        settings=_settings(director_canned_enabled=False),
+        memory_agent=mock_memory_agent,
+    )
+
+    # On appelle directement post_debounce pour tester le recall sans debouncer.
+    trigger = TriggerEvent(kind="chat", payload={"sender": "Alice", "text": "salut !"})
+    async with orch._tick_lock:
+        await orch._execute_tick_post_debounce(trigger)
+
+    # recall() appelé avec le bon subject (lowercase).
+    mock_memory_agent.recall.assert_called_once()
+    call_args = mock_memory_agent.recall.call_args[0][0]
+    assert call_args.subject == "vip:alice"
+
+    # Facts présents dans le system prompt.
+    assert len(brain.calls) == 1
+    system_prompt = brain.calls[0]["system"]
+    assert fact_text in system_prompt
+
+
+async def test_orchestrator_no_memory_agent_skip_silently() -> None:
+    """Sans memory_agent, l'orchestrator fonctionne normalement (skip silencieux)."""
+    brain = _StubBrain("[face:joy]")
+    store = DirectorStateStore()
+    bus = _StubEventBus()
+
+    # Pas de memory_agent (None).
+    orch = Orchestrator(
+        state_store=store,
+        workers={"face": _StubWorker("face")},
+        llm_client=brain,
+        event_bus=bus,
+        settings=_settings(),
+        memory_agent=None,
+    )
+
+    trigger = TriggerEvent(kind="vip_arrival", payload={"sender": "spoukie"})
+    await orch.tick(trigger)
+
+    # Le brain a quand même été appelé.
+    assert len(brain.calls) == 1
+    # Pas de section "Mémoires" dans le prompt (memory_facts=None).
+    assert "Mémoires pertinentes" not in brain.calls[0]["system"]
+
+
+async def test_orchestrator_memory_recall_failure_skip_silently() -> None:
+    """Si recall() lève une exception, l'orchestrator continue sans memories."""
+    brain = _StubBrain("[face:neutral]")
+    store = DirectorStateStore()
+    bus = _StubEventBus()
+
+    mock_memory_agent = MagicMock()
+    mock_memory_agent.recall = AsyncMock(side_effect=RuntimeError("DB down"))
+
+    orch = Orchestrator(
+        state_store=store,
+        workers={"face": _StubWorker("face")},
+        llm_client=brain,
+        event_bus=bus,
+        settings=_settings(),
+        memory_agent=mock_memory_agent,
+    )
+
+    trigger = TriggerEvent(kind="vip_arrival", payload={"sender": "spoukie"})
+    # Ne doit pas lever d'exception même si recall() échoue.
+    await orch.tick(trigger)
+
+    # Le brain a quand même été appelé sans memories.
+    assert len(brain.calls) == 1
+    assert "Mémoires pertinentes" not in brain.calls[0]["system"]

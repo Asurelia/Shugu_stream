@@ -52,6 +52,8 @@ from datetime import datetime, timezone
 from typing import Callable, Optional
 
 from ..config import Settings
+from ..memory.agent import MemoryAgent
+from ..memory.types import RecallQuery
 from .brain_provider import DirectorBrain
 from .canned_responses import CANNED_ELIGIBLE_KINDS, CannedResponse, pick_canned
 from .debouncer import DEBOUNCEABLE_KINDS, TriggerDebouncer
@@ -149,12 +151,16 @@ class Orchestrator:
         settings: Settings,
         tick_cache: Optional[TickCache] = None,
         debouncer: Optional[TriggerDebouncer] = None,
+        memory_agent: Optional[MemoryAgent] = None,
     ) -> None:
         self._store = state_store
         self._workers = workers
         self._llm_client = llm_client
         self._event_bus = event_bus
         self._settings = settings
+        # Phase E4 H2 — MemoryAgent pour recall VIP/chat avant build_prompt.
+        # Si None (memory_enabled=False ou agent absent), skip silencieux.
+        self._memory_agent: Optional[MemoryAgent] = memory_agent
 
         self._last_tick_at: float = 0.0   # monotonic timestamp du dernier tick
         self._tick_lock: asyncio.Lock = asyncio.Lock()
@@ -304,8 +310,30 @@ class Orchestrator:
                 await self._execute_from_text(cached.llm_text, trigger, source="cache")
                 return  # SKIP LLM
 
-        # 5. LLM call (en dernier recours).
-        system, user = build_prompt(state, trigger)
+        # 5. Memory recall pour les triggers chat/vip_arrival (Phase E4 H2).
+        # Le recall est fait AVANT build_prompt pour injecter les faits VIP
+        # dans le system prompt. Si l'agent est absent ou échoue, skip silencieux.
+        memory_facts: list[str] = []
+        if self._memory_agent is not None and trigger.kind in {"chat", "vip_arrival"}:
+            sender = trigger.payload.get("sender")
+            if sender:
+                # Convention subject : "vip:<sender_lc>" pour vip_arrival,
+                # "vip:<sender_lc>" aussi pour chat (le wiring lowercase déjà).
+                # On query par subject uniquement (text="" → "last N by subject").
+                subject = f"vip:{sender.lower()}"
+                try:
+                    recalled = await self._memory_agent.recall(
+                        RecallQuery(text="", subject=subject, limit=5)
+                    )
+                    memory_facts = [item.text for item in recalled if item.text]
+                except Exception as exc:
+                    log.warning(
+                        "director.orchestrator_memory_recall_failed",
+                        extra={"sender": sender, "error": repr(exc)},
+                    )
+
+        # 6. LLM call (en dernier recours).
+        system, user = build_prompt(state, trigger, memory_facts=memory_facts or None)
 
         llm_text: Optional[str] = None
         tags: list[ParsedTag]
@@ -316,7 +344,7 @@ class Orchestrator:
                 self._llm_client.complete(system=system, user=user),
                 timeout=3.0,
             )
-            # 6. Parse tags + strip pour TTS.
+            # 7. Parse tags + strip pour TTS.
             tags = parse_tags(llm_text, max_tags=10, state=state)
             tts_text = strip_tags(llm_text)
         except TimeoutError:
