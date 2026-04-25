@@ -117,11 +117,21 @@ class Settings(BaseSettings):
     event_bus_mode: Literal["inproc", "redis"] = "inproc"
     event_bus_redis_prefix: str = "shugu:bus:"
 
-    # Mémoire long-terme — v4 Phase 1 Brique 1.3. `memory_enabled=False` tant
-    # que l'embedder et l'extraction LLM ne sont pas branchés (Phase 2). Le
-    # skeleton pose les tables, l'agent, et le hook optionnel dans les brains ;
-    # basculer sur True nécessite que Phase 2 soit livrée.
-    memory_enabled: bool = False
+    # Mémoire long-terme — v4 Phase 1 Brique 1.3 → PR 1 (Phase 3.1).
+    # `memory_enabled=True` par défaut : câble automatiquement la mémoire
+    # long-terme dans Director Embodied Shugu (recall pgvector pour chat +
+    # vip_arrival, cf. orchestrator.py:325-326 E4 H2). L'IngestionWorker
+    # écoute `sense.raw` et prépare la récolte d'épisodes (PR 2).
+    # Mettre à False désactive worker + recall Director (no-op silencieux).
+    memory_enabled: bool = Field(
+        default=True,
+        description=(
+            "Active le sous-système mémoire long-terme (récolte épisodes, "
+            "recall pgvector, maintenance cron). "
+            "Activer en True câble aussi automatiquement la mémoire dans "
+            "Director Embodied Shugu."
+        ),
+    )
     memory_embed_dim: int = 1024
     # Phase 2.1 : modèle d'embedding par défaut. intfloat/multilingual-e5-large
     # = 1024 dim (matche memory_embed_dim), ~100 langues dont FR/EN, 512 tokens max.
