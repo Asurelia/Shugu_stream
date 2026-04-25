@@ -350,6 +350,7 @@ class Orchestrator:
         # Attend que le lock soit libéré (tick en cours terminé).
         # On acquiert puis relâche immédiatement — juste pour s'assurer
         # qu'aucun tick ne tourne au moment du stop().
+        log.info("director.orchestrator_waiting_tick_drain")
         async with self._tick_lock:
             pass
 
