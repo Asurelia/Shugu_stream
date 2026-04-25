@@ -264,6 +264,12 @@ async def lifespan(app: FastAPI):
             stt=stt, hermes_embodied=hermes_embodied, metrics=_metrics,
         ))
 
+    # Director workers (Phase E3) — registry tag_name -> Worker injecté avec le bus.
+    # Utilisé par l'orchestrator E2 pour dispatcher les tags inline vers les workers
+    # déterministes (outfit, vfx, anim, face, say_emotion, camera, scene).
+    from .director.workers import make_workers
+    app.state.director_workers = make_workers(event_bus)
+
     # Director (Phase E1) — background tasks Silence + SceneChangeRelay.
     # `start()` est un no-op tant que `settings.director_enabled=False`
     # (défaut), donc aucun impact prod sur les déploiements actuels.

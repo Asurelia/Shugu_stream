@@ -108,7 +108,14 @@ vi.mock("next/dynamic", () => {
 });
 
 // Import APRÈS vi.mock pour que l'import résolu utilise le stub.
-import { ViewerAdapter, type ViewerAdapterHandle } from "../viewer-adapter";
+import {
+  applySceneApply,
+  resolveAnimUrl,
+  resolveOutfitTextureUrl,
+  ViewerAdapter,
+  type ViewerAdapterHandle,
+} from "../viewer-adapter";
+import type { SceneApplyEvent } from "@/stores/useSceneEditorStore";
 
 /* ───────────────── RAF HARNESS ─────────────────
  * jsdom ne polyfill pas `requestAnimationFrame`. On installe un fake
@@ -511,5 +518,192 @@ describe("ViewerAdapter · safety", () => {
       flushRaf();
     });
     expect(updateSpy).not.toHaveBeenCalled();
+  });
+});
+
+/* ───────────────── PHASE E3 — scene.apply CONSUME ─────────────────
+ *
+ * On test la fonction pure `applySceneApply` indépendamment du composant
+ * pour deux raisons :
+ *  1. Elle EST le point de dispatch — un test sur la fonction garantit que
+ *     chaque kind appelle la bonne ref method, ce que demande la spec.
+ *  2. Tester via le composant nécessiterait un dispatch via le store +
+ *     attendre un useEffect, ce qui ajoute du bruit timing pour rien.
+ *
+ * 7 tests : un par kind (outfit, vfx, anim, face, say_emotion, camera, scene),
+ * + 1 test face replace pour vérifier le reset à 0 de l'expression précédente.
+ * + 1 test "le composant consume bien lastSceneApply via store" en bout de
+ * fichier pour couvrir l'intégration store ↔ adapter.
+ */
+
+function _makeStubHandlers(): {
+  handlers: ViewerAdapterHandle;
+  spies: Record<keyof ViewerAdapterHandle, ReturnType<typeof vi.fn>>;
+} {
+  const swapTexture = vi.fn();
+  const playAnimation = vi.fn();
+  const setBlendshape = vi.fn();
+  const showVfxOverlay = vi.fn();
+  return {
+    handlers: { swapTexture, playAnimation, setBlendshape, showVfxOverlay },
+    spies: { swapTexture, playAnimation, setBlendshape, showVfxOverlay },
+  };
+}
+
+function _applyEvent(partial: Omit<SceneApplyEvent, "seq">, seq = 1): SceneApplyEvent {
+  return { ...partial, seq };
+}
+
+describe("ViewerAdapter · applySceneApply (Phase E3)", () => {
+  it("kind=outfit : appelle swapTexture avec /assets/vrm/outfits/{id}.png", () => {
+    const { handlers, spies } = _makeStubHandlers();
+    const lastFace = { current: null as string | null };
+    applySceneApply(
+      _applyEvent({ kind: "outfit", id: "vip_fan" }),
+      handlers,
+      lastFace,
+    );
+    expect(spies.swapTexture).toHaveBeenCalledTimes(1);
+    expect(spies.swapTexture).toHaveBeenCalledWith("/assets/vrm/outfits/vip_fan.png");
+    expect(spies.playAnimation).not.toHaveBeenCalled();
+    expect(spies.setBlendshape).not.toHaveBeenCalled();
+    expect(spies.showVfxOverlay).not.toHaveBeenCalled();
+  });
+
+  it("kind=vfx : appelle showVfxOverlay avec l'id (pas de transformation URL)", () => {
+    const { handlers, spies } = _makeStubHandlers();
+    applySceneApply(
+      _applyEvent({ kind: "vfx", id: "confetti_gold", durationMs: 3000 }),
+      handlers,
+      { current: null },
+    );
+    expect(spies.showVfxOverlay).toHaveBeenCalledTimes(1);
+    expect(spies.showVfxOverlay).toHaveBeenCalledWith("confetti_gold");
+    expect(spies.swapTexture).not.toHaveBeenCalled();
+  });
+
+  it("kind=anim : appelle playAnimation avec /assets/vrma/{id}.vrma", () => {
+    const { handlers, spies } = _makeStubHandlers();
+    applySceneApply(
+      _applyEvent({ kind: "anim", id: "wave", loop: false }),
+      handlers,
+      { current: null },
+    );
+    expect(spies.playAnimation).toHaveBeenCalledTimes(1);
+    expect(spies.playAnimation).toHaveBeenCalledWith("/assets/vrma/wave.vrma");
+  });
+
+  it("kind=face : pose la blendshape à 1.0 et stocke dans lastFaceRef", () => {
+    const { handlers, spies } = _makeStubHandlers();
+    const lastFace = { current: null as string | null };
+    applySceneApply(_applyEvent({ kind: "face", id: "joy" }), handlers, lastFace);
+    expect(spies.setBlendshape).toHaveBeenCalledTimes(1);
+    expect(spies.setBlendshape).toHaveBeenCalledWith("joy", 1.0);
+    expect(lastFace.current).toBe("joy");
+  });
+
+  it("kind=face : reset l'ancienne face à 0 avant de poser la nouvelle", () => {
+    const { handlers, spies } = _makeStubHandlers();
+    const lastFace = { current: null as string | null };
+    applySceneApply(_applyEvent({ kind: "face", id: "joy" }), handlers, lastFace);
+    spies.setBlendshape.mockClear();
+
+    applySceneApply(_applyEvent({ kind: "face", id: "sad" }, 2), handlers, lastFace);
+    // Deux calls : reset(joy=0) puis set(sad=1).
+    expect(spies.setBlendshape).toHaveBeenCalledTimes(2);
+    expect(spies.setBlendshape).toHaveBeenNthCalledWith(1, "joy", 0);
+    expect(spies.setBlendshape).toHaveBeenNthCalledWith(2, "sad", 1.0);
+    expect(lastFace.current).toBe("sad");
+  });
+
+  it("kind=camera : aucune ref method appelée (gap spec ↔ implé documenté)", () => {
+    const { handlers, spies } = _makeStubHandlers();
+    applySceneApply(
+      _applyEvent({ kind: "camera", id: "close_up" }),
+      handlers,
+      { current: null },
+    );
+    expect(spies.swapTexture).not.toHaveBeenCalled();
+    expect(spies.playAnimation).not.toHaveBeenCalled();
+    expect(spies.setBlendshape).not.toHaveBeenCalled();
+    expect(spies.showVfxOverlay).not.toHaveBeenCalled();
+  });
+
+  it("kind=say_emotion : aucune ref method appelée (no-op visuel — TTS E4)", () => {
+    const { handlers, spies } = _makeStubHandlers();
+    applySceneApply(
+      _applyEvent({ kind: "say_emotion", id: "joy" }),
+      handlers,
+      { current: null },
+    );
+    expect(spies.swapTexture).not.toHaveBeenCalled();
+    expect(spies.playAnimation).not.toHaveBeenCalled();
+    expect(spies.setBlendshape).not.toHaveBeenCalled();
+    expect(spies.showVfxOverlay).not.toHaveBeenCalled();
+  });
+
+  it("kind=scene : aucune ref method appelée (change de scène géré ailleurs)", () => {
+    const { handlers, spies } = _makeStubHandlers();
+    applySceneApply(
+      _applyEvent({ kind: "scene", id: "gaming" }),
+      handlers,
+      { current: null },
+    );
+    expect(spies.swapTexture).not.toHaveBeenCalled();
+    expect(spies.playAnimation).not.toHaveBeenCalled();
+    expect(spies.setBlendshape).not.toHaveBeenCalled();
+    expect(spies.showVfxOverlay).not.toHaveBeenCalled();
+  });
+
+  it("URL helpers : encodeURIComponent protège les caractères spéciaux", () => {
+    // Les workers backend valident contre une whitelist — un slug suspect ne
+    // devrait jamais arriver. Mais en defense in depth, on encode quand même
+    // pour neutraliser path traversal / espaces / backticks.
+    expect(resolveOutfitTextureUrl("vip_fan")).toBe("/assets/vrm/outfits/vip_fan.png");
+    expect(resolveOutfitTextureUrl("../../etc/passwd")).toBe(
+      "/assets/vrm/outfits/..%2F..%2Fetc%2Fpasswd.png",
+    );
+    expect(resolveAnimUrl("wave_loop")).toBe("/assets/vrma/wave_loop.vrma");
+  });
+});
+
+describe("ViewerAdapter · scene.apply integration with store", () => {
+  it("dispatchSceneApply(outfit) déclenche swapTexture côté ViewerAdapter monté", async () => {
+    const ref = createRef<ViewerAdapterHandle>();
+    await renderAdapter(<ViewerAdapter viewMode="edit" ref={ref} />);
+    // Spy après mount pour capturer les calls post-dispatch uniquement.
+    const swapSpy = vi.spyOn(ref.current!, "swapTexture");
+
+    act(() => {
+      useSceneEditorStore.getState().dispatchSceneApply({
+        kind: "outfit",
+        id: "vip_fan",
+      });
+    });
+
+    expect(swapSpy).toHaveBeenCalledTimes(1);
+    expect(swapSpy).toHaveBeenCalledWith("/assets/vrm/outfits/vip_fan.png");
+  });
+
+  it("dispatch identique 2x : seq incrémenté → effect re-trigger", async () => {
+    const ref = createRef<ViewerAdapterHandle>();
+    await renderAdapter(<ViewerAdapter viewMode="edit" ref={ref} />);
+    const overlaySpy = vi.spyOn(ref.current!, "showVfxOverlay");
+
+    act(() => {
+      useSceneEditorStore.getState().dispatchSceneApply({
+        kind: "vfx",
+        id: "confetti_gold",
+      });
+    });
+    act(() => {
+      useSceneEditorStore.getState().dispatchSceneApply({
+        kind: "vfx",
+        id: "confetti_gold",
+      });
+    });
+
+    expect(overlaySpy).toHaveBeenCalledTimes(2);
+    expect(overlaySpy).toHaveBeenCalledWith("confetti_gold");
   });
 });

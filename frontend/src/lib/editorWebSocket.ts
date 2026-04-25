@@ -44,6 +44,20 @@ export type EditorErrorCode =
   | "not_subscribed"
   | "unauthorized";
 
+/**
+ * Phase E3 — kinds supportés par les broadcasts Director (`scene.apply`).
+ * Aligné sur `SceneApplyKind` côté store ; déclaré ici pour que la WS
+ * reste auto-suffisante (tests/wireshark sans dépendance store).
+ */
+export type SceneApplyKind =
+  | "outfit"
+  | "vfx"
+  | "anim"
+  | "face"
+  | "say_emotion"
+  | "camera"
+  | "scene";
+
 /** Ce que le client reçoit du serveur. */
 export type EditorServerEvent =
   | { type: "hello"; operator: string; protocol_version: number }
@@ -63,6 +77,33 @@ export type EditorServerEvent =
       scene_id: string;
       payload: Record<string, unknown>;
       origin: string;
+    }
+  | {
+      /**
+       * Phase E3 — broadcast Director déterministe. Émis par les workers
+       * backend en réaction aux tags inline du LLM Soul. Le forward loop
+       * éditeur (`_bus_forward_loop`) bypass le filtre `scene_id` pour
+       * cette famille — un client connecté reçoit l'event quel que soit
+       * la scène à laquelle il est subscribed.
+       *
+       * Champs payload :
+       *  - `version`      API version pour rétro-compatibilité (M2). Actuellement 1.
+       *  - `kind`         discriminator (outfit | vfx | anim | face |
+       *                   say_emotion | camera | scene).
+       *  - `id`           slug pour outfit/vfx/anim/face/scene/say_emotion.
+       *  - `mode`         valeur pour `kind: camera` (auto, close_up, …).
+       *  - `duration_ms`  durée pour `kind: vfx` (par défaut 3000ms côté backend).
+       *  - `loop`         flag pour `kind: anim`.
+       *  - `ts`           timestamp ISO-8601 backend.
+       */
+      type: "scene.apply";
+      version?: number;
+      kind: SceneApplyKind;
+      id?: string;
+      mode?: string;
+      duration_ms?: number;
+      loop?: boolean;
+      ts?: string;
     }
   | { type: "ping"; t?: number }
   | { type: "pong"; nonce?: string }
@@ -299,6 +340,19 @@ export class EditorWebSocket {
     if (!parsed || typeof parsed !== "object" || !("type" in parsed)) return;
 
     const event = parsed as EditorServerEvent;
+
+    // M2 versioning check — warn si scene.apply avec version !== 1.
+    if (
+      event.type === "scene.apply" &&
+      "version" in event &&
+      event.version !== 1
+    ) {
+      console.warn(
+        "[EditorWebSocket] scene.apply version mismatch: expected 1, got",
+        event.version,
+      );
+    }
+
     // Auto-pong au heartbeat server sans déranger le consumer — le consumer
     // peut quand même observer `onEvent` pour le logging.
     if (event.type === "ping") {

@@ -67,6 +67,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
 import uuid
 from contextlib import suppress
@@ -94,6 +95,10 @@ HEARTBEAT_TIMEOUT_S = 40.0     # si pas de pong dans cette fenetre -> close
 # deltas live et preview.push restent typiquement < 4 KB. 32 KB laisse de
 # la marge pour des scene payloads riches sans ouvrir de surface DoS.
 _MAX_FRAME_BYTES = 32 * 1024
+
+# Pattern de validation scene_id (Phase E3 L1) — defense-in-depth contre
+# les wildcard et sentinelles. Accepte UUID + slugs alphanumériques simples.
+_SCENE_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_-]{1,128}$")
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -351,6 +356,14 @@ async def _handle_subscribe(ws: WebSocket, state: _ConnState, msg: dict) -> None
         )
         return
 
+    # Phase E3 L1 — reject wildcard + pattern validation (defense-in-depth).
+    if not _SCENE_ID_PATTERN.match(scene_id):
+        await _send_error(
+            ws, code="invalid_scene_id",
+            message="scene_id must match [a-zA-Z0-9_-]{1,128}",
+        )
+        return
+
     # Leave previous scene si existante.
     if state.scene_id is not None and state.scene_id != scene_id:
         await _leave_scene(state)
@@ -505,6 +518,16 @@ async def _bus_forward_loop(ws: WebSocket, state: _ConnState) -> None:
     Les events `peer.joined`/`peer.left` passent par ce meme chemin : comme
     on publie sur le bus au subscribe(), tout client deja subscribed a la
     meme scene recevra l'annonce (cross-worker inclus via redis).
+
+    Bypass `scene.apply` (Phase E3) : les workers Director publient des
+    payloads `{"type": "scene.apply", ...}` avec un envelope sentinelle
+    `scene_id="*"`. Ces broadcasts s'adressent a TOUS les clients quel
+    que soit le scene_id auquel ils sont subscribed (un changement
+    d'outfit / VFX est un effet global du viewer, pas un detail
+    d'edition collaborative). Le bypass court-circuite donc le filtre
+    `scene_id` pour cette famille d'events. Le filtre self-echo reste
+    actif (un client qui se serait identifie comme origine ne se voit
+    pas relayer son propre broadcast).
     """
     try:
         async for envelope in state.deps.event_bus.subscribe(BROADCAST_TOPIC):
@@ -514,12 +537,20 @@ async def _bus_forward_loop(ws: WebSocket, state: _ConnState) -> None:
             # events au client qui les a envoyes.
             if envelope.get("connection_id") == state.connection_id:
                 continue
+            inner = envelope.get("payload")
+            if not isinstance(inner, dict):
+                continue
+            # Bypass Phase E3 — broadcasts Director (`scene.apply`) :
+            # delivres a tout client connecte, independamment du
+            # scene_id de subscription (cf. docstring).
+            # Phase E3 L2 — require origin="director" pour eviter que des
+            # sources non-Director ne polluentNot the state du viewer.
+            if inner.get("type") == "scene.apply" and envelope.get("origin") == "director":
+                await _safe_send_json(ws, inner)
+                continue
             # Filtre scope : on ne livre que si on est subscribed a cette scene.
             scene_id = envelope.get("scene_id")
             if state.scene_id is None or scene_id != state.scene_id:
-                continue
-            inner = envelope.get("payload")
-            if not isinstance(inner, dict):
                 continue
             await _safe_send_json(ws, inner)
     except asyncio.CancelledError:

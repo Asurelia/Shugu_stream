@@ -473,3 +473,127 @@ def test_draft_update_not_delivered_to_other_scene_subscriber(
         assert recv["type"] == "pong"
         assert recv.get("nonce") == "ping-b", \
             "scene isolation broke — B recv'd an event from another scene"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# DIRECTOR scene.apply BYPASS (Phase E3)
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def test_scene_apply_broadcast_delivered_to_all_clients_regardless_of_scene_id(
+    client: TestClient, settings, event_bus,
+) -> None:
+    """Phase E3 — un broadcast Director `scene.apply` doit etre livre a TOUS
+    les clients connectes, qu'ils soient subscribed ou non a une scene
+    particuliere. Le forward loop bypass le filtre `scene_id` pour cette
+    famille d'events (cf. `_bus_forward_loop` doc). Sans ce bypass, un
+    operator focused sur scene_b ne verrait jamais l'outfit hot-swap
+    pousse par Shugu Soul."""
+    token_a = _issue_token(settings, "alice")
+    token_b = _issue_token(settings, "bob")
+    with client.websocket_connect(f"/ws/editor?token={token_a}") as ws_a, \
+         client.websocket_connect(f"/ws/editor?token={token_b}") as ws_b:
+        assert ws_a.receive_json()["type"] == "hello"
+        assert ws_b.receive_json()["type"] == "hello"
+        # A subscribe scene_a, B subscribe scene_b — scenes disjointes.
+        ws_a.send_json({"type": "subscribe", "scene_id": SCENE_A})
+        assert ws_a.receive_json()["type"] == "subscribed"
+        ws_b.send_json({"type": "subscribe", "scene_id": SCENE_B})
+        assert ws_b.receive_json()["type"] == "subscribed"
+
+        # Simule un broadcast Director : envelope avec sentinel scene_id="*"
+        # et payload `scene.apply`. On passe par le portal anyio du
+        # TestClient pour que le `publish` execute dans la MEME loop que
+        # les subscribers serveur (InProcessEventBus expose des queues
+        # asyncio liees a la loop d'origine).
+        director_payload = {
+            "type": "scene.apply",
+            "kind": "outfit",
+            "id": "vip_fan",
+            "ts": "2026-04-25T10:30:00+00:00",
+            "version": 1,
+        }
+        director_envelope = {
+            "scene_id": "*",
+            "origin": "director",
+            "payload": director_payload,
+        }
+        client.portal.call(
+            event_bus.publish, "editor:broadcast", director_envelope,
+        )
+
+        # Les deux clients recoivent le payload meme s'ils sont subscribed
+        # a des scenes disjointes — c'est le bypass `scene.apply`.
+        ev_a = ws_a.receive_json()
+        assert ev_a == director_payload
+
+        ev_b = ws_b.receive_json()
+        assert ev_b == director_payload
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# PHASE E3 — SECURITY & VERSIONING
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def test_subscribe_rejects_wildcard_scene_id(client: TestClient, settings) -> None:
+    """L1 — scene_id="*" (wildcard) doit etre rejete pour defense-in-depth."""
+    token = _issue_token(settings, "alice")
+    with client.websocket_connect(f"/ws/editor?token={token}") as ws:
+        assert ws.receive_json()["type"] == "hello"
+        ws.send_json({"type": "subscribe", "scene_id": "*"})
+        err = ws.receive_json()
+        assert err["type"] == "error"
+        assert err["code"] == "invalid_scene_id"
+
+
+def test_subscribe_rejects_invalid_scene_id_pattern(
+    client: TestClient, settings,
+) -> None:
+    """L1 — scene_id invalide (spéciaux non-alphanumériques) doit être rejeté."""
+    token = _issue_token(settings, "alice")
+    with client.websocket_connect(f"/ws/editor?token={token}") as ws:
+        assert ws.receive_json()["type"] == "hello"
+        ws.send_json({"type": "subscribe", "scene_id": "../etc/passwd"})
+        err = ws.receive_json()
+        assert err["type"] == "error"
+        assert err["code"] == "invalid_scene_id"
+
+
+def test_scene_apply_not_delivered_if_origin_not_director(
+    client: TestClient, settings, event_bus,
+) -> None:
+    """L2 — scene.apply doit avoir origin="director" ; sinon il n'est pas
+    livré (defense-in-depth contre une source Redis compromise)."""
+    token = _issue_token(settings, "alice")
+    with client.websocket_connect(f"/ws/editor?token={token}") as ws:
+        assert ws.receive_json()["type"] == "hello"
+        ws.send_json({"type": "subscribe", "scene_id": SCENE_A})
+        assert ws.receive_json()["type"] == "subscribed"
+
+        # Simule une tentative de broadcast fake scene.apply depuis une
+        # source avec origin != "director" (e.g., compromised Redis peer).
+        fake_payload = {
+            "type": "scene.apply",
+            "kind": "outfit",
+            "id": "vip_fan",
+            "ts": "2026-04-25T10:30:00+00:00",
+            "version": 1,
+        }
+        fake_envelope = {
+            "scene_id": "*",
+            "origin": "attacker",  # << pas "director"
+            "payload": fake_payload,
+        }
+        client.portal.call(
+            event_bus.publish, "editor:broadcast", fake_envelope,
+        )
+
+        # Client ne doit pas recevoir ce payload — on lance un ping pour se
+        # recaler et verifier qu'aucun scene.apply n'est arrive.
+        ws.send_json({"type": "ping", "nonce": "verify"})
+        recv = ws.receive_json()
+        assert recv["type"] == "pong"
+        assert recv.get("nonce") == "verify"
+        # Si le fake scene.apply avait ete livre, recv aurait ete le payload
+        # à la place du pong -> on serait desynchro.

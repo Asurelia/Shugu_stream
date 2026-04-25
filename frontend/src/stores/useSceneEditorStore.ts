@@ -81,6 +81,50 @@ export const LAYOUT_PRESETS: readonly LayoutPreset[] = [
   "Custom…",
 ] as const;
 
+/**
+ * Phase E3 — kinds supportés dans le payload `scene.apply` broadcast par
+ * le Director backend. Chaque kind correspond à un tag inline émis par
+ * Shugu Soul (E2) et exécuté par le worker du même nom (cf.
+ * `backend/shugu/director/workers/`). Le frontend route ces events via
+ * `useEditorWebSocket` → `dispatchSceneApply` → `<ViewerAdapter>`.
+ *
+ * `say_emotion` est livré ici pour traçabilité (debug, logs front), mais
+ * n'a pas d'effet visuel sur le viewer 3D — le tag est consommé en E4 par
+ * le pipeline TTS pour choisir un preset voix.
+ */
+export type SceneApplyKind =
+  | "outfit"
+  | "vfx"
+  | "anim"
+  | "face"
+  | "say_emotion"
+  | "camera"
+  | "scene";
+
+/**
+ * Payload `scene.apply` reçu via WS, normalisé pour le store.
+ *
+ * `seq` est local au store (incrémenté à chaque `dispatchSceneApply`) — il
+ * permet à un `useEffect([lastSceneApply])` de re-trigger même si le
+ * backend ré-émet exactement le même `(kind, id)` (changement de la
+ * référence d'objet garanti). Sans `seq`, deux broadcasts identiques
+ * partageraient la même structure JSON parsée et useEffect skipperait.
+ */
+export type SceneApplyEvent = {
+  /** Discriminator du kind d'effet (cf. `SceneApplyKind`). */
+  kind: SceneApplyKind;
+  /** Slug de l'asset / mode (id pour outfit/vfx/anim/face/scene/say_emotion ; mode pour camera). */
+  id: string;
+  /** Durée d'effet en ms (VFX uniquement, sinon undefined). */
+  durationMs?: number;
+  /** Loop flag (animations uniquement). */
+  loop?: boolean;
+  /** Timestamp ISO-8601 d'émission backend (debug, logs). */
+  ts?: string;
+  /** Numéro de séquence local (incrémenté à chaque dispatch). */
+  seq: number;
+};
+
 /* ─────────────────────────── STATE ─────────────────────────── */
 
 export interface SceneEditorState {
@@ -124,6 +168,18 @@ export interface SceneEditorState {
    * câblée ; c'est intentionnel (pas de régression de l'éditeur local).
    */
   remoteDraftDeltas: Record<string, unknown>;
+
+  /**
+   * Dernier event `scene.apply` reçu sur `/ws/editor` (Phase E3 — broadcast
+   * Director vers le viewer). Stocke un champ unique pour que les
+   * `ViewerAdapter` montés (vue edit ET vue preview, cf. `panels-main.tsx`)
+   * puissent réagir simultanément via un `useEffect([lastSceneApply])` sans
+   * créer une seconde WS. La sérialisation `seq` (incrémenté par chaque
+   * dispatch) garantit qu'un même payload reçu deux fois déclenche bien
+   * deux callbacks (le shallow-equal de useEffect compare la ref de l'objet,
+   * mais on veut un re-trigger sur dispatch identique).
+   */
+  lastSceneApply: SceneApplyEvent | null;
 
   /* ---- UI actions ---- */
   setCurrentScene: (id: string) => void;
@@ -182,6 +238,26 @@ export interface SceneEditorState {
    * vrai write-back des gestes live).
    */
   applyRemoteDraftUpdate: (delta: Record<string, unknown>) => void;
+
+  /**
+   * Phase E3 — dispatch d'un payload `scene.apply` reçu sur `/ws/editor`.
+   *
+   * Construit un `SceneApplyEvent` normalisé et le pose dans `lastSceneApply`.
+   * Les `<ViewerAdapter>` montés réagissent via `useEffect([lastSceneApply])`
+   * et appellent les méthodes impératives du viewer (swapTexture,
+   * playAnimation, setBlendshape, showVfxOverlay).
+   *
+   * `seq` est incrémenté à chaque appel — garantit qu'un même `(kind, id)`
+   * envoyé deux fois fait bien re-trigger l'effet (sinon useEffect compare
+   * les refs d'objet et skip un dispatch identique).
+   */
+  dispatchSceneApply: (payload: {
+    kind: SceneApplyKind;
+    id: string;
+    durationMs?: number;
+    loop?: boolean;
+    ts?: string;
+  }) => void;
 
   /** Réinitialise l'état UI (utile pour tests et pour un "Close all"). */
   resetUI: () => void;
@@ -310,6 +386,8 @@ const INITIAL_UI_STATE = {
   // `resetUI()` au même titre que les autres champs non persistés.
   peers: [] as string[],
   remoteDraftDeltas: {} as Record<string, unknown>,
+  // Phase E3 : event Director le plus récent. `null` au boot et après reset.
+  lastSceneApply: null as SceneApplyEvent | null,
 };
 
 /* ─────────────────────────── STORE ─────────────────────────── */
@@ -386,6 +464,23 @@ export const useSceneEditorStore = create<SceneEditorState>()(
       applyRemoteDraftUpdate: (delta) =>
         set((state) => ({
           remoteDraftDeltas: { ...state.remoteDraftDeltas, ...delta },
+        })),
+
+      /* ─── Phase E3 — Director scene.apply dispatch ─── */
+      dispatchSceneApply: (payload) =>
+        set((state) => ({
+          lastSceneApply: {
+            kind: payload.kind,
+            id: payload.id,
+            durationMs: payload.durationMs,
+            loop: payload.loop,
+            ts: payload.ts,
+            // Incrémente la séquence — compteur partagé du store. Réutilise
+            // l'ancien `seq` via `state.lastSceneApply` plutôt qu'un compteur
+            // module-level pour que `resetUI()` remette aussi `seq` à 0
+            // (tests : isolation entre cas successifs).
+            seq: (state.lastSceneApply?.seq ?? 0) + 1,
+          },
         })),
 
       resetUI: () => set({ ...INITIAL_UI_STATE }),
@@ -483,3 +578,7 @@ export const selectTimeline = (s: SceneEditorState): TimelineData => s.timeline;
 export const selectPeers = (s: SceneEditorState): string[] => s.peers;
 export const selectRemoteDraftDeltas = (s: SceneEditorState): Record<string, unknown> =>
   s.remoteDraftDeltas;
+
+/* ─── Phase E3 — Director scene.apply selector ─── */
+export const selectLastSceneApply = (s: SceneEditorState): SceneApplyEvent | null =>
+  s.lastSceneApply;
