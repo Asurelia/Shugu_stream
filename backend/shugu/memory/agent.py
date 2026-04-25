@@ -383,7 +383,11 @@ class MemoryAgent:
             )
             session.add(row)
 
-        # 3) Publish memory.episode_stored — préparé pour PR 3 FactExtractor.
+        # 3) Publish memory.episode_stored — PR 3 FactExtractor.
+        # Le payload contient le texte brut (ou redacté si des secrets ont été
+        # détectés) pour que ExtractionWorker puisse extraire des facts SANS
+        # round-trip DB. Champs additionnels (redacted_payload, payload) conservés
+        # pour rétrocompat avec les consumers existants qui ignorent les clés inconnues.
         # Best-effort : une exception côté bus ne doit pas casser l'INSERT
         # déjà committé. On log + swallow.
         if self._event_bus is not None:
@@ -399,6 +403,12 @@ class MemoryAgent:
                         "session_id": ep.session_id,
                         "performance_id": ep.performance_id,
                         "had_redaction": redacted_payload is not None,
+                        # PR 3 — données pour ExtractionWorker sans round-trip DB.
+                        # Si redacted_payload existe (secrets trouvés), on l'utilise
+                        # (texte nettoyé) ; sinon le payload brut. Le worker extrait
+                        # les facts depuis le champ `text` du payload si présent.
+                        "redacted_payload": redacted_payload if redacted_payload is not None else ep.payload,
+                        "payload": ep.payload,
                     },
                 )
             except Exception as exc:
