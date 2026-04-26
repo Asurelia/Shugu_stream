@@ -44,11 +44,11 @@ Un parse robuste avec fallback log + skip en cas de réponse invalide.
 from __future__ import annotations
 
 import json
-import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional
 
+import structlog
 from ulid import ULID
 
 from .agent import MemoryAgent
@@ -58,7 +58,7 @@ from .types import MemoryItem
 # pour éviter de dépasser la fenêtre de contexte (chaque fact ~ 50-80 tokens).
 _MAX_FACTS_PER_PROMPT = 100
 
-log = logging.getLogger(__name__)
+log = structlog.get_logger(__name__)
 
 
 @dataclass(slots=True)
