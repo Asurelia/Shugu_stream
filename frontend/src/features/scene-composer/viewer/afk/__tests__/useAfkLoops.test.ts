@@ -156,21 +156,14 @@ describe("useAfkLoops hook", () => {
     vi.restoreAllMocks();
   });
 
-  function makeCanvas(): React.RefObject<HTMLCanvasElement | null> {
-    const canvas = document.createElement("canvas");
-    return { current: canvas };
-  }
-
   it("déclenche setCurrentVrmaUrl après idleSeconds quand playMode=playing", () => {
     const setCurrentVrmaUrl = vi.fn();
-    const canvasRef = makeCanvas();
     const catalogue: VrmaAnimationEntry[] = [
       makeVrma("idle_stand", "/idle_stand.vrma", true),
     ];
 
     renderHook(() =>
       useAfkLoops({
-        canvasRef,
         playMode: "playing",
         afkLoops: { enabled: true, viewerThreshold: 5, idleSeconds: 30 },
         vrmaCatalogue: catalogue,
@@ -189,12 +182,10 @@ describe("useAfkLoops hook", () => {
 
   it("ne déclenche pas si playMode='stopped'", () => {
     const setCurrentVrmaUrl = vi.fn();
-    const canvasRef = makeCanvas();
     const catalogue: VrmaAnimationEntry[] = [makeVrma("idle", "/idle.vrma", true)];
 
     renderHook(() =>
       useAfkLoops({
-        canvasRef,
         playMode: "stopped",
         afkLoops: DEFAULT_AFD_CONFIG,
         vrmaCatalogue: catalogue,
@@ -212,11 +203,9 @@ describe("useAfkLoops hook", () => {
 
   it("ne déclenche pas si le catalogue est vide", () => {
     const setCurrentVrmaUrl = vi.fn();
-    const canvasRef = makeCanvas();
 
     renderHook(() =>
       useAfkLoops({
-        canvasRef,
         playMode: "playing",
         afkLoops: DEFAULT_AFD_CONFIG,
         vrmaCatalogue: [],
@@ -234,12 +223,10 @@ describe("useAfkLoops hook", () => {
 
   it("cleanup clearInterval au unmount — pas d'appel après démontage", () => {
     const setCurrentVrmaUrl = vi.fn();
-    const canvasRef = makeCanvas();
     const catalogue: VrmaAnimationEntry[] = [makeVrma("idle", "/idle.vrma", true)];
 
     const { unmount } = renderHook(() =>
       useAfkLoops({
-        canvasRef,
         playMode: "playing",
         afkLoops: { enabled: true, viewerThreshold: 5, idleSeconds: 1 },
         vrmaCatalogue: catalogue,
@@ -259,14 +246,12 @@ describe("useAfkLoops hook", () => {
     expect(setCurrentVrmaUrl).not.toHaveBeenCalled();
   });
 
-  it("activité pointermove reset le délai (pas de déclenchement si actif)", () => {
+  it("activité pointermove (window) reset le délai (pas de déclenchement si actif)", () => {
     const setCurrentVrmaUrl = vi.fn();
-    const canvasRef = makeCanvas();
     const catalogue: VrmaAnimationEntry[] = [makeVrma("idle", "/idle.vrma", true)];
 
     renderHook(() =>
       useAfkLoops({
-        canvasRef,
         playMode: "playing",
         afkLoops: { enabled: true, viewerThreshold: 5, idleSeconds: 30 },
         vrmaCatalogue: catalogue,
@@ -279,7 +264,6 @@ describe("useAfkLoops hook", () => {
     act(() => { vi.advanceTimersByTime(20_000); });
 
     // Simule activité pointermove sur window → reset lastActivityAt
-    // (le listener est sur window, pas sur canvasRef.current)
     act(() => {
       window.dispatchEvent(new Event("pointermove"));
     });
@@ -291,14 +275,12 @@ describe("useAfkLoops hook", () => {
     expect(setCurrentVrmaUrl).not.toHaveBeenCalled();
   });
 
-  it("activité keydown window reset le délai (pas de déclenchement si actif)", () => {
+  it("activité keydown (window) reset le délai (pas de déclenchement si actif)", () => {
     const setCurrentVrmaUrl = vi.fn();
-    const canvasRef = makeCanvas();
     const catalogue: VrmaAnimationEntry[] = [makeVrma("idle", "/idle.vrma", true)];
 
     renderHook(() =>
       useAfkLoops({
-        canvasRef,
         playMode: "playing",
         afkLoops: { enabled: true, viewerThreshold: 5, idleSeconds: 30 },
         vrmaCatalogue: catalogue,

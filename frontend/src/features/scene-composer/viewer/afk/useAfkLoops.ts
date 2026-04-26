@@ -66,11 +66,6 @@ const IDLE_KEYWORDS = ["idle", "breathe", "wait", "stand"] as const;
 
 /** Paramètres d'entrée du hook useAfkLoops. */
 export interface UseAfkLoopsParams {
-  /**
-   * Référence au canvas Three.js — utilisée pour écouter `pointermove`
-   * et mettre à jour `lastActivityAt`.
-   */
-  canvasRef: React.RefObject<HTMLCanvasElement | null>;
   /** Mode de lecture actuel (du store). */
   playMode: PlayMode;
   /** Configuration des boucles AFK (du store). */
@@ -175,7 +170,6 @@ export function checkAfkConditions(
  * @example
  * ```tsx
  * const { afkActive } = useAfkLoops({
- *   canvasRef,
  *   playMode,
  *   afkLoops,
  *   vrmaCatalogue: catalog?.vrma_animations ?? [],
@@ -185,7 +179,6 @@ export function checkAfkConditions(
  * ```
  */
 export function useAfkLoops({
-  canvasRef,
   playMode,
   afkLoops,
   vrmaCatalogue,

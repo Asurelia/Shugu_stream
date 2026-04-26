@@ -22,7 +22,7 @@
  */
 
 import dynamic from "next/dynamic";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   useSceneComposerStore,
   selectCameraPreset,
@@ -141,7 +141,6 @@ type RightTab = "inspector" | "assets";
  *
  * Responsabilités E5.4 ajoutées :
  * - Charge le catalogue VRMA au mount (pour useAfkLoops)
- * - Câble useAfkLoops avec la canvasRef (partagée avec le viewer via prop)
  * - Passe currentVrmaUrl comme vrmaUrl au viewer
  * - Rend PlayModeToolbar au-dessus du viewer
  */
@@ -171,16 +170,10 @@ export function SceneComposerApp({
       });
   }, []);
 
-  // Ref canvas partagée : SceneComposerViewer la gère, useAfkLoops l'écoute.
-  // Note : SceneComposerViewer gère son propre canvasRef interne via useSceneRig.
-  // useAfkLoops reçoit une ref séparée et lit les events sur le DOM réel une fois monté.
-  // Le viewer monte avant useAfkLoops ne commence à écouter (poll toutes les 5s).
-  const afkCanvasRef = useRef<HTMLCanvasElement | null>(null);
-
   // useAfkLoops — boucles AFK déterministes.
+  // Les listeners pointermove + keydown sont sur window (pas sur un canvasRef).
   // currentViewerCount=0 pour E5.4 (câblage réel prévu phase ultérieure).
   const { afkActive } = useAfkLoops({
-    canvasRef: afkCanvasRef,
     playMode,
     afkLoops,
     vrmaCatalogue,
