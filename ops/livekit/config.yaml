@@ -22,9 +22,11 @@ rtc:
 
 # TURN server intégré (pour les clients VIP derrière NAT restrictif).
 # TLS géré par Cloudflare Tunnel en front — on fait du TCP clair en interne.
+# Note : le champ `tcp_port` a été retiré dans une version récente de livekit-server
+# (cause "field tcp_port not found in type config.TURNConfig"). Le port TURN TCP
+# par défaut reste 5349 — pas besoin de le préciser explicitement.
 turn:
   enabled: true
-  tcp_port: 5349
   domain: turn.spoukie.uk
 
 # Logging
