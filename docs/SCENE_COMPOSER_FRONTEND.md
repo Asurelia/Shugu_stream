@@ -6,7 +6,7 @@ Documentation de l'implémentation du Scene Composer frontend.
 
 ```mermaid
 graph TD
-    PAGE["pages/shugu/admin/scene-composer.tsx<br/>(route Next.js statique)"]
+    PAGE["pages/[username]/admin/scene-composer.tsx<br/>(route Next.js dynamic)"]
     GUARD["AdminAuthGuard<br/>(auth + redirect)"]
     APP["SceneComposerApp<br/>(shell principal)"]
     STORE["useSceneComposerStore<br/>(UI state Zustand)"]
@@ -41,12 +41,15 @@ graph TD
 
 | Fichier | Description |
 |---|---|
-| `pages/shugu/admin/scene-composer.tsx` | Route statique Next.js, AdminAuthGuard, dynamic import ssr:false |
+| `pages/[username]/admin/scene-composer.tsx` | **Route officielle** dynamic Next.js (alignement pattern `scene-editor.tsx`), AdminAuthGuard, dynamic import ssr:false |
+| `pages/shugu/admin/scene-composer.tsx` | Route legacy → redirect 308 vers `/${username}/admin/scene-composer` (server-side via `getServerSideProps` + fallback client) |
 
-**Note route statique** : la route est sous `/shugu/admin/` (pas `[username]/admin/`)
-car `AdminAuthGuard` hardcode un redirect vers `/${username}/admin/scene-editor`
-sur mismatch d'username, ce qui créerait une boucle si le Composer était sous
-`[username]/admin/scene-composer`. Cohérent avec `scene-editor-popout.tsx`.
+**Note alignement** (fix M2 PR #26) : avant la review, la route était sous
+`/shugu/admin/scene-composer` (statique) — incohérent avec `scene-editor.tsx`
+qui est sous `[username]/admin/`. M2 aligne sur le pattern dynamic et conserve
+l'ancienne route comme alias redirect (compat bookmarks). Le redirect mismatch
+d'`AdminAuthGuard` ligne 96 cible toujours `scene-editor` — un fix transverse
+pour préserver le path est listé en TODO mais hors scope M2.
 
 ### Shell
 
@@ -111,7 +114,7 @@ sequenceDiagram
     participant Catalog as AssetCataloguePanel
     participant Backend as Backend API
 
-    User->>Page: Navigue vers /shugu/admin/scene-composer
+    User->>Page: Navigue vers /[username]/admin/scene-composer
     Page->>Guard: Vérifie auth
     Guard-->>App: operator validé
     App->>List: mount → listScenes()
