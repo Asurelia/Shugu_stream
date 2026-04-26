@@ -316,35 +316,41 @@ export function SceneComposerViewer({
 
       resizeObserver.disconnect();
 
-      // Dispose E5.3 : gizmo + selection + props (avant disposeAll).
+      // E5.3 fix M1 : dispose gizmo AVANT meshes (le gizmo peut détenir
+      // controls.object pointant vers un mesh ; le détacher d'abord évite
+      // les références à des geometries libérées). Selection idem.
       selectionHandle.dispose();
-
-      // Dispose toutes les props de la scène.
-      for (const [, obj] of meshRegistryRef.current) {
-        sceneRig.scene.remove(obj);
-        disposePropInstance(obj);
-      }
-      meshRegistryRef.current.clear();
-
       gizmoHandle.dispose();
       gizmoHandleRef.current = null;
 
-      disposeAll({
-        renderer: sceneRigRef.current?.renderer,
-        scene: sceneRigRef.current?.scene,
-        floor: sceneRigRef.current?.floor,
-        controls: cameraRigRef.current?.controls,
-        vrm: vrmRef.current,
-        helpers: helpersRef.current,
-        animRig: animRigRef.current,
-      });
+      // E5.3 fix M1 : try/finally garantit que disposeAll tourne même si
+      // disposePropInstance throw sur un material corrompu.
+      try {
+        // Dispose toutes les props de la scène.
+        for (const [, obj] of meshRegistryRef.current) {
+          sceneRig.scene.remove(obj);
+          disposePropInstance(obj);
+        }
+      } finally {
+        meshRegistryRef.current.clear();
 
-      sceneRigRef.current = null;
-      cameraRigRef.current = null;
-      cameraRefForHooks.current = null;
-      helpersRef.current = null;
-      vrmRef.current = null;
-      animRigRef.current = null;
+        disposeAll({
+          renderer: sceneRigRef.current?.renderer,
+          scene: sceneRigRef.current?.scene,
+          floor: sceneRigRef.current?.floor,
+          controls: cameraRigRef.current?.controls,
+          vrm: vrmRef.current,
+          helpers: helpersRef.current,
+          animRig: animRigRef.current,
+        });
+
+        sceneRigRef.current = null;
+        cameraRigRef.current = null;
+        cameraRefForHooks.current = null;
+        helpersRef.current = null;
+        vrmRef.current = null;
+        animRigRef.current = null;
+      }
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // Mount-only — les props dynamiques sont lues via refs.
@@ -405,8 +411,8 @@ export function SceneComposerViewer({
         scene.remove(obj);
         disposePropInstance(obj);
         meshRegistryRef.current.delete(id);
-        // Si l'instance supprimée était sélectionnée, désélectionner.
-        // (lecture via closure — setSelectedMeshId est stable Zustand)
+        // Note : la désélection automatique de selectedMeshId quand une instance est
+        // supprimée est gérée au niveau du store (removePropInstance — fix E5.3 C2).
       }
     }
   }, [propInstances]);

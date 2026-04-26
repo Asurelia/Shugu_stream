@@ -69,6 +69,8 @@ const GROUND_PLANE = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
  * Parse le payload de drag depuis le dataTransfer.
  *
  * Retourne `null` si le payload est absent, malformé, ou n'est pas un prop_3d.
+ *
+ * Valide la structure de Prop3DEntry (slug et file requis).
  */
 function parsePropDragPayload(transfer: DataTransfer): PropDragPayload | null {
   const raw = transfer.getData(PROP_DRAG_MIME);
@@ -83,6 +85,12 @@ function parsePropDragPayload(transfer: DataTransfer): PropDragPayload | null {
       (parsed as { kind: unknown }).kind === "prop_3d" &&
       "asset" in parsed
     ) {
+      // Validation supplémentaire : la structure asset doit être un objet avec slug string et file string.
+      const asset = (parsed as { asset: unknown }).asset;
+      if (typeof asset !== "object" || asset === null) return null;
+      if (typeof (asset as { slug?: unknown }).slug !== "string" || (asset as { slug: string }).slug.length === 0) return null;
+      if (typeof (asset as { file?: unknown }).file !== "string" || (asset as { file: string }).file.length === 0) return null;
+
       return parsed as PropDragPayload;
     }
   } catch {

@@ -296,3 +296,42 @@ describe("useSceneComposerStore · resetUI E5.3", () => {
     expect(selectPropInstances(state)).toEqual({});
   });
 });
+
+describe("useSceneComposerStore · C2 fix — removePropInstance reset selection", () => {
+  it("removePropInstance reset selectedMeshId si l'instance retirée était sélectionnée", () => {
+    // Setup : add prop + select it
+    useSceneComposerStore.getState().addPropInstance({
+      id: "inst_001",
+      assetSlug: "lamp",
+      transform: { position: [0, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1] },
+    });
+    useSceneComposerStore.getState().setSelectedMeshId("inst_001");
+    expect(useSceneComposerStore.getState().selectedMeshId).toBe("inst_001");
+
+    // Remove the selected instance
+    useSceneComposerStore.getState().removePropInstance("inst_001");
+
+    // Selection should be cleared
+    expect(useSceneComposerStore.getState().selectedMeshId).toBeNull();
+    expect(useSceneComposerStore.getState().propInstances["inst_001"]).toBeUndefined();
+  });
+
+  it("removePropInstance ne touche pas selectedMeshId si une AUTRE instance est sélectionnée", () => {
+    useSceneComposerStore.getState().addPropInstance({
+      id: "inst_A",
+      assetSlug: "lamp",
+      transform: { position: [0, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1] },
+    });
+    useSceneComposerStore.getState().addPropInstance({
+      id: "inst_B",
+      assetSlug: "chair",
+      transform: { position: [0, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1] },
+    });
+    useSceneComposerStore.getState().setSelectedMeshId("inst_A");
+
+    useSceneComposerStore.getState().removePropInstance("inst_B");
+
+    expect(useSceneComposerStore.getState().selectedMeshId).toBe("inst_A");
+    expect(useSceneComposerStore.getState().propInstances["inst_B"]).toBeUndefined();
+  });
+});

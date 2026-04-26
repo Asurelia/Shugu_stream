@@ -22,7 +22,7 @@
  * @module panels/SceneInspectorPanel
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   getScene,
   type AuthoredSceneOut,
@@ -378,9 +378,11 @@ export function SceneInspectorPanel() {
   const selectedMeshId = useSceneComposerStore(selectSelectedMeshId);
 
   // Sélecteur dynamique pour l'instance de prop sélectionnée.
-  const selectedPropInstance = useSceneComposerStore(
-    selectedMeshId ? selectPropInstance(selectedMeshId) : () => undefined,
+  const propInstanceSelector = useMemo(
+    () => (selectedMeshId ? selectPropInstance(selectedMeshId) : () => undefined),
+    [selectedMeshId],
   );
+  const selectedPropInstance = useSceneComposerStore(propInstanceSelector);
 
   const [scene, setScene] = useState<AuthoredSceneOut | null>(null);
   const [loading, setLoading] = useState(false);

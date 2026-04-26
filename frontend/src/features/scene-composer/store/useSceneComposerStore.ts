@@ -152,7 +152,10 @@ export const useSceneComposerStore = create<SceneComposerState>()((set) => ({
     set((state) => {
       const next = { ...state.propInstances };
       delete next[id];
-      return { propInstances: next };
+      return {
+        propInstances: next,
+        selectedMeshId: state.selectedMeshId === id ? null : state.selectedMeshId,
+      };
     }),
 
   updateMeshTransform: (id, transform) =>

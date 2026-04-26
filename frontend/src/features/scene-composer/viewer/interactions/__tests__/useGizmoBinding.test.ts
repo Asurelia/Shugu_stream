@@ -67,11 +67,13 @@ function makeTestObject(
   pos: [number, number, number] = [0, 0, 0],
   rotRad: [number, number, number] = [0, 0, 0],
   scl: [number, number, number] = [1, 1, 1],
+  instanceId = "default_mesh",
 ): THREE.Object3D {
   const obj = new THREE.Object3D();
   obj.position.set(...pos);
   obj.rotation.set(...rotRad);
   obj.scale.set(...scl);
+  obj.userData["instanceId"] = instanceId;
   return obj;
 }
 
@@ -108,7 +110,7 @@ describe("useGizmoBindingWithCallbacks · onGizmoChange extraction", () => {
       useGizmoBindingWithCallbacks({ gizmoHandle, meshRegistry }),
     );
 
-    const obj = makeTestObject([1.5, 0.5, -2.0]);
+    const obj = makeTestObject([1.5, 0.5, -2.0], [0, 0, 0], [1, 1, 1], "mesh_test");
 
     act(() => {
       result.current.onGizmoChange(obj);
@@ -138,7 +140,7 @@ describe("useGizmoBindingWithCallbacks · onGizmoChange extraction", () => {
     );
 
     // 90° en radians = Math.PI / 2.
-    const obj = makeTestObject([0, 0, 0], [0, Math.PI / 2, 0]);
+    const obj = makeTestObject([0, 0, 0], [0, Math.PI / 2, 0], [1, 1, 1], "mesh_rot");
 
     act(() => {
       result.current.onGizmoChange(obj);
@@ -168,9 +170,9 @@ describe("useGizmoBindingWithCallbacks · onGizmoChange extraction", () => {
       useGizmoBindingWithCallbacks({ gizmoHandle, meshRegistry }),
     );
 
-    const obj1 = makeTestObject([1, 0, 0]);
-    const obj2 = makeTestObject([2, 0, 0]);
-    const obj3 = makeTestObject([3, 0, 0]);
+    const obj1 = makeTestObject([1, 0, 0], [0, 0, 0], [1, 1, 1], "mesh_db");
+    const obj2 = makeTestObject([2, 0, 0], [0, 0, 0], [1, 1, 1], "mesh_db");
+    const obj3 = makeTestObject([3, 0, 0], [0, 0, 0], [1, 1, 1], "mesh_db");
 
     act(() => {
       result.current.onGizmoChange(obj1);
@@ -290,5 +292,77 @@ describe("useGizmoBindingWithCallbacks · sync selectedMeshId → gizmo attach",
     });
 
     expect(mockAttach).toHaveBeenCalledWith(mesh);
+  });
+});
+
+describe("useGizmoBindingWithCallbacks · C1 fix — RAF instanceId binding (race condition)", () => {
+  it("sélection change avant le RAF flush → le transform du mesh source est appliqué (pas du mesh sélectionné)", async () => {
+    // TDD TEST : vérifie que le bug C1 est corrigé.
+    // Setup : 2 meshes A et B, A sélectionné initialement.
+    useSceneComposerStore.getState().addPropInstance({
+      id: "mesh_A",
+      assetSlug: "lamp",
+      transform: { position: [0, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1] },
+    });
+    useSceneComposerStore.getState().addPropInstance({
+      id: "mesh_B",
+      assetSlug: "chair",
+      transform: { position: [0, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1] },
+    });
+    useSceneComposerStore.getState().setSelectedMeshId("mesh_A");
+
+    const gizmoHandle = makeMockGizmoHandle();
+    const meshRegistry = { current: new Map<string, THREE.Object3D>() };
+    const meshA = makeTestObject([0, 0, 0]);
+    const meshB = makeTestObject([0, 0, 0]);
+    meshA.userData["instanceId"] = "mesh_A";
+    meshB.userData["instanceId"] = "mesh_B";
+    meshRegistry.current.set("mesh_A", meshA);
+    meshRegistry.current.set("mesh_B", meshB);
+
+    const { result } = renderHook(() =>
+      useGizmoBindingWithCallbacks({ gizmoHandle, meshRegistry }),
+    );
+
+    // Capture les RAF IDs pour les déclencher manuellement.
+    const rafCallbacks: Map<number, () => void> = new Map();
+    let rafIdCounter = 1;
+    const mockRequestAnimationFrame = vi.fn((cb) => {
+      const id = rafIdCounter++;
+      rafCallbacks.set(id, cb);
+      return id;
+    });
+    global.requestAnimationFrame = mockRequestAnimationFrame;
+
+    // Step 1 : drag sur mesh_A → bufferise le RAF avec les coordonnées de A.
+    const transformA = makeTestObject([1.5, 0.5, -2.0]);
+    transformA.userData["instanceId"] = "mesh_A";
+
+    act(() => {
+      result.current.onGizmoChange(transformA);
+    });
+
+    // Vérifie qu'un RAF a été programmé.
+    expect(mockRequestAnimationFrame).toHaveBeenCalled();
+    const rafId = rafIdCounter - 1;
+    const flushCallback = rafCallbacks.get(rafId);
+    expect(flushCallback).toBeDefined();
+
+    // Step 2 : avant le flush, change la sélection à mesh_B.
+    act(() => {
+      useSceneComposerStore.getState().setSelectedMeshId("mesh_B");
+    });
+
+    // Step 3 : déclenche le flush (le RAF).
+    act(() => {
+      flushCallback?.();
+    });
+
+    // EXPECT : updateMeshTransform a été appelé avec instanceId="mesh_A" (source du transform)
+    // et le transform de A, PAS celui de B (qui est sélectionné maintenant).
+    const state = useSceneComposerStore.getState();
+    expect(state.propInstances["mesh_A"]?.transform.position).toEqual([1.5, 0.5, -2.0]);
+    // mesh_B ne doit pas avoir été modifié (reste à [0, 0, 0]).
+    expect(state.propInstances["mesh_B"]?.transform.position).toEqual([0, 0, 0]);
   });
 });
