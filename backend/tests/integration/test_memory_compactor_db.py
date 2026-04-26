@@ -581,8 +581,9 @@ async def test_commit_compaction_atomic_no_partial_persist(
     )
 
     # Vérifie que les summaries sont stockés.
+    # Note : asyncpg requiert `= ANY(:ids)` au lieu de `IN (:ids)` pour bind un array.
     summary_rows = await db_session.execute(
-        text("SELECT id, is_compacted_summary FROM memory_facts WHERE id IN (:ids)"),
+        text("SELECT id, is_compacted_summary FROM memory_facts WHERE id = ANY(:ids)"),
         {"ids": [summary_1.id, summary_2.id]},
     )
     summaries_in_db = list(summary_rows)
@@ -593,9 +594,10 @@ async def test_commit_compaction_atomic_no_partial_persist(
         assert is_summary is True, f"summary {row_id} n'a pas le flag correct"
 
     # Vérifie que les sources sont archivées.
+    # Note : asyncpg requiert `= ANY(:ids)` au lieu de `IN (:ids)` pour bind un array.
     source_rows = await db_session.execute(
         text(
-            "SELECT id, compacted_at FROM memory_facts WHERE id IN (:ids)"
+            "SELECT id, compacted_at FROM memory_facts WHERE id = ANY(:ids)"
         ),
         {"ids": source_ids},
     )
