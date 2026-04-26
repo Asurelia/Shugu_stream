@@ -275,12 +275,12 @@ class ScenePlayer:
             return
 
         end_t = float(keyframes_sorted[-1].get("t", 0.0))
-        start = asyncio.get_event_loop().time()
+        start = asyncio.get_running_loop().time()
         next_idx = 0
         state = self._build_synthetic_state({})
 
         while True:
-            elapsed = asyncio.get_event_loop().time() - start
+            elapsed = asyncio.get_running_loop().time() - start
             # Dispatch toutes les keyframes dont t <= elapsed.
             while next_idx < len(keyframes_sorted):
                 kf = keyframes_sorted[next_idx]
