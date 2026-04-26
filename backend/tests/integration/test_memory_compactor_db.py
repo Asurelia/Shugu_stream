@@ -511,3 +511,71 @@ async def test_mark_facts_compacted_sets_compacted_at_and_returns_count(
     for fid in ids_to_archive:
         assert rows[fid] is not None, f"fact {fid} devrait avoir compacted_at set"
     assert rows[id_keep] is None, f"fact {id_keep} ne devrait pas être archivé"
+
+
+async def test_recall_filters_archived_facts_by_default(
+    db_session: AsyncSession,
+) -> None:
+    """recall() ne retourne que les facts actifs par défaut (compacted_at IS NULL).
+
+    Mémoire PR 4 — CRITICAL F :
+    - recall(RecallQuery(...)) → exclut les facts archivés (compacted_at != NULL).
+    - recall(RecallQuery(..., include_archived=True)) → inclut TOUT.
+
+    Scénario :
+    1. 3 facts actifs sur "viewer:test-archive"
+    2. Mark 2 comme archivés (compacted_at set)
+    3. recall() default → retourne 1 actif uniquement
+    4. recall(include_archived=True) → retourne les 3
+    """
+    from shugu.memory.types import RecallQuery
+
+    factory = _mk_session_factory(db_session)
+    agent = MemoryAgent(session_factory=factory)
+    subject = "viewer:test-archive"
+    now = datetime.now(timezone.utc)
+
+    # Insère 3 facts actifs.
+    id_1 = await _insert_fact_orm(
+        db_session,
+        subject=subject,
+        text_value="Fact actif 1",
+    )
+    id_2 = await _insert_fact_orm(
+        db_session,
+        subject=subject,
+        text_value="Fact actif 2",
+    )
+    id_3 = await _insert_fact_orm(
+        db_session,
+        subject=subject,
+        text_value="Fact actif 3",
+    )
+
+    await db_session.flush()
+
+    # Archive 2 des 3 facts.
+    await agent.mark_facts_compacted([id_1, id_2])
+
+    # recall() SANS include_archived → retourne SEULEMENT les facts actifs.
+    hits_default = await agent.recall(
+        RecallQuery(text="", subject=subject, limit=10)
+    )
+    assert len(hits_default) == 1, (
+        f"recall() default devrait retourner 1 actif, obtenu {len(hits_default)}"
+    )
+    assert hits_default[0].id == id_3, (
+        f"le seul actif devrait être {id_3}, obtenu {hits_default[0].id}"
+    )
+
+    # recall() AVEC include_archived=True → retourne TOUS les facts.
+    hits_all = await agent.recall(
+        RecallQuery(text="", subject=subject, limit=10, include_archived=True)
+    )
+    assert len(hits_all) == 3, (
+        f"recall(include_archived=True) devrait retourner 3 facts, obtenu {len(hits_all)}"
+    )
+    all_ids = {hit.id for hit in hits_all}
+    assert all_ids == {id_1, id_2, id_3}, (
+        f"ids manquants ou incorrects : {all_ids} vs {{{id_1}, {id_2}, {id_3}}}"
+    )

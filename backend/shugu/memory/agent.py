@@ -205,6 +205,10 @@ class MemoryAgent:
                 stmt = stmt.where(MemoryFact.subject == query.subject)
             if query.kinds:
                 stmt = stmt.where(MemoryFact.kind.in_(list(query.kinds)))
+            # Mémoire PR 4 — Filtre les facts archivés par défaut (compacted_at IS NULL).
+            # Si include_archived=True, retourner aussi les summaries + sources archivées.
+            if not query.include_archived:
+                stmt = stmt.where(MemoryFact.compacted_at.is_(None))
 
             if query_vec is not None:
                 # Cosine search. Filtre les rows sans embedding (stockées avant
