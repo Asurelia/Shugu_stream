@@ -14,7 +14,12 @@ Coverage :
 """
 from __future__ import annotations
 
+import os
 from contextlib import asynccontextmanager
+
+# IMPORTANT : set AVANT tout import de shugu.* pour que pydantic-settings
+# trouve la valeur avant le cache LRU ne se remplit.
+os.environ.setdefault("IP_HASH_SALT", "test-salt-32-chars-for-pytest-ok-")
 
 import pytest
 import pytest_asyncio
@@ -412,15 +417,57 @@ def test_play_scene_404_when_not_owner(
     assert resp.status_code == 404
 
 
-def test_play_scene_409_when_disabled_scene(operator_client: TestClient) -> None:
+def test_play_scene_409_when_disabled_scene(operator_client: TestClient, app) -> None:
     """Scene marquée enabled=false → 409 même si player wired."""
+    from unittest.mock import MagicMock
+
+    # Setup : créer une scene disabled
     body = {**_static_body(), "enabled": False}
     created = operator_client.post(
         "/api/scene-composer/scenes", json=body,
     ).json()
+
+    # Wire un mock scene_player (non-None) pour franchir le check player is None
+    # et atteindre le check enabled=false.
+    mock_player = MagicMock()
+    mock_player.is_playing = False
+    app.state.scene_player = mock_player
+
     resp = operator_client.post(
         f"/api/scene-composer/scenes/{created['id']}/play"
     )
-    # Ici 503 prend la priorité car player est None ; on vérifie juste que
-    # le code traverse jusqu'à un check (pas un crash).
-    assert resp.status_code in (409, 503)
+    assert resp.status_code == 409
+    assert "disabled" in resp.json()["detail"].lower()
+
+
+def test_play_scene_409_concurrent_via_lock(operator_client: TestClient, app) -> None:
+    """TOCTOU race condition: pre-check passe mais start_play() raise SceneAlreadyPlayingError → 409.
+
+    Simule le cas où 2 POST /play simultanés contournent le fast-path
+    is_playing=False, mais le lock dans start_play détecte la race et
+    raise SceneAlreadyPlayingError (qui doit être traduit en 409).
+    """
+    from unittest.mock import AsyncMock
+
+    from shugu.scene_composer.player import SceneAlreadyPlayingError
+
+    # Setup : créer une scene enabled
+    created = operator_client.post(
+        "/api/scene-composer/scenes", json=_static_body(),
+    ).json()
+
+    # Wire un mock scene_player qui simule la race :
+    # - is_playing = False (le pre-check passe)
+    # - start_play() raise SceneAlreadyPlayingError (le lock détecte la contention)
+    mock_player = AsyncMock()
+    mock_player.is_playing = False
+    mock_player.start_play.side_effect = SceneAlreadyPlayingError("test concurrent")
+    app.state.scene_player = mock_player
+
+    resp = operator_client.post(
+        f"/api/scene-composer/scenes/{created['id']}/play"
+    )
+    assert resp.status_code == 409
+    # Le detail contient le message du SceneAlreadyPlayingError, qui peut varier.
+    # On vérife juste qu'un erreur est présent (pas vide).
+    assert resp.json()["detail"]
