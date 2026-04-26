@@ -20,22 +20,117 @@
 
 export type SceneType = "static" | "timeline" | "loop";
 
-export interface TriggerSpec {
-  kind:
-    | "manual"
-    | "viewer_count_below"
-    | "silence_for"
-    | "schedule_cron"
-    | "stream_event";
-  [key: string]: unknown;
+// ─── TriggerSpec — discriminated union TS (miroir Pydantic v2) ───────────────
+
+/**
+ * Trigger manuel — déclenchement explicite via POST `/scenes/{id}/play`.
+ *
+ * Aucun champ requis hors `kind` ; correspond à `ManualTrigger` Pydantic.
+ */
+export interface ManualTriggerSpec {
+  kind: "manual";
 }
+
+/**
+ * Trigger AFK — déclenché quand le compteur viewers passe sous `threshold`.
+ *
+ * Wiring runtime en Phase E5.4. Bornes backend : `0 <= threshold <= 100_000`.
+ */
+export interface ViewerCountBelowTriggerSpec {
+  kind: "viewer_count_below";
+  /** Seuil viewer count (entier, 0..100000). */
+  threshold: number;
+}
+
+/**
+ * Trigger silence — déclenché après `seconds` secondes sans chat.
+ *
+ * Bornes backend : `5 <= seconds <= 3600`. Le nom du champ est `seconds`
+ * côté Pydantic (et NON `duration_s`) — cf. SilenceForTrigger ligne 98.
+ */
+export interface SilenceForTriggerSpec {
+  kind: "silence_for";
+  /** Durée silence en secondes (entier, 5..3600). */
+  seconds: number;
+}
+
+/**
+ * Trigger cron — déclenché à des moments fixes via expression cron.
+ *
+ * Le champ s'appelle `expr` côté Pydantic (et NON `cron_expr`) — cf.
+ * ScheduleCronTrigger ligne 109. La validation cron est déférée au scheduler
+ * Phase E5.4 (un cron mal formé désactive juste le trigger avec warning).
+ */
+export interface ScheduleCronTriggerSpec {
+  kind: "schedule_cron";
+  /** Expression cron 5-field (ex: `"*\/15 * * * *"`). 1..80 caractères. */
+  expr: string;
+}
+
+/**
+ * Trigger event stream — déclenché sur event Twitch / OBS.
+ *
+ * Le set d'events supportés est figé côté backend (Literal Pydantic). Tout
+ * event inconnu fait partir le payload en 422.
+ */
+export interface StreamEventTriggerSpec {
+  kind: "stream_event";
+  /** Type d'event stream supporté (Literal côté backend). */
+  event: "intro" | "outro" | "raid" | "follow" | "subscribe";
+}
+
+/**
+ * `TriggerSpec` — discriminated union miroir backend Pydantic v2.
+ *
+ * Chaque `kind` impose SES propres champs requis ; TypeScript narrow le type
+ * via le tag `kind`, ce qui permet au compilateur de rejeter des payloads
+ * mal formés AVANT le 422 backend.
+ *
+ * @example
+ * ```ts
+ * const t: TriggerSpec = { kind: "viewer_count_below", threshold: 5 };
+ * if (t.kind === "viewer_count_below") {
+ *   t.threshold; // typé number ici
+ * }
+ *
+ * // ❌ Erreur TS : `threshold` manquant
+ * const bad: TriggerSpec = { kind: "viewer_count_below" };
+ * ```
+ *
+ * Synchronisé avec `backend/shugu/domain/scene_composer_schemas.py` —
+ * `ManualTrigger`, `ViewerCountBelowTrigger`, `SilenceForTrigger`,
+ * `ScheduleCronTrigger`, `StreamEventTrigger`.
+ */
+export type TriggerSpec =
+  | ManualTriggerSpec
+  | ViewerCountBelowTriggerSpec
+  | SilenceForTriggerSpec
+  | ScheduleCronTriggerSpec
+  | StreamEventTriggerSpec;
+
+/**
+ * Forme **réponse** d'un trigger persisté.
+ *
+ * Backend retourne `list[dict[str, Any]]` (cf. `AuthoredSceneOut.triggers`
+ * Pydantic ligne 348) pour rester forward-compat : un trigger persisté
+ * avec un `kind` futur inconnu du serveur ne crash pas le GET.
+ *
+ * Côté client on garde un type laxiste pour les réponses (on peut narrow
+ * via `kind` à l'usage), mais on impose la discriminated union stricte
+ * en INPUT (création/update) — cf. `AuthoredSceneCreate.triggers`.
+ */
+export type TriggerSpecPersisted = { kind: string } & Record<string, unknown>;
 
 export interface AuthoredSceneOut {
   id: string;
   name: string;
   description: string | null;
   type: SceneType;
-  triggers: TriggerSpec[];
+  /**
+   * Triggers persistés (forme laxiste — backend renvoie list[dict[str, Any]]).
+   * Pour narrow vers la discriminated union, faire un `if (t.kind === ...)`.
+   */
+  triggers: TriggerSpecPersisted[];
   static_state: Record<string, unknown> | null;
   timeline_keyframes: Record<string, unknown>[] | null;
   loop_config: Record<string, unknown> | null;
@@ -49,6 +144,12 @@ export interface AuthoredSceneCreate {
   name: string;
   description?: string | null;
   type: SceneType;
+  /**
+   * Triggers à persister (input strict — discriminated union TriggerSpec).
+   *
+   * TypeScript rejette les payloads mal formés à la compilation
+   * (ex: `{ kind: "viewer_count_below" }` sans `threshold`).
+   */
   triggers?: TriggerSpec[];
   static_state?: Record<string, unknown> | null;
   timeline_keyframes?: Record<string, unknown>[] | null;
