@@ -632,6 +632,10 @@ class MemoryAgent:
 
         Single-writer rule : seul point d'entrée légal pour archiver des facts.
 
+        DEPRECATED en favour de `commit_compaction()` pour les batchs Compactor.
+        Conservé pour rétrocompat tests existants. Les nouveaux batchs doivent
+        utiliser commit_compaction() pour l'atomicité.
+
         Args:
             fact_ids: IDs des facts sources à archiver.
 
@@ -651,6 +655,105 @@ class MemoryAgent:
             )
             result = await session.execute(stmt)
             return result.rowcount
+
+    async def commit_compaction(
+        self,
+        summaries: list[MemoryItem],
+        source_ids: list[str],
+    ) -> int:
+        """Persiste atomiquement les summaries ET archive les sources en 1 seule transaction.
+
+        Mémoire PR 4 — CRITICAL Atomicité :
+        Remplace la succession N×store_compacted_summary() + mark_facts_compacted()
+        par une seule transaction. Si une erreur survient → aucune persistence
+        (rollback automatique), garantissant l'absence d'état partiel.
+
+        Pipeline (une seule session/tx) :
+        1. Insère tous les summaries avec is_compacted_summary=True +
+           compact_origin_ids=source_ids.
+        2. UPDATE tous les sources avec compacted_at=now().
+        3. Commit — ou rollback en cas d'erreur à n'importe quel point.
+
+        Single-writer rule : seul point d'entrée légal pour atomiser compaction.
+
+        Args:
+            summaries: Liste de MemoryItem pré-formés par le Compactor.
+            source_ids: IDs ULID des facts sources à archiver.
+
+        Returns:
+            Nombre de sources (rows) effectivement archivées.
+
+        Raises:
+            ValueError: Si embedding dim mismatch sur un summary.
+            Exception: Si DB transaction échoue (propagée — l'appelant doit handle).
+        """
+        if not summaries and not source_ids:
+            return 0
+
+        now = datetime.now(timezone.utc)
+
+        async with self._session_factory() as session:
+            # 1) Insère tous les summaries — auto-embed si contexte favorable.
+            for item in summaries:
+                if item.embedding is not None and len(item.embedding) != self._embed_dim:
+                    raise ValueError(
+                        f"embedding dim mismatch: got {len(item.embedding)}, "
+                        f"expected {self._embed_dim}",
+                    )
+
+                # Auto-embed si contexte favorable (même logique que store()).
+                summary_item = item
+                if (
+                    item.embedding is None
+                    and self._embedder is not None
+                    and item.text
+                ):
+                    vectors = await self._embedder.embed_documents([item.text])
+                    summary_item = dataclasses.replace(item, embedding=vectors[0])
+
+                stmt = pg_insert(MemoryFact).values(
+                    id=summary_item.id,
+                    kind=summary_item.kind,
+                    subject=summary_item.subject,
+                    text=summary_item.text,
+                    confidence=summary_item.confidence,
+                    source=summary_item.source,
+                    created_at=summary_item.created_at,
+                    last_used_at=summary_item.last_used_at,
+                    embedding=summary_item.embedding,
+                    # Champs Compactor — forcés ici.
+                    is_compacted_summary=True,
+                    compact_origin_ids=source_ids,
+                    compacted_at=None,  # Le summary lui-même est "actif".
+                )
+                stmt = stmt.on_conflict_do_update(
+                    index_elements=["id"],
+                    set_={
+                        "kind": stmt.excluded.kind,
+                        "subject": stmt.excluded.subject,
+                        "text": stmt.excluded.text,
+                        "confidence": stmt.excluded.confidence,
+                        "source": stmt.excluded.source,
+                        "last_used_at": stmt.excluded.last_used_at,
+                        "embedding": stmt.excluded.embedding,
+                        "is_compacted_summary": stmt.excluded.is_compacted_summary,
+                        "compact_origin_ids": stmt.excluded.compact_origin_ids,
+                    },
+                )
+                await session.execute(stmt)
+
+            # 2) Archive les sources — une seule UPDATE.
+            if source_ids:
+                stmt = (
+                    update(MemoryFact)
+                    .where(MemoryFact.id.in_(source_ids))
+                    .values(compacted_at=now)
+                    .execution_options(synchronize_session=False)
+                )
+                result = await session.execute(stmt)
+                return int(result.rowcount or 0)
+
+            return 0
 
 
 def _row_to_item(row: MemoryFact) -> MemoryItem:

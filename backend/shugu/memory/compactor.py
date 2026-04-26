@@ -212,11 +212,14 @@ class MemoryCompactor:
                 error="LLM a retourné 0 facts résumés",
             )
 
-        # 5) Crée les summary facts via MemoryAgent (single-writer).
+        # 5+6) Crée les summaries ET archive les sources en UNE SEULE transaction.
+        # Mémoire PR 4 — CRITICAL Atomicité : commit_compaction() garantit que
+        # soit TOUT persiste (summaries + sources archivées), soit RIEN.
         source_ids = [f.id for f in facts_to_compact]
         now = datetime.now(timezone.utc)
-        summaries_stored = 0
 
+        # Construit les summaries à partir des specs.
+        summaries = []
         for spec in summary_specs:
             summary_item = MemoryItem(
                 id=str(ULID()),
@@ -227,55 +230,45 @@ class MemoryCompactor:
                 source="compaction_llm",
                 created_at=now,
             )
-            try:
-                await self._agent.store_compacted_summary(
-                    summary_item,
-                    origin_ids=source_ids,
-                )
-                summaries_stored += 1
-            except Exception as exc:
-                log.error(
-                    "compactor.store_summary_error",
-                    subject=subject_key,
-                    predicate=spec.get("predicate"),
-                    error=repr(exc),
-                )
-                # On continue — un échec de store ne doit pas bloquer les autres.
+            summaries.append(summary_item)
 
-        if summaries_stored == 0:
+        if not summaries:
             return CompactionResult(
                 subject_key=subject_key,
                 source_count=len(facts_to_compact),
-                error="Aucun summary fact n'a pu être stocké",
+                error="Aucun summary fact à créer",
             )
 
-        # 6) Archive les sources (soft-archive — conservés pour audit).
+        # Appel atomique unique.
         try:
-            archived_count = await self._agent.mark_facts_compacted(source_ids)
+            archived_count = await self._agent.commit_compaction(
+                summaries=summaries,
+                source_ids=source_ids,
+            )
         except Exception as exc:
             log.error(
-                "compactor.archive_error",
+                "compactor.commit_compaction_error",
                 subject=subject_key,
                 source_count=len(source_ids),
+                summary_count=len(summaries),
                 error=repr(exc),
             )
             return CompactionResult(
                 subject_key=subject_key,
                 source_count=len(facts_to_compact),
-                summary_count=summaries_stored,
-                error=f"Archive error (summaries créés mais sources non archivées): {exc}",
+                error=f"Compaction atomique échouée (0 persistence garantie): {exc}",
             )
 
         log.info(
             "compactor.compacted",
             subject=subject_key,
             source_count=archived_count,
-            summary_count=summaries_stored,
+            summary_count=len(summaries),
         )
         return CompactionResult(
             subject_key=subject_key,
             source_count=archived_count,
-            summary_count=summaries_stored,
+            summary_count=len(summaries),
         )
 
     async def list_subjects_above_threshold(self) -> list[str]:

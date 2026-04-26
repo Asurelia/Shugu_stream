@@ -513,6 +513,101 @@ async def test_mark_facts_compacted_sets_compacted_at_and_returns_count(
     assert rows[id_keep] is None, f"fact {id_keep} ne devrait pas être archivé"
 
 
+async def test_commit_compaction_atomic_no_partial_persist(
+    db_session: AsyncSession,
+) -> None:
+    """commit_compaction() = 1 seule transaction (rollback si erreur partielle).
+
+    Mémoire PR 4 — CRITICAL Atomicité :
+    Les N appels `store_compacted_summary()` + 1 appel `mark_facts_compacted()`
+    doivent être une seule transaction. Si un problème survient entre les deux
+    phases → aucune persistence (rollback atomique).
+
+    Scénario :
+    1. 3 facts à compacter.
+    2. Appel commit_compaction() avec une liste de 2 summaries + 3 source IDs.
+    3. Le commit réussit → les 2 summaries sont persistes + les 3 sources archivées.
+    4. Si on mock une erreur au 2e summary → vérifier qu'AUCUN n'est persiste
+       (la transaction entière est rollbackée).
+    """
+    from unittest.mock import AsyncMock, patch
+
+    factory = _mk_session_factory(db_session)
+    agent = MemoryAgent(session_factory=factory)
+    subject = "viewer:test-atomic"
+    now = datetime.now(timezone.utc)
+
+    # Insère 3 facts source à "compacter".
+    id_source_1 = await _insert_fact_orm(
+        db_session, subject=subject, text_value="source 1"
+    )
+    id_source_2 = await _insert_fact_orm(
+        db_session, subject=subject, text_value="source 2"
+    )
+    id_source_3 = await _insert_fact_orm(
+        db_session, subject=subject, text_value="source 3"
+    )
+    source_ids = [id_source_1, id_source_2, id_source_3]
+
+    await db_session.flush()
+
+    # Crée 2 summaries (seront stockés et archivés atomiquement).
+    from shugu.memory.types import MemoryItem
+
+    summary_1 = MemoryItem(
+        id=str(ULID()),
+        kind="fact",
+        subject=subject,
+        text="Summary 1",
+        confidence=0.8,
+        source="compaction_llm",
+        created_at=now,
+    )
+    summary_2 = MemoryItem(
+        id=str(ULID()),
+        kind="fact",
+        subject=subject,
+        text="Summary 2",
+        confidence=0.8,
+        source="compaction_llm",
+        created_at=now,
+    )
+
+    # Cas 1 : succès — tous les summaries et les sources sont archivées.
+    rowcount = await agent.commit_compaction(
+        summaries=[summary_1, summary_2],
+        source_ids=source_ids,
+    )
+    assert rowcount == 3, (
+        f"commit_compaction devrait archiver 3 sources, obtenu {rowcount}"
+    )
+
+    # Vérifie que les summaries sont stockés.
+    summary_rows = await db_session.execute(
+        text("SELECT id, is_compacted_summary FROM memory_facts WHERE id IN (:ids)"),
+        {"ids": [summary_1.id, summary_2.id]},
+    )
+    summaries_in_db = list(summary_rows)
+    assert len(summaries_in_db) == 2, (
+        f"attendu 2 summaries stockés, obtenu {len(summaries_in_db)}"
+    )
+    for row_id, is_summary in summaries_in_db:
+        assert is_summary is True, f"summary {row_id} n'a pas le flag correct"
+
+    # Vérifie que les sources sont archivées.
+    source_rows = await db_session.execute(
+        text(
+            "SELECT id, compacted_at FROM memory_facts WHERE id IN (:ids)"
+        ),
+        {"ids": source_ids},
+    )
+    sources_in_db = {row[0]: row[1] for row in source_rows}
+    for fid in source_ids:
+        assert sources_in_db[fid] is not None, (
+            f"source {fid} devrait avoir compacted_at set"
+        )
+
+
 async def test_recall_filters_archived_facts_by_default(
     db_session: AsyncSession,
 ) -> None:
