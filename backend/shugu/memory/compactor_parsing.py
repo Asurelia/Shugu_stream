@@ -11,7 +11,6 @@ Extraite de `compactor.py` pour respecter la limite de 400 lignes par module.
 from __future__ import annotations
 
 import json
-from typing import Any
 
 import structlog
 
