@@ -530,8 +530,6 @@ async def test_commit_compaction_atomic_no_partial_persist(
     4. Si on mock une erreur au 2e summary → vérifier qu'AUCUN n'est persiste
        (la transaction entière est rollbackée).
     """
-    from unittest.mock import AsyncMock, patch
-
     factory = _mk_session_factory(db_session)
     agent = MemoryAgent(session_factory=factory)
     subject = "viewer:test-atomic"
@@ -628,7 +626,6 @@ async def test_recall_filters_archived_facts_by_default(
     factory = _mk_session_factory(db_session)
     agent = MemoryAgent(session_factory=factory)
     subject = "viewer:test-archive"
-    now = datetime.now(timezone.utc)
 
     # Insère 3 facts actifs.
     id_1 = await _insert_fact_orm(
