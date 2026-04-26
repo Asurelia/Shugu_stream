@@ -317,6 +317,41 @@ export function SceneComposerViewer({
     }
   }, [vrmUrl, loadNewVrm]);
 
+  // ── VRMA URL change (swap animation sans recharger le VRM) ───────────────
+  // E5.4 : currentVrmaUrl du store peut changer en runtime (AFK loops ou UI).
+  // Ce useEffect dispose l'animRig actuel et relance playVrmaAnimation sur le
+  // VRM déjà chargé — sans toucher au VRM ni à la scène.
+  // Guard double-dispose : animRigRef est mis à null AVANT l'appel async.
+  const prevVrmaUrlRef = useRef<string | undefined>(vrmaUrl);
+  useEffect(() => {
+    const nextUrl = vrmaUrl;
+    if (nextUrl === prevVrmaUrlRef.current) return;
+    prevVrmaUrlRef.current = nextUrl;
+
+    const vrm = vrmRef.current;
+    // Dispose l'animation précédente (set null AVANT async pour éviter double-dispose).
+    const oldRig = animRigRef.current;
+    animRigRef.current = null;
+    oldRig?.stop();
+
+    if (!vrm || !nextUrl) return;
+
+    let cancelled = false;
+    playVrmaAnimation(vrm, nextUrl, vrmaLoopRef.current).then((rig) => {
+      if (cancelled) {
+        rig?.stop();
+        return;
+      }
+      animRigRef.current = rig;
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  // vrmaLoop intentionnellement exclu — changement loop non supporté mid-animation.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [vrmaUrl, vrmRef, animRigRef, vrmaLoopRef]);
+
   return (
     <canvas
       ref={canvasRef}
