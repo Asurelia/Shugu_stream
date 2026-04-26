@@ -19,7 +19,7 @@
  */
 
 import dynamic from "next/dynamic";
-import { useCallback } from "react";
+import { useCallback, useState } from "react";
 import {
   useSceneComposerStore,
   selectCameraPreset,
@@ -140,7 +140,7 @@ export function SceneComposerApp({
   const panelLayout = useSceneComposerStore(selectPanelLayout);
 
   // Onglet actif du panneau droit.
-  const [rightTab, setRightTab] = useLocalState<RightTab>("inspector");
+  const [rightTab, setRightTab] = useState<RightTab>("inspector");
 
   const handlePreset = useCallback(
     (p: CameraPreset) => setCameraPreset(p),
@@ -245,14 +245,6 @@ export function SceneComposerApp({
       </div>
     </div>
   );
-}
-
-// ─── Hook local simple (évite d'importer useState depuis react partout) ────────
-
-import { useState } from "react";
-
-function useLocalState<T>(initial: T): [T, (v: T) => void] {
-  return useState<T>(initial);
 }
 
 export default SceneComposerApp;
