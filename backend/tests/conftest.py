@@ -27,6 +27,7 @@ from typing import AsyncIterator
 # IMPORTANT : set AVANT tout import de shugu.*. pydantic-settings tolère un
 # env_file inexistant et retombe sur les env vars du process.
 os.environ.setdefault("SHUGU_ENV_FILE", "/nonexistent/.env")
+os.environ.setdefault("IP_HASH_SALT", "test-salt-32-chars-for-pytest-ok-")
 
 import pytest_asyncio
 

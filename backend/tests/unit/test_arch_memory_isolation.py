@@ -164,6 +164,18 @@ SINGLE_WRITER_ORM_CLASSES = {
         },
         "reason": "Single-writer: seul MemoryAgent insère les facts via store(). maintenance.py est invoqué exclusivement via MemoryAgent.maintenance().",
     },
+    "AuthoredSceneRow": {
+        "allowed_modules": {
+            "shugu/db/models_scene_composer.py",
+            "shugu/routes/scene_composer_api.py",
+            "shugu/scene_composer/player.py",
+            "shugu/app.py",
+        },
+        "reason": (
+            "Single-writer: seul scene_composer_api fait INSERT/UPDATE/DELETE authored_scenes. "
+            "player.py et app.py font uniquement des SELECT pour récupérer et exécuter les scènes."
+        ),
+    },
 }
 
 

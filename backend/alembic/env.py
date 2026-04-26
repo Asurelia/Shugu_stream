@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 # tables soient visibles dans Base.metadata (critique pour alembic upgrade +
 # autogenerate). Le side-effect de l'import suffit ; on n'utilise pas les
 # classes directement ici, d'où le pragma ruff sur la ligne.
+import shugu.db.models_scene_composer  # noqa: F401  # Phase E5.1 authored_scenes
 import shugu.memory.models  # noqa: F401
 from alembic import context
 from shugu.config import get_settings
