@@ -3,32 +3,42 @@
  *
  * Architecture Unity-style (référence SceneEditorApp.tsx Phase A/B) :
  *   - Panneau gauche : liste des scènes authoriées (ScenesListPanel)
- *   - Centre : viewer 3D (SceneComposerViewer, chargé dynamiquement ssr:false)
+ *   - Centre : PlayModeToolbar + viewer 3D (SceneComposerViewer, ssr:false)
  *   - Droite : inspecteur + catalogue d'assets (tabs)
  *
  * State UI géré via `useSceneComposerStore` (sélection, mode viewer,
- * preset caméra, layout). Données métier fetchées par les panels eux-mêmes.
+ * preset caméra, layout, playMode, afkLoops, currentVrmaUrl).
+ * Données métier fetchées par les panels eux-mêmes.
  *
- * OUT OF SCOPE E5.2 :
- *   - Gizmos / TransformControls (E5.3)
- *   - Drag-drop d'assets (E5.3)
- *   - Play Mode toolbar animée (E5.4)
- *   - Bridge Scene Editor ↔ Scene Composer (E5.5)
+ * Extensions E5.4 :
+ *   - PlayModeToolbar : barre de contrôle Play/Stop + config AFK Loops
+ *   - useAfkLoops : boucles AFK déterministes (animations VRMA idle auto)
+ *   - currentVrmaUrl : piloté par useAfkLoops → passé comme vrmaUrl au viewer
+ *
+ * OUT OF SCOPE E5.5 :
+ *   - Bridge Scene Editor ↔ Scene Composer
  *
  * @module SceneComposerApp
  */
 
 import dynamic from "next/dynamic";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   useSceneComposerStore,
   selectCameraPreset,
   selectViewerMode,
   selectPanelLayout,
+  selectPlayMode,
+  selectAfkLoops,
+  selectCurrentVrmaUrl,
 } from "./store/useSceneComposerStore";
 import { ScenesListPanel } from "./panels/ScenesListPanel";
 import { SceneInspectorPanel } from "./panels/SceneInspectorPanel";
 import { AssetCataloguePanel } from "./panels/AssetCataloguePanel";
+import { PlayModeToolbar } from "./panels/PlayModeToolbar";
+import { useAfkLoops } from "./viewer/afk/useAfkLoops";
+import { getAssetCatalog } from "./api/catalogClient";
+import type { VrmaAnimationEntry } from "./api/catalogClient";
 import type { CameraPreset } from "./viewer/three-stage/createCamera";
 
 // ─── Chargement dynamique du viewer (WebGL → pas de SSR) ─────────────────────
@@ -128,6 +138,11 @@ type RightTab = "inspector" | "assets";
 
 /**
  * Shell principal du Scene Composer.
+ *
+ * Responsabilités E5.4 ajoutées :
+ * - Charge le catalogue VRMA au mount (pour useAfkLoops)
+ * - Passe currentVrmaUrl comme vrmaUrl au viewer
+ * - Rend PlayModeToolbar au-dessus du viewer
  */
 export function SceneComposerApp({
   onExit,
@@ -138,6 +153,33 @@ export function SceneComposerApp({
   const setCameraPreset = useSceneComposerStore((s) => s.setCameraPreset);
   const setViewerMode = useSceneComposerStore((s) => s.setViewerMode);
   const panelLayout = useSceneComposerStore(selectPanelLayout);
+
+  // E5.4 — Play Mode + AFK Loops
+  const playMode = useSceneComposerStore(selectPlayMode);
+  const afkLoops = useSceneComposerStore(selectAfkLoops);
+  const currentVrmaUrl = useSceneComposerStore(selectCurrentVrmaUrl);
+  const setCurrentVrmaUrl = useSceneComposerStore((s) => s.setCurrentVrmaUrl);
+
+  // Catalogue VRMA pour useAfkLoops — chargé au mount, non bloquant.
+  const [vrmaCatalogue, setVrmaCatalogue] = useState<VrmaAnimationEntry[]>([]);
+  useEffect(() => {
+    getAssetCatalog()
+      .then((catalog) => setVrmaCatalogue(catalog.vrma_animations))
+      .catch(() => {
+        // Silencieux — useAfkLoops fonctionne avec catalogue vide (no-op).
+      });
+  }, []);
+
+  // useAfkLoops — boucles AFK déterministes.
+  // Les listeners pointermove + keydown sont sur window (pas sur un canvasRef).
+  // currentViewerCount=0 pour E5.4 (câblage réel prévu phase ultérieure).
+  const { afkActive } = useAfkLoops({
+    playMode,
+    afkLoops,
+    vrmaCatalogue,
+    currentViewerCount: 0,
+    setCurrentVrmaUrl,
+  });
 
   // Onglet actif du panneau droit.
   const [rightTab, setRightTab] = useState<RightTab>("inspector");
@@ -207,13 +249,23 @@ export function SceneComposerApp({
           </div>
         )}
 
-        {/* Centre : viewer 3D */}
-        <div style={CENTER_STYLE}>
-          <SceneComposerViewer
-            vrmUrl={defaultVrmUrl}
-            cameraPreset={cameraPreset}
-            viewMode={viewerMode}
+        {/* Centre : PlayModeToolbar + viewer 3D */}
+        <div style={{ ...CENTER_STYLE, display: "flex", flexDirection: "column" }}>
+          {/* E5.4 : barre de contrôle Play/Stop + AFK Loops */}
+          <PlayModeToolbar
+            afkActive={afkActive}
+            currentViewerCount={0}
           />
+          {/* Viewer 3D — vrmaUrl piloté par currentVrmaUrl (AFK loops ou UI) */}
+          <div style={{ flex: 1, position: "relative", overflow: "hidden" }}>
+            <SceneComposerViewer
+              vrmUrl={defaultVrmUrl}
+              cameraPreset={cameraPreset}
+              viewMode={viewerMode}
+              vrmaUrl={currentVrmaUrl ?? undefined}
+              vrmaLoop
+            />
+          </div>
         </div>
 
         {/* Droite : inspecteur + assets */}

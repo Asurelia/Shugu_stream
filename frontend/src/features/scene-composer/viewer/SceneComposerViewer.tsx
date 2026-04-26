@@ -120,6 +120,12 @@ export function SceneComposerViewer({
   // défensif contre un cas d'invocation impossible en pratique.
   const onGizmoChangeRef = useRef<((obj: THREE.Object3D) => void) | null>(null);
 
+  // Ref pour annuler les tokens orphelins de VRM load entre 2 appels rapides.
+  // Invariant : un seul token peut être "actif" — l'ancien doit être annulé avant
+  // d'en créer un nouveau (sinon le .then() de l'ancien peut écraser vrmRef.current).
+  // Cleanup au unmount : annule le token en cours (si présent).
+  const vrmLoadTokenRef = useRef<CancelToken | null>(null);
+
   // ── Hook useSceneRig ──────────────────────────────────────────────────────
   // Délègue l'initialisation complète du rig Three.js (7 étapes mount + cleanup).
   const {
@@ -290,7 +296,13 @@ export function SceneComposerViewer({
         animRigRef.current = null;
       }
 
+      // Annule l'ancien token avant d'en créer un nouveau (defense in depth).
+      if (vrmLoadTokenRef.current) {
+        vrmLoadTokenRef.current.cancelled = true;
+      }
       const token: CancelToken = { cancelled: false };
+      vrmLoadTokenRef.current = token;
+
       loadVrm(url, sceneRig.scene, token).then((vrm) => {
         if (token.cancelled || !vrm) return;
         vrmRef.current = vrm;
@@ -316,6 +328,53 @@ export function SceneComposerViewer({
       loadNewVrm(vrmUrl);
     }
   }, [vrmUrl, loadNewVrm]);
+
+  // ── VRMA URL change (swap animation sans recharger le VRM) ───────────────
+  // E5.4 : currentVrmaUrl du store peut changer en runtime (AFK loops ou UI).
+  // Ce useEffect dispose l'animRig actuel et relance playVrmaAnimation sur le
+  // VRM déjà chargé — sans toucher au VRM ni à la scène.
+  // Guard double-dispose : animRigRef est mis à null AVANT l'appel async.
+  const prevVrmaUrlRef = useRef<string | undefined>(vrmaUrl);
+  useEffect(() => {
+    const nextUrl = vrmaUrl;
+    if (nextUrl === prevVrmaUrlRef.current) return;
+    prevVrmaUrlRef.current = nextUrl;
+
+    const vrm = vrmRef.current;
+    // Dispose l'animation précédente (set null AVANT async pour éviter double-dispose).
+    const oldRig = animRigRef.current;
+    animRigRef.current = null;
+    oldRig?.stop();
+
+    if (!vrm || !nextUrl) return;
+
+    let cancelled = false;
+    playVrmaAnimation(vrm, nextUrl, vrmaLoopRef.current).then((rig) => {
+      if (cancelled) {
+        rig?.stop();
+        return;
+      }
+      animRigRef.current = rig;
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  // vrmaLoop intentionnellement exclu — changement loop non supporté mid-animation.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [vrmaUrl, vrmRef, animRigRef, vrmaLoopRef]);
+
+  // ── Cleanup vrmLoadTokenRef au unmount ──────────────────────────────────────
+  // Annule le token VRM load en cours pour éviter orphelinat si le composant est
+  // démonté avant que le load async soit terminé.
+  useEffect(() => {
+    return () => {
+      if (vrmLoadTokenRef.current) {
+        vrmLoadTokenRef.current.cancelled = true;
+        vrmLoadTokenRef.current = null;
+      }
+    };
+  }, []);
 
   return (
     <canvas
