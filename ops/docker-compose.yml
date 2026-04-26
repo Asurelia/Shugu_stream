@@ -1,0 +1,25 @@
+# Backing services pour le développement local Shugu.
+#
+# Postgres est supposé tourner en local Windows native (port 5432) — voir
+# SHUGU_POSTGRES_DSN dans ops/env/.env. Redis n'a pas de port natif Windows
+# stable, donc on l'embarque ici via Docker pour que `Shugu-Start.cmd` ait
+# tout ce qu'il faut sans installation supplémentaire.
+#
+# Usage : `docker compose -f ops/docker-compose.yml up -d redis`
+# Ou via le launcher : Shugu-Start.cmd détecte et démarre automatiquement.
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: shugu-redis
+    ports:
+      - "127.0.0.1:6379:6379"  # bind localhost only — pas exposé au réseau
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    # Mémoire bornée (cache JWT révocations + pub/sub events) — 128MB largement
+    # suffisant pour un single-node dev.
+    command: ["redis-server", "--maxmemory", "128mb", "--maxmemory-policy", "allkeys-lru"]
