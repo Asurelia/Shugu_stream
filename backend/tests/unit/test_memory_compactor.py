@@ -115,10 +115,11 @@ def _mock_agent(
     if subjects_above_threshold is not None:
         agent.list_subjects_above_threshold.return_value = subjects_above_threshold
 
-    # store_compacted_summary et mark_facts_compacted retournent des valeurs
-    # par défaut sensées.
+    # store_compacted_summary, mark_facts_compacted (legacy) + commit_compaction
+    # (atomique post-fix Atomicité) retournent des valeurs par défaut sensées.
     agent.store_compacted_summary.return_value = None
     agent.mark_facts_compacted.return_value = 5
+    agent.commit_compaction.return_value = 5  # rowcount sources archivées
 
     return agent
 
@@ -163,8 +164,7 @@ async def test_threshold_detection_19_facts_skip() -> None:
 
     assert result.skipped, "Attendu skipped mais éligible"
     assert brain.call_count == 0, "LLM ne doit PAS avoir été appelé"
-    agent.store_compacted_summary.assert_not_called()
-    agent.mark_facts_compacted.assert_not_called()
+    agent.commit_compaction.assert_not_called()
 
 
 async def test_threshold_detection_exact_threshold_skips() -> None:
@@ -215,22 +215,26 @@ async def test_compact_subject_happy_path() -> None:
     assert result.summary_count == 3
     assert not result.skipped
 
-    # store_compacted_summary appelé 3 fois (une par summary fact)
-    assert agent.store_compacted_summary.await_count == 3
+    # commit_compaction appelé UNE seule fois (atomicité — fix CRITICAL)
+    agent.commit_compaction.assert_awaited_once()
+    call_kwargs = agent.commit_compaction.await_args.kwargs
+    summaries_passed = call_kwargs["summaries"]
+    source_ids_passed = call_kwargs["source_ids"]
 
-    # mark_facts_compacted appelé UNE fois avec les IDs sources
-    agent.mark_facts_compacted.assert_awaited_once()
-    called_ids = agent.mark_facts_compacted.await_args.args[0]
-    assert set(called_ids) == set(fact_ids), (
-        "Les IDs sources passés à mark_facts_compacted doivent correspondre aux facts actifs"
+    # 3 summaries construits par le Compactor (target_summary_count=3)
+    assert len(summaries_passed) == 3
+
+    # source_ids correspondent aux facts actifs originaux
+    assert set(source_ids_passed) == set(fact_ids), (
+        "Les source_ids passés à commit_compaction doivent correspondre aux facts actifs"
     )
 
 
 async def test_compact_subject_source_count_reflects_archived() -> None:
-    """source_count du résultat reflète le retour de mark_facts_compacted."""
+    """source_count du résultat reflète le retour de commit_compaction (rowcount archived)."""
     facts_21 = _make_facts(21)
     agent = _mock_agent(active_facts_by_subject={"viewer:alice": facts_21})
-    agent.mark_facts_compacted.return_value = 21  # rowcount simulé
+    agent.commit_compaction.return_value = 21  # rowcount simulé (post fix Atomicité)
 
     brain = _MockBrain(
         _make_brain_response([
@@ -262,9 +266,8 @@ async def test_compact_subject_llm_error_sets_error_no_side_effect() -> None:
     assert "MiniMax API timeout" in result.error
     assert not result.success
 
-    # Aucun write DB effectué
-    agent.store_compacted_summary.assert_not_called()
-    agent.mark_facts_compacted.assert_not_called()
+    # Aucun write DB effectué — commit_compaction (atomique) jamais appelé
+    agent.commit_compaction.assert_not_called()
 
 
 # ── Test 4 : Invalid JSON ─────────────────────────────────────────────────────
@@ -284,9 +287,8 @@ async def test_compact_subject_invalid_json_sets_error_no_side_effect() -> None:
     assert "Parse error" in result.error
     assert not result.success
 
-    # Aucun write DB effectué
-    agent.store_compacted_summary.assert_not_called()
-    agent.mark_facts_compacted.assert_not_called()
+    # Aucun write DB effectué — commit_compaction (atomique) jamais appelé
+    agent.commit_compaction.assert_not_called()
 
 
 async def test_compact_subject_json_wrong_structure_sets_error() -> None:
@@ -301,7 +303,7 @@ async def test_compact_subject_json_wrong_structure_sets_error() -> None:
 
     assert result.error is not None
     assert "Parse error" in result.error
-    agent.store_compacted_summary.assert_not_called()
+    agent.commit_compaction.assert_not_called()
 
 
 # ── Test 5 : Single-writer enforcement ───────────────────────────────────────
@@ -359,10 +361,9 @@ async def test_single_writer_compactor_only_calls_agent_methods() -> None:
 
     await compactor.compact_subject("viewer:alice")
 
-    # L'agent a bien été utilisé
+    # L'agent a bien été utilisé — commit_compaction est l'API atomique unique
     agent.list_active_facts.assert_awaited_once()
-    agent.store_compacted_summary.assert_awaited()
-    agent.mark_facts_compacted.assert_awaited_once()
+    agent.commit_compaction.assert_awaited_once()
 
     # Aucune session DB n'a été créée dans le Compactor lui-même
     # (le compactor n'a pas d'attribut _session_factory)
@@ -388,14 +389,20 @@ async def test_compact_origin_ids_traceability() -> None:
 
     await compactor.compact_subject("viewer:diana")
 
-    # Vérifier que store_compacted_summary reçoit les origin_ids corrects
-    assert agent.store_compacted_summary.await_count == 2
-    for store_call in agent.store_compacted_summary.await_args_list:
-        _, kwargs = store_call
-        origin_ids = kwargs.get("origin_ids") or store_call.args[1]
-        assert set(origin_ids) == set(expected_source_ids), (
-            f"origin_ids incorrects dans store_compacted_summary: {origin_ids}"
-        )
+    # Vérifier que commit_compaction reçoit les source_ids corrects (origin_ids
+    # sont stockés sur les summaries en DB par commit_compaction lui-même).
+    agent.commit_compaction.assert_awaited_once()
+    call_kwargs = agent.commit_compaction.await_args.kwargs
+    summaries_passed = call_kwargs["summaries"]
+    source_ids_passed = call_kwargs["source_ids"]
+
+    # 2 summaries (target_summary_count default = 6, mais brain a retourné 2 specs)
+    assert len(summaries_passed) == 2
+
+    # source_ids correspondent aux facts originaux
+    assert set(source_ids_passed) == set(expected_source_ids), (
+        f"source_ids incorrects dans commit_compaction: {source_ids_passed}"
+    )
 
 
 # ── Test 7 : Compacted facts excluded from active recall ─────────────────────
@@ -472,7 +479,7 @@ async def test_compact_all_eligible_pipeline_multi_subject() -> None:
         },
         subjects_above_threshold=["viewer:alice", "viewer:bob", "viewer:error"],
     )
-    agent.mark_facts_compacted.return_value = 20
+    agent.commit_compaction.return_value = 20
 
     compactor = MemoryCompactor(memory_agent=agent, brain=brain, threshold=20)
 
