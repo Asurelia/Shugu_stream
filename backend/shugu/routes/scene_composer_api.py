@@ -47,6 +47,7 @@ from ..domain.scene_composer_schemas import (
     AuthoredSceneUpdate,
     SceneTypeLiteral,
 )
+from ..scene_composer.player import SceneAlreadyPlayingError
 
 log = logging.getLogger(__name__)
 
@@ -374,7 +375,17 @@ async def play_scene(
         )
 
     # Lance la lecture en background — l'API ne bloque pas.
-    await player.start_play(row)
+    # Le pre-check ci-dessus est un fast-path non-atomique ; il est possible
+    # qu'une race condition le contourne (2 POST /play simultanés).
+    # Le try/except ci-dessous catchera le SceneAlreadyPlayingError levé
+    # par start_play() et traduira en 409.
+    try:
+        await player.start_play(row)
+    except SceneAlreadyPlayingError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
 
     log.info(
         "scene_composer.scene_play operator=%s scene_id=%s type=%s",
