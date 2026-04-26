@@ -30,7 +30,7 @@ from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, AsyncContextManager, Callable, Optional
 
 import structlog
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -205,6 +205,10 @@ class MemoryAgent:
                 stmt = stmt.where(MemoryFact.subject == query.subject)
             if query.kinds:
                 stmt = stmt.where(MemoryFact.kind.in_(list(query.kinds)))
+            # Mémoire PR 4 — Filtre les facts archivés par défaut (compacted_at IS NULL).
+            # Si include_archived=True, retourner aussi les summaries + sources archivées.
+            if not query.include_archived:
+                stmt = stmt.where(MemoryFact.compacted_at.is_(None))
 
             if query_vec is not None:
                 # Cosine search. Filtre les rows sans embedding (stockées avant
@@ -482,6 +486,274 @@ class MemoryAgent:
                 # tracke identity (JSONB est un dict Python côté session).
                 merged = {**(row.doc or {}), **patch}
                 row.doc = merged
+
+
+    # ── compactor support (Mémoire PR 4) ─────────────────────────────────────
+    #
+    # Ces méthodes forment le contrat single-writer du Compactor : TOUT accès
+    # en écriture sur memory_facts (archivage, création de summaries) passe
+    # obligatoirement par ici. Le Compactor n'instancie jamais MemoryFact
+    # directement et ne fait aucun INSERT/UPDATE/DELETE SQL direct.
+
+    async def list_subjects_above_threshold(
+        self,
+        threshold: int,
+    ) -> list[str]:
+        """Retourne les subject_key avec plus de `threshold` facts actifs non-summary.
+
+        Définition de « actif non-summary » :
+        - `compacted_at IS NULL` — pas encore archivé par un Compactor run.
+        - `is_compacted_summary IS NOT TRUE` — pas un résumé issu du Compactor.
+          (Évite la récursion : les summaries ne comptent pas vers le threshold.)
+
+        Args:
+            threshold: Nombre minimum de facts actifs pour qu'un subject
+                       soit éligible au compactage.
+
+        Returns:
+            Liste de subject_key (strings) triée alphabétiquement.
+            Liste vide si aucun subject n'est au-dessus du threshold.
+        """
+        if threshold <= 0:
+            return []
+
+        async with self._session_factory() as session:
+            stmt = (
+                select(MemoryFact.subject)
+                .where(MemoryFact.compacted_at.is_(None))
+                .where(MemoryFact.is_compacted_summary.isnot(True))
+                .group_by(MemoryFact.subject)
+                .having(func.count() > threshold)
+                .order_by(MemoryFact.subject)
+            )
+            rows = (await session.execute(stmt)).scalars().all()
+            return list(rows)
+
+    async def list_active_facts(self, subject_key: str) -> list[MemoryItem]:
+        """Retourne tous les facts actifs non-summary d'un subject.
+
+        « Actif non-summary » : `compacted_at IS NULL` ET
+        `is_compacted_summary IS NOT TRUE`.
+
+        Utilisé par le Compactor pour construire la liste des facts à condenser.
+        Ordre : `created_at ASC` (chronologique — le LLM voit le fil du temps).
+
+        Args:
+            subject_key: Clé du sujet (ex: `viewer:alice`, `vip:bob`).
+
+        Returns:
+            Liste de MemoryItem en ordre chronologique croissant.
+        """
+        if not subject_key:
+            return []
+
+        async with self._session_factory() as session:
+            stmt = (
+                select(MemoryFact)
+                .where(MemoryFact.subject == subject_key)
+                .where(MemoryFact.compacted_at.is_(None))
+                .where(MemoryFact.is_compacted_summary.isnot(True))
+                .order_by(MemoryFact.created_at.asc())
+            )
+            rows = (await session.execute(stmt)).scalars().all()
+            return [_row_to_item(row) for row in rows]
+
+    async def store_compacted_summary(
+        self,
+        item: MemoryItem,
+        origin_ids: list[str],
+    ) -> None:
+        """Stocke un fact résumé issu du Compactor.
+
+        Identique à `store()` mais force `is_compacted_summary=True` et
+        `compact_origin_ids=origin_ids` pour traçabilité. Le flag empêche
+        ces summaries d'entrer dans le comptage threshold des futurs runs.
+
+        Single-writer rule : seul chemin légal pour créer des summary facts.
+
+        Args:
+            item:       MemoryItem pré-formé par le Compactor (sans embedding
+                        — il sera calculé automatiquement si embedder configuré).
+            origin_ids: IDs des facts sources compactés par ce run.
+        """
+        if item.embedding is not None and len(item.embedding) != self._embed_dim:
+            raise ValueError(
+                f"embedding dim mismatch: got {len(item.embedding)}, "
+                f"expected {self._embed_dim}",
+            )
+
+        # Auto-embed si contexte favorable (même logique que store()).
+        if (
+            item.embedding is None
+            and self._embedder is not None
+            and item.text
+        ):
+            vectors = await self._embedder.embed_documents([item.text])
+            item = dataclasses.replace(item, embedding=vectors[0])
+
+        async with self._session_factory() as session:
+            stmt = pg_insert(MemoryFact).values(
+                id=item.id,
+                kind=item.kind,
+                subject=item.subject,
+                text=item.text,
+                confidence=item.confidence,
+                source=item.source,
+                created_at=item.created_at,
+                last_used_at=item.last_used_at,
+                embedding=item.embedding,
+                # Champs Compactor — forcés ici, pas dans MemoryItem public.
+                is_compacted_summary=True,
+                compact_origin_ids=origin_ids,
+                compacted_at=None,   # Le summary lui-même est "actif" — sera archivé par le run suivant si besoin.
+            )
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["id"],
+                set_={
+                    "kind": stmt.excluded.kind,
+                    "subject": stmt.excluded.subject,
+                    "text": stmt.excluded.text,
+                    "confidence": stmt.excluded.confidence,
+                    "source": stmt.excluded.source,
+                    "last_used_at": stmt.excluded.last_used_at,
+                    "embedding": stmt.excluded.embedding,
+                    "is_compacted_summary": stmt.excluded.is_compacted_summary,
+                    "compact_origin_ids": stmt.excluded.compact_origin_ids,
+                },
+            )
+            await session.execute(stmt)
+
+    async def mark_facts_compacted(self, fact_ids: list[str]) -> int:
+        """Marque une liste de facts comme archivés (soft-archive).
+
+        Pose `compacted_at = now()` sur tous les IDs fournis.
+        Les facts restent en DB pour audit — jamais supprimés par le Compactor.
+        Idempotent : un fact déjà archivé est re-stampé (OK — même sémantique).
+
+        Single-writer rule : seul point d'entrée légal pour archiver des facts.
+
+        DEPRECATED en favour de `commit_compaction()` pour les batchs Compactor.
+        Conservé pour rétrocompat tests existants. Les nouveaux batchs doivent
+        utiliser commit_compaction() pour l'atomicité.
+
+        Args:
+            fact_ids: IDs des facts sources à archiver.
+
+        Returns:
+            Nombre de rows effectivement mises à jour.
+        """
+        if not fact_ids:
+            return 0
+
+        now = datetime.now(timezone.utc)
+        async with self._session_factory() as session:
+            stmt = (
+                update(MemoryFact)
+                .where(MemoryFact.id.in_(fact_ids))
+                .values(compacted_at=now)
+                .execution_options(synchronize_session=False)
+            )
+            result = await session.execute(stmt)
+            return result.rowcount
+
+    async def commit_compaction(
+        self,
+        summaries: list[MemoryItem],
+        source_ids: list[str],
+    ) -> int:
+        """Persiste atomiquement les summaries ET archive les sources en 1 seule transaction.
+
+        Mémoire PR 4 — CRITICAL Atomicité :
+        Remplace la succession N×store_compacted_summary() + mark_facts_compacted()
+        par une seule transaction. Si une erreur survient → aucune persistence
+        (rollback automatique), garantissant l'absence d'état partiel.
+
+        Pipeline (une seule session/tx) :
+        1. Insère tous les summaries avec is_compacted_summary=True +
+           compact_origin_ids=source_ids.
+        2. UPDATE tous les sources avec compacted_at=now().
+        3. Commit — ou rollback en cas d'erreur à n'importe quel point.
+
+        Single-writer rule : seul point d'entrée légal pour atomiser compaction.
+
+        Args:
+            summaries: Liste de MemoryItem pré-formés par le Compactor.
+            source_ids: IDs ULID des facts sources à archiver.
+
+        Returns:
+            Nombre de sources (rows) effectivement archivées.
+
+        Raises:
+            ValueError: Si embedding dim mismatch sur un summary.
+            Exception: Si DB transaction échoue (propagée — l'appelant doit handle).
+        """
+        if not summaries and not source_ids:
+            return 0
+
+        now = datetime.now(timezone.utc)
+
+        async with self._session_factory() as session:
+            # 1) Insère tous les summaries — auto-embed si contexte favorable.
+            for item in summaries:
+                if item.embedding is not None and len(item.embedding) != self._embed_dim:
+                    raise ValueError(
+                        f"embedding dim mismatch: got {len(item.embedding)}, "
+                        f"expected {self._embed_dim}",
+                    )
+
+                # Auto-embed si contexte favorable (même logique que store()).
+                summary_item = item
+                if (
+                    item.embedding is None
+                    and self._embedder is not None
+                    and item.text
+                ):
+                    vectors = await self._embedder.embed_documents([item.text])
+                    summary_item = dataclasses.replace(item, embedding=vectors[0])
+
+                stmt = pg_insert(MemoryFact).values(
+                    id=summary_item.id,
+                    kind=summary_item.kind,
+                    subject=summary_item.subject,
+                    text=summary_item.text,
+                    confidence=summary_item.confidence,
+                    source=summary_item.source,
+                    created_at=summary_item.created_at,
+                    last_used_at=summary_item.last_used_at,
+                    embedding=summary_item.embedding,
+                    # Champs Compactor — forcés ici.
+                    is_compacted_summary=True,
+                    compact_origin_ids=source_ids,
+                    compacted_at=None,  # Le summary lui-même est "actif".
+                )
+                stmt = stmt.on_conflict_do_update(
+                    index_elements=["id"],
+                    set_={
+                        "kind": stmt.excluded.kind,
+                        "subject": stmt.excluded.subject,
+                        "text": stmt.excluded.text,
+                        "confidence": stmt.excluded.confidence,
+                        "source": stmt.excluded.source,
+                        "last_used_at": stmt.excluded.last_used_at,
+                        "embedding": stmt.excluded.embedding,
+                        "is_compacted_summary": stmt.excluded.is_compacted_summary,
+                        "compact_origin_ids": stmt.excluded.compact_origin_ids,
+                    },
+                )
+                await session.execute(stmt)
+
+            # 2) Archive les sources — une seule UPDATE.
+            if source_ids:
+                stmt = (
+                    update(MemoryFact)
+                    .where(MemoryFact.id.in_(source_ids))
+                    .values(compacted_at=now)
+                    .execution_options(synchronize_session=False)
+                )
+                result = await session.execute(stmt)
+                return int(result.rowcount or 0)
+
+            return 0
 
 
 def _row_to_item(row: MemoryFact) -> MemoryItem:

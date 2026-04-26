@@ -163,6 +163,25 @@ class Settings(BaseSettings):
     # Sur VPS avec petit disque /, pointer vers /var/cache/shugu/embeddings.
     memory_embedder_cache_dir: str = ""
 
+    # Mémoire PR 4 — Compactor : seuil de déclenchement du résumé LLM
+    # et nombre de facts résumés cibles.
+    compactor_threshold: int = Field(
+        default=20,
+        ge=1,
+        le=500,
+        description="Nombre minimum de facts actifs pour déclencher le compactage. "
+                    "Défaut 20. Bornes [1, 500]. "
+                    "Env: SHUGU_COMPACTOR_THRESHOLD",
+    )
+    compactor_summary_count: int = Field(
+        default=6,
+        ge=1,
+        le=50,
+        description="Nombre cible de facts résumés après le compactage. "
+                    "Défaut 6. Bornes [1, 50]. "
+                    "Env: SHUGU_COMPACTOR_SUMMARY_COUNT",
+    )
+
     # VIP bridge — v4 Phase 1 Brique 1.2. `vip_agent` (Worker LiveKit Agents,
     # process séparé) communique avec le backend FastAPI via HTTP localhost
     # signé. `vip_internal_url` est l'endpoint backend (typiquement

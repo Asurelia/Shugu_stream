@@ -72,3 +72,8 @@ class RecallQuery:
     limit: int = 5
     # Non utilisé Phase 1 (pas d'embedder) — placeholder pour phase 2.
     query_embedding: Optional[list[float]] = field(default=None, repr=False)
+    # Mémoire PR 4 — inclure les facts archivés (compacted_at IS NOT NULL).
+    # Default False pour exclure les archivés (comportement sain : recall ne
+    # retourne que les facts actifs). Utile pour debug/audit : passer True
+    # pour voir aussi les summaries générés par les runs précédents.
+    include_archived: bool = False

@@ -101,9 +101,70 @@ les viewers (noms, préférences, événements) pour personnaliser chaque intera
   deux facts "name: Alice". Les IDs sont des ULID distincts → deux rows
   séparées. La maintenance Phase 2.7 (dedupe sémantique) harmonise.
 
+## Compactor (Mémoire PR 4)
+
+### Rôle
+
+Quand un sujet (`subject_key`) accumule plus de **20 facts actifs** dans
+`memory_facts`, le Compactor les condense via LLM en un résumé compact.
+
+### Pipeline
+
+```
+MemoryCompactor.compact_all_eligible()
+  └─ list_subjects_above_threshold(threshold=20)  ← MemoryAgent (read)
+       └─ pour chaque sujet éligible :
+            compact_subject(subject_key)
+              ├─ list_active_facts(subject_key)    ← MemoryAgent (read)
+              ├─ _call_brain(facts)                ← DirectorBrain (LLM)
+              ├─ _parse_summary_response(raw)      ← JSON robuste
+              ├─ store_compacted_summary(...)      ← MemoryAgent (write, single-writer)
+              └─ mark_facts_compacted(ids)         ← MemoryAgent (write, single-writer)
+```
+
+### Provider LLM
+
+Utilise `DirectorBrain` protocol (même provider que le Director) :
+- **Default** : MiniMax via `brain_provider.py` E2.5
+- **Fallback** : Anthropic (configuré via `settings.director_llm_provider`)
+
+### Soft-archive vs delete
+
+Les facts sources sont **soft-archivés** (`compacted_at = now()`) — jamais
+supprimés. Avantages :
+- **Audit** : retrouver les facts originaux si le résumé LLM est erroné.
+- **Rollback** : remettre `compacted_at = NULL` pour annuler une compaction.
+- **Traçabilité** : chaque summary fact porte `compact_origin_ids = [ids sources]`.
+
+### Garantie single-writer
+
+Le Compactor n'accède jamais à la DB directement. Toutes les opérations
+passent par `MemoryAgent` :
+- `list_active_facts()` — SELECT actifs (WHERE compacted_at IS NULL AND is_compacted_summary IS NOT TRUE)
+- `store_compacted_summary()` — INSERT summary avec flag `is_compacted_summary=True`
+- `mark_facts_compacted()` — UPDATE `compacted_at = now()` sur les sources
+
+Vérifié par `test_single_writer_enforcement_compactor_uses_only_agent_methods`
+(scan AST des imports de `compactor.py`).
+
+### Idempotence
+
+Un 2e run sur le même sujet skip automatiquement : les sources ont déjà
+`compacted_at` non-null, donc `list_active_facts()` retourne < threshold facts.
+
+### Champs DB ajoutés (migration 0011)
+
+| Colonne | Type | Description |
+|---------|------|-------------|
+| `compacted_at` | TIMESTAMPTZ NULL | Timestamp soft-archive (NULL = actif) |
+| `compact_origin_ids` | TEXT[] NULL | IDs sources du summary |
+| `is_compacted_summary` | BOOLEAN NOT NULL DEFAULT false | Flag summary Compactor |
+
+Index partiel `idx_memory_facts_active_subject (subject, created_at DESC) WHERE
+compacted_at IS NULL AND is_compacted_summary IS NOT TRUE`.
+
 ## Phases à venir
 
-- **PR 4** — Compactor : compacte les épisodes en summaries (LLM)
 - **PR 5** — OutcomeDetector : lie les outcomes aux facts (pinning)
 - **PR 6** — Maintenance scheduler (cron) : decay + dedupe automatique
 - **PR 7** — Pinning : boost confidence des facts corrélés à des outcomes positifs

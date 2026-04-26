@@ -37,7 +37,7 @@ from sqlalchemy import (
 from sqlalchemy import (
     text as sa_text,
 )
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from ..db.models import Base
@@ -70,11 +70,31 @@ class MemoryFact(Base):
         Vector(MEMORY_EMBED_DIM), nullable=True,
     )
 
+    # Compactor fields — Mémoire PR 4
+    # compacted_at : horodatage du soft-archive par le Compactor.
+    # NULL = fact actif. Non-NULL = fact archivé (conservé pour audit).
+    compacted_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True,
+    )
+    # compact_origin_ids : IDs ULID des facts sources dont ce summary est issu.
+    # Non-null uniquement sur les summaries (is_compacted_summary = True).
+    # ARRAY(Text) aligné avec la migration 0011 (TEXT[] PG).
+    compact_origin_ids: Mapped[Optional[list[str]]] = mapped_column(
+        ARRAY(Text), nullable=True,
+    )
+    # is_compacted_summary : True pour les facts résumés générés par le Compactor.
+    # Ces facts sont exclus du comptage de threshold pour éviter les récursions.
+    is_compacted_summary: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=sa_text("false"),
+    )
+
     __table_args__ = (
         Index("idx_memory_facts_subject_kind", "subject", "kind"),
         Index("idx_memory_facts_created", "created_at"),
         # Index GIN trgm sur `text` — créé en raw SQL dans la migration 0005
         # (Alembic ne génère pas bien les index gin_trgm_ops en autogenerate).
+        # idx_memory_facts_active_subject : index partiel créé en raw SQL dans
+        # migration 0011 (WHERE compacted_at IS NULL AND is_compacted_summary IS NOT TRUE).
     )
 
 

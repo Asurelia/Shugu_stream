@@ -255,3 +255,136 @@ async def test_maintenance_dedupe_skips_fresh_facts(
     remaining = {row[0] for row in result}
     assert fresh_a in remaining
     assert fresh_b in remaining
+
+
+async def test_hard_delete_preserves_archived_facts(
+    db_session: AsyncSession,
+) -> None:
+    """hard_delete_below_floor ne touche PAS les facts compacted_at != NULL.
+
+    Mémoire PR 4 — MAJOR G' :
+    Les facts archivés par le Compactor doivent être IMMUABLES pour l'audit
+    et rollback. Même si leur confidence est très basse, le decay ne doit pas
+    les toucher.
+    """
+    now = datetime.now(timezone.utc)
+
+    # Insère 1 fact ACTIF avec confidence très basse (sera supprimé).
+    active_low = await _insert_fact(
+        db_session,
+        subject="vip:archive_preserve",
+        confidence=0.05,
+        created_at=now - timedelta(days=60),
+    )
+
+    # Insère 1 fact ARCHIVÉ avec la MÊME confidence très basse (ne doit PAS être supprimé).
+    archived_low = await _insert_fact(
+        db_session,
+        subject="vip:archive_preserve",
+        confidence=0.05,
+        created_at=now - timedelta(days=60),
+    )
+    # Mark it as archived.
+    await db_session.execute(
+        text("UPDATE memory_facts SET compacted_at = :ts WHERE id = :id"),
+        {"ts": now - timedelta(hours=1), "id": archived_low},
+    )
+    await db_session.flush()
+
+    agent = MemoryAgent(
+        session_factory=_mk_session_factory(db_session),
+        enable_redaction=False,
+    )
+    stats = await agent.maintenance(
+        skip_decay=True, skip_dedupe=True, delete_threshold=0.1,
+    )
+    # Au moins 1 fact supprimé (l'actif).
+    assert stats["removed"] >= 1
+
+    # Vérifie : le fact ACTIF doit être supprimé.
+    result = await db_session.execute(
+        text("SELECT id FROM memory_facts WHERE id = :id"),
+        {"id": active_low},
+    )
+    active_still_exists = len(list(result)) > 0
+    assert not active_still_exists, f"fact actif {active_low} aurait dû être supprimé"
+
+    # Vérifie : le fact ARCHIVÉ doit toujours exister.
+    result = await db_session.execute(
+        text("SELECT id, compacted_at FROM memory_facts WHERE id = :id"),
+        {"id": archived_low},
+    )
+    archived_rows = list(result)
+    assert len(archived_rows) == 1, (
+        f"fact archivé {archived_low} doit exister — est probablement supprimé par erreur"
+    )
+    row_id, compacted_at = archived_rows[0]
+    assert compacted_at is not None, f"fact {row_id} doit rester archivé"
+
+
+async def test_decay_skips_archived_facts(
+    db_session: AsyncSession,
+) -> None:
+    """decay_confidence ne dégrade PAS les facts archivés.
+
+    Mémoire PR 4 — MAJOR G' :
+    L'archive est immuable — seul le Compactor peut archiver. Le decay ne
+    doit jamais toucher les facts archivés.
+    """
+    now = datetime.now(timezone.utc)
+    old_date = now - timedelta(days=60)
+
+    # Insère 1 fact ACTIF avec confidence 0.9 (sera dégradé).
+    active_high = await _insert_fact(
+        db_session,
+        subject="vip:decay_archive",
+        confidence=0.9,
+        created_at=old_date,
+    )
+
+    # Insère 1 fact ARCHIVÉ avec confidence 0.9 (ne doit PAS être dégradé).
+    archived_high = await _insert_fact(
+        db_session,
+        subject="vip:decay_archive",
+        confidence=0.9,
+        created_at=old_date,
+    )
+    # Mark it as archived.
+    await db_session.execute(
+        text("UPDATE memory_facts SET compacted_at = :ts WHERE id = :id"),
+        {"ts": now - timedelta(hours=1), "id": archived_high},
+    )
+    await db_session.flush()
+
+    agent = MemoryAgent(
+        session_factory=_mk_session_factory(db_session),
+        enable_redaction=False,
+    )
+    # Run decay avec half_life=30 days → après 60 jours, conf *= 0.25.
+    stats = await agent.maintenance(
+        skip_delete=True, skip_dedupe=True, half_life_days=30.0,
+    )
+    # Au moins 1 fact dégradé (l'actif).
+    assert stats["decayed"] >= 1
+
+    # Vérifie : le fact ACTIF a été dégradé.
+    result = await db_session.execute(
+        text("SELECT confidence FROM memory_facts WHERE id = :id"),
+        {"id": active_high},
+    )
+    active_conf = list(result)[0][0]
+    assert active_conf < 0.5, (
+        f"fact actif {active_high} devrait avoir conf < 0.5 après decay, "
+        f"obtenu {active_conf}"
+    )
+
+    # Vérifie : le fact ARCHIVÉ n'a PAS été dégradé.
+    result = await db_session.execute(
+        text("SELECT confidence FROM memory_facts WHERE id = :id"),
+        {"id": archived_high},
+    )
+    archived_conf = list(result)[0][0]
+    assert archived_conf == 0.9, (
+        f"fact archivé {archived_high} ne doit PAS être dégradé, "
+        f"devrait rester 0.9, obtenu {archived_conf}"
+    )

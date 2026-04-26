@@ -75,6 +75,8 @@ async def decay_confidence(
     `age_days = EXTRACT(EPOCH FROM NOW() - COALESCE(last_used_at, created_at)) / 86400`.
 
     Skip les rows sous le `floor` (evite churn FP sur items deja faibles).
+    Mémoire PR 4 : skip aussi les facts archivés (compacted_at IS NOT NULL) —
+    l'archive est immuable, jamais dégradée par le decay.
     Retourne le rowcount (items touches).
     """
     stmt = text(
@@ -86,6 +88,7 @@ async def decay_confidence(
               / (86400.0 * :half_life_days)
         )
         WHERE confidence > :floor
+          AND compacted_at IS NULL
         """
     )
     result = await session.execute(
@@ -108,9 +111,16 @@ async def hard_delete_below_floor(
 
     Appele apres `decay_confidence` — les items `confidence < threshold`
     sont consideres trop peu pertinents pour meriter du storage +
-    embedding space. Retourne le rowcount.
+    embedding space.
+
+    Mémoire PR 4 : ne jamais supprimer les facts archivés (compacted_at IS NOT NULL).
+    L'archive est immuable pour audit et rollback potentiel — seul le Compactor
+    peut archiver, jamais le decay.
+    Retourne le rowcount.
     """
-    stmt = text("DELETE FROM memory_facts WHERE confidence < :threshold")
+    stmt = text(
+        "DELETE FROM memory_facts WHERE confidence < :threshold AND compacted_at IS NULL"
+    )
     result = await session.execute(stmt, {"threshold": float(threshold)})
     return int(result.rowcount or 0)
 
