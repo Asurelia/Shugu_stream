@@ -30,8 +30,11 @@
  * ## Inactivité utilisateur
  *
  * L'inactivité est mesurée via `lastActivityAt` ref mis à jour sur `pointermove`
- * (canvas) et `keydown` (window). La séparation est intentionnelle :
- * - `pointermove` sur le canvas capte les interactions 3D
+ * (window) et `keydown` (window). Les deux listeners sont sur window :
+ * - `pointermove` sur window capte les interactions souris/pointer partout dans
+ *   la page — intentionnellement pas sur le canvas car `SceneComposerViewer`
+ *   gère son propre canvasRef interne (pas de forwarded-ref exposé). Mettre le
+ *   listener sur window est plus robuste et couvre aussi le HUD, les panels, etc.
  * - `keydown` sur window capte les raccourcis clavier (W/E/R gizmo, etc.)
  * Adding tabIndex au canvas pour `keydown` changerait la a11y — on évite.
  *
@@ -220,12 +223,11 @@ export function useAfkLoops({
 
   // ── Setup listeners + interval ─────────────────────────────────────────────
   useEffect(() => {
-    const canvas = canvasRef.current;
-
-    // pointermove sur le canvas — interactions 3D (survol, drag).
-    if (canvas) {
-      canvas.addEventListener("pointermove", handleActivity, { passive: true });
-    }
+    // pointermove sur window — interactions souris/pointer dans toute la page.
+    // Intentionnellement sur window (pas canvasRef.current) car SceneComposerViewer
+    // gère son propre canvasRef interne sans forwarded-ref exposé. Cela couvre aussi
+    // les interactions dans les panels et le HUD.
+    window.addEventListener("pointermove", handleActivity, { passive: true });
 
     // keydown sur window — raccourcis clavier (W/E/R gizmo, etc.).
     // Intentionnellement sur window (pas canvas) pour éviter de modifier tabIndex.
@@ -256,10 +258,8 @@ export function useAfkLoops({
     // ── Cleanup ────────────────────────────────────────────────────────────
     return () => {
       clearInterval(intervalId);
+      window.removeEventListener("pointermove", handleActivity);
       window.removeEventListener("keydown", handleActivity);
-      if (canvas) {
-        canvas.removeEventListener("pointermove", handleActivity);
-      }
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // Mount-only — toutes les props lues via refs.

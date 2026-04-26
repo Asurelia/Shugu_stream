@@ -278,10 +278,10 @@ describe("useAfkLoops hook", () => {
     // Avance 20s (pas encore AFK)
     act(() => { vi.advanceTimersByTime(20_000); });
 
-    // Simule activité pointermove → reset lastActivityAt
+    // Simule activité pointermove sur window → reset lastActivityAt
+    // (le listener est sur window, pas sur canvasRef.current)
     act(() => {
-      const event = new Event("pointermove");
-      canvasRef.current?.dispatchEvent(event);
+      window.dispatchEvent(new Event("pointermove"));
     });
 
     // Avance encore 20s → total 40s, mais depuis l'activité seulement 20s
