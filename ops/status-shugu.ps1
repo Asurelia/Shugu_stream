@@ -31,19 +31,21 @@ Write-Host ("Demarre   : {0}" -f $Pids.started_at) -ForegroundColor White
 Write-Host ""
 
 foreach ($name in "backend", "frontend", "cloudflared", "livekit", "vip_agent") {
-    $pid = $Pids.$name
-    if (-not $pid) {
+    # NB : `$pid` est une variable automatique PS (Process ID courant — read-only).
+    # On utilise `$procId` pour ne pas la shadow.
+    $procId = $Pids.$name
+    if (-not $procId) {
         Write-Host ("  {0,-12} SKIP (non lance)" -f $name) -ForegroundColor DarkGray
         continue
     }
 
-    $proc = Get-Process -Id $pid -ErrorAction SilentlyContinue
+    $proc = Get-Process -Id $procId -ErrorAction SilentlyContinue
     if ($proc) {
         $cpu = [math]::Round($proc.CPU, 1)
         $mem = [math]::Round($proc.WorkingSet64 / 1MB, 0)
-        Write-Host ("  {0,-12} PID {1,-6} ALIVE   CPU={2}s  MEM={3}MB" -f $name, $pid, $cpu, $mem) -ForegroundColor Green
+        Write-Host ("  {0,-12} PID {1,-6} ALIVE   CPU={2}s  MEM={3}MB" -f $name, $procId, $cpu, $mem) -ForegroundColor Green
     } else {
-        Write-Host ("  {0,-12} PID {1,-6} DEAD    (process introuvable)" -f $name, $pid) -ForegroundColor Red
+        Write-Host ("  {0,-12} PID {1,-6} DEAD    (process introuvable)" -f $name, $procId) -ForegroundColor Red
     }
 }
 

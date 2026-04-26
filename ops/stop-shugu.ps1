@@ -19,15 +19,17 @@ $Pids = Get-Content $PidFile -Raw | ConvertFrom-Json
 
 $stopped = 0
 foreach ($name in "backend", "frontend", "cloudflared", "livekit", "vip_agent") {
-    $pid = $Pids.$name
-    if (-not $pid) { continue }
+    # NB : `$pid` est une variable automatique PS (Process ID courant — read-only).
+    # On utilise `$procId` pour ne pas la shadow.
+    $procId = $Pids.$name
+    if (-not $procId) { continue }
     # taskkill /T tue aussi les process enfants (npm.cmd -> node)
-    $null = & taskkill.exe /T /F /PID $pid 2>&1
+    $null = & taskkill.exe /T /F /PID $procId 2>&1
     if ($LASTEXITCODE -eq 0) {
-        Write-Host ("  stopped {0,-12} PID {1}" -f $name, $pid) -ForegroundColor Yellow
+        Write-Host ("  stopped {0,-12} PID {1}" -f $name, $procId) -ForegroundColor Yellow
         $stopped++
     } else {
-        Write-Host ("  {0,-12} PID {1} déjà arrêté ou introuvable" -f $name, $pid) -ForegroundColor DarkGray
+        Write-Host ("  {0,-12} PID {1} déjà arrêté ou introuvable" -f $name, $procId) -ForegroundColor DarkGray
     }
 }
 
