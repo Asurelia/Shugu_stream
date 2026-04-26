@@ -9,11 +9,17 @@
  *   DELETE /api/scene-composer/scenes/:id      → void (204)
  *   POST   /api/scene-composer/scenes/:id/play → { ok: true }
  *
- * Pattern : `request<T>` helper local avec `credentials: "include"` (cookies
- * httpOnly) — identique à `services/accountClient.ts`.
+ * Pattern fetch : module partagé `httpClient.ts` qui gère credentials,
+ * parse `{detail}`, redirect 401 → /login, et expose une `HttpError`
+ * unifiée (remplace l'ancien `ScenesClientError` dupliqué).
  *
  * @module api/scenesClient
  */
+
+import { HttpError, request } from "./httpClient";
+
+// Re-export pour ne pas casser les imports existants côté call-sites.
+export { HttpError } from "./httpClient";
 
 // ─── Types Pydantic miroirs ───────────────────────────────────────────────────
 // (miroirs de `backend/shugu/domain/scene_composer_schemas.py`)
@@ -162,53 +168,18 @@ export type AuthoredSceneUpdate = Partial<
   Omit<AuthoredSceneCreate, "type">
 >;
 
-// ─── Erreur client ────────────────────────────────────────────────────────────
+// ─── Compat — alias historique de HttpError ──────────────────────────────────
 
-export class ScenesClientError extends Error {
-  constructor(
-    public status: number,
-    public detail: string,
-  ) {
-    super(`[${status}] ${detail}`);
-    this.name = "ScenesClientError";
-  }
-}
-
-// ─── Helper fetch ─────────────────────────────────────────────────────────────
-
-async function request<T>(path: string, opts: RequestInit = {}): Promise<T> {
-  const resp = await fetch(path, {
-    credentials: "include",
-    headers: {
-      "Content-Type": "application/json",
-      ...(opts.headers ?? {}),
-    },
-    ...opts,
-  });
-
-  if (resp.status === 204) {
-    return undefined as unknown as T;
-  }
-
-  const text = await resp.text();
-  const payload = text
-    ? (() => {
-        try {
-          return JSON.parse(text);
-        } catch {
-          return { detail: text };
-        }
-      })()
-    : {};
-
-  if (!resp.ok) {
-    const detail =
-      (payload as { detail?: string })?.detail ?? `HTTP ${resp.status}`;
-    throw new ScenesClientError(resp.status, String(detail));
-  }
-
-  return payload as T;
-}
+/**
+ * @deprecated Utiliser `HttpError` (depuis `./httpClient`).
+ *
+ * Conservé comme alias pour compat des call-sites existants. `instanceof`
+ * checks continuent de fonctionner car `ScenesClientError === HttpError`
+ * (même classe sous deux noms).
+ */
+export const ScenesClientError = HttpError;
+/** @deprecated Utiliser `HttpError` (depuis `./httpClient`). */
+export type ScenesClientError = HttpError;
 
 // ─── API ────────────────────────────────────────────────────────────────────
 

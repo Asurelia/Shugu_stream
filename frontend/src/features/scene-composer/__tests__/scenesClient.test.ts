@@ -6,14 +6,15 @@
  *   2. getScene → GET /api/scene-composer/scenes/:id.
  *   3. createScene → POST, retourne la scène créée.
  *   4. updateScene → PUT, retourne la scène mise à jour.
- *   5. deleteScene → DELETE 204, retourne undefined.
+ *   5. deleteScene → DELETE 204, retourne null (httpClient unifié H2).
  *   6. playScene → POST /play, retourne { ok: true }.
- *   7. ScenesClientError levée sur 4xx.
- *   8. ScenesClientError levée sur 5xx.
+ *   7. HttpError levée sur 4xx (alias `ScenesClientError` toujours valide).
+ *   8. HttpError levée sur 5xx.
  *   9. `encodeURIComponent` protège les IDs avec caractères spéciaux.
  *
  * Mock : `globalThis.fetch` stubbée via `vi.stubGlobal` pour contrôler les
- * réponses sans appels réseau réels.
+ * réponses sans appels réseau réels. `window.location.replace` stub pour
+ * éviter le redirect réel sur 401.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -64,6 +65,11 @@ function mockFetch(body: unknown, status = 200): void {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Stub window.location pour intercepter les redirects 401 sans navigation réelle.
+  Object.defineProperty(window, "location", {
+    configurable: true,
+    value: { replace: vi.fn(), href: "http://localhost/test" },
+  });
 });
 
 afterEach(() => {
@@ -140,10 +146,12 @@ describe("scenesClient · updateScene", () => {
 });
 
 describe("scenesClient · deleteScene", () => {
-  it("DELETE 204 retourne undefined sans throw", async () => {
+  it("DELETE 204 résout sans throw (null via httpClient unifié H2)", async () => {
     mockFetch(null, 204);
-    const result = await deleteScene("scene-abc-123");
-    expect(result).toBeUndefined();
+    // `deleteScene` retourne `Promise<void>` côté API ; httpClient résout
+    // `null as void` en interne — on vérifie juste l'absence de throw + le
+    // bon endpoint/method.
+    await expect(deleteScene("scene-abc-123")).resolves.not.toThrow();
     expect(fetch).toHaveBeenCalledWith(
       "/api/scene-composer/scenes/scene-abc-123",
       expect.objectContaining({ method: "DELETE" }),
@@ -163,8 +171,8 @@ describe("scenesClient · playScene", () => {
   });
 });
 
-describe("scenesClient · ScenesClientError", () => {
-  it("404 → ScenesClientError avec status=404", async () => {
+describe("scenesClient · HttpError (alias ScenesClientError)", () => {
+  it("404 → HttpError avec status=404", async () => {
     mockFetch({ detail: "Scene non trouvée" }, 404);
     await expect(getScene("inexistant")).rejects.toBeInstanceOf(
       ScenesClientError,
@@ -179,14 +187,24 @@ describe("scenesClient · ScenesClientError", () => {
     }
   });
 
-  it("500 → ScenesClientError avec status=500", async () => {
+  it("500 → HttpError avec status=500", async () => {
     mockFetch({ detail: "Erreur interne" }, 500);
     await expect(listScenes()).rejects.toBeInstanceOf(ScenesClientError);
   });
 
-  it("ScenesClientError.message contient [status] + detail", async () => {
-    const err = new ScenesClientError(403, "Accès refusé");
+  it("HttpError.message contient [status] + detail", () => {
+    // ScenesClientError est un alias de HttpError depuis H2 (1 module = 1 resp).
+    const err = new ScenesClientError(403, "Accès refusé", null);
     expect(err.message).toBe("[403] Accès refusé");
-    expect(err.name).toBe("ScenesClientError");
+    expect(err.name).toBe("HttpError");
+  });
+
+  it("401 mid-session → redirect /login + HttpError(401) levée", async () => {
+    mockFetch({ detail: "Cookie expiré" }, 401);
+    const replaceSpy = (
+      window.location as unknown as { replace: ReturnType<typeof vi.fn> }
+    ).replace;
+    await expect(listScenes()).rejects.toBeInstanceOf(ScenesClientError);
+    expect(replaceSpy).toHaveBeenCalledWith("/login");
   });
 });

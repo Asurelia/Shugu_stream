@@ -56,6 +56,11 @@ function mockFetch(body: unknown, status = 200): void {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Stub window.location pour intercepter les redirects 401 (httpClient H2).
+  Object.defineProperty(window, "location", {
+    configurable: true,
+    value: { replace: vi.fn(), href: "http://localhost/test" },
+  });
 });
 
 afterEach(() => {
@@ -107,27 +112,27 @@ describe("catalogClient · getAssetCatalog", () => {
   });
 });
 
-describe("catalogClient · CatalogClientError", () => {
-  it("401 → CatalogClientError avec status=401", async () => {
+describe("catalogClient · HttpError (alias CatalogClientError)", () => {
+  it("401 → HttpError(401) + redirect /login (fix H2 mid-session)", async () => {
     mockFetch({ detail: "Unauthorized" }, 401);
+    const replaceSpy = (
+      window.location as unknown as { replace: ReturnType<typeof vi.fn> }
+    ).replace;
     await expect(getAssetCatalog()).rejects.toBeInstanceOf(CatalogClientError);
-    try {
-      await getAssetCatalog();
-    } catch (err) {
-      if (err instanceof CatalogClientError) {
-        expect(err.status).toBe(401);
-      }
-    }
+    // Confirmation H2 : l'opérateur est redirigé vers /login plutôt que coincé
+    // avec une UI morte affichant "Erreur 401".
+    expect(replaceSpy).toHaveBeenCalledWith("/login");
   });
 
-  it("500 → CatalogClientError avec status=500", async () => {
+  it("500 → HttpError avec status=500", async () => {
     mockFetch({ detail: "Internal Server Error" }, 500);
     await expect(getAssetCatalog()).rejects.toBeInstanceOf(CatalogClientError);
   });
 
-  it("CatalogClientError.message contient [status] + detail", () => {
-    const err = new CatalogClientError(404, "Catalog not found");
+  it("HttpError.message contient [status] + detail", () => {
+    // CatalogClientError est un alias de HttpError depuis H2.
+    const err = new CatalogClientError(404, "Catalog not found", null);
     expect(err.message).toBe("[404] Catalog not found");
-    expect(err.name).toBe("CatalogClientError");
+    expect(err.name).toBe("HttpError");
   });
 });

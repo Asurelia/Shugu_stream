@@ -5,10 +5,17 @@
  * VFX, scenes, props 3D, whitelist faces/camera_modes). Cache 60s côté
  * serveur — le frontend n'a pas besoin de cacher côté client.
  *
- * Pattern : `request<T>` helper identique à `scenesClient.ts`.
+ * Pattern fetch : module partagé `httpClient.ts` (mêmes garanties que
+ * `scenesClient` : credentials cookies, redirect 401 → /login, HttpError
+ * unifiée). Plus de logique fetch dupliquée ici.
  *
  * @module api/catalogClient
  */
+
+import { HttpError, request } from "./httpClient";
+
+// Re-export pour ne pas casser les imports existants côté call-sites.
+export { HttpError } from "./httpClient";
 
 // ─── Types miroirs (AssetCatalogOut) ─────────────────────────────────────────
 // (miroirs de `backend/shugu/domain/assets_catalog_schemas.py`)
@@ -59,49 +66,17 @@ export interface AssetCatalogOut {
   cached_at: string;
 }
 
-// ─── Erreur client ────────────────────────────────────────────────────────────
+// ─── Compat — alias historique de HttpError ──────────────────────────────────
 
-export class CatalogClientError extends Error {
-  constructor(
-    public status: number,
-    public detail: string,
-  ) {
-    super(`[${status}] ${detail}`);
-    this.name = "CatalogClientError";
-  }
-}
-
-// ─── Helper fetch ─────────────────────────────────────────────────────────────
-
-async function request<T>(path: string, opts: RequestInit = {}): Promise<T> {
-  const resp = await fetch(path, {
-    credentials: "include",
-    headers: {
-      "Content-Type": "application/json",
-      ...(opts.headers ?? {}),
-    },
-    ...opts,
-  });
-
-  const text = await resp.text();
-  const payload = text
-    ? (() => {
-        try {
-          return JSON.parse(text);
-        } catch {
-          return { detail: text };
-        }
-      })()
-    : {};
-
-  if (!resp.ok) {
-    const detail =
-      (payload as { detail?: string })?.detail ?? `HTTP ${resp.status}`;
-    throw new CatalogClientError(resp.status, String(detail));
-  }
-
-  return payload as T;
-}
+/**
+ * @deprecated Utiliser `HttpError` (depuis `./httpClient`).
+ *
+ * Conservé comme alias pour compat des call-sites existants. `instanceof`
+ * checks continuent de fonctionner car `CatalogClientError === HttpError`.
+ */
+export const CatalogClientError = HttpError;
+/** @deprecated Utiliser `HttpError` (depuis `./httpClient`). */
+export type CatalogClientError = HttpError;
 
 // ─── API ─────────────────────────────────────────────────────────────────────
 
