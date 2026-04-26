@@ -112,6 +112,12 @@ export function SceneComposerViewer({
 
   // Ref au callback onGizmoChange — initialisé null, mis à jour après useGizmoBindingWithCallbacks.
   // Passé à useSceneRig pour que le closure onChange du gizmo lise toujours la version à jour.
+  //
+  // Pourquoi null-init est sûr : le gizmo Three.js ne peut pas émettre `onChange`
+  // avant la fin du useEffect mount de useSceneRig (post-commit React) — moment
+  // où `.current` a déjà été assigné par la ligne `onGizmoChangeRef.current = onGizmoChange`
+  // ci-dessous. L'optional chaining `?.()` dans useSceneRig.ts est purement
+  // défensif contre un cas d'invocation impossible en pratique.
   const onGizmoChangeRef = useRef<((obj: THREE.Object3D) => void) | null>(null);
 
   // ── Hook useSceneRig ──────────────────────────────────────────────────────
