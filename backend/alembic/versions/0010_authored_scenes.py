@@ -4,6 +4,12 @@ Revision ID: 0010_authored_scenes
 Revises: 0009_memory_episodes
 Create Date: 2026-04-24 12:00:00.000000
 
+⚠️ Migration Postgres-only : utilise sqlalchemy.dialects.postgresql.JSONB.
+
+Les unit tests SQLite contournent via _ASR.__table__.create() direct (pas Alembic).
+Si CI/dev veulent SQLite intégration, adapter avec _JSONB_VARIANT pattern
+(cf models_scene_composer.py). Alembic downgrade via op.drop_table() — compatible DB.
+
 ## Table authored_scenes
 
 Stocke les scènes pré-fabriquées par l'opérateur pour events spéciaux,
