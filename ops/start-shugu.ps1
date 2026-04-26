@@ -51,12 +51,21 @@ if (Test-Path $PidFile) {
 }
 
 # --- Résolution des chemins / exécutables -------------------------------------
-$PythonExe      = (Get-Command python -ErrorAction SilentlyContinue).Source
-if (-not $PythonExe) { Write-Error "python introuvable dans PATH"; exit 1 }
-
 $BackendDir     = Join-Path $Root "backend"
 $FrontendDir    = Join-Path $Root "frontend"
 $CloudflaredExe = "C:\Users\rafai\cloudflared\cloudflared.exe"
+
+# Priorité au venv backend si présent (uvicorn, structlog, etc. installés là).
+# Fallback : python du PATH (qui peut ne pas avoir les deps backend).
+$VenvPython = Join-Path $BackendDir ".venv\Scripts\python.exe"
+if (Test-Path $VenvPython) {
+    $PythonExe = $VenvPython
+    Write-Host ">> Backend venv détecté : $VenvPython" -ForegroundColor DarkGray
+} else {
+    $PythonExe = (Get-Command python -ErrorAction SilentlyContinue).Source
+    if (-not $PythonExe) { Write-Error "python introuvable (ni venv ni PATH)"; exit 1 }
+    Write-Warning "Aucun venv backend (.venv) — utilisation de $PythonExe (peut manquer des deps)"
+}
 
 $BackendPort    = if ($env:SHUGU_PORT) { $env:SHUGU_PORT } else { "8701" }
 
