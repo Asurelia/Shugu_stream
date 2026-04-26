@@ -78,8 +78,9 @@ class MemoryFact(Base):
     )
     # compact_origin_ids : IDs ULID des facts sources dont ce summary est issu.
     # Non-null uniquement sur les summaries (is_compacted_summary = True).
+    # ARRAY(Text) aligné avec la migration 0011 (TEXT[] PG).
     compact_origin_ids: Mapped[Optional[list[str]]] = mapped_column(
-        ARRAY(String(26)), nullable=True,
+        ARRAY(Text), nullable=True,
     )
     # is_compacted_summary : True pour les facts résumés générés par le Compactor.
     # Ces facts sont exclus du comptage de threshold pour éviter les récursions.
