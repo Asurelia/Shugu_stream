@@ -1,6 +1,6 @@
 """Compactor fields — memory_facts — Mémoire PR 4
 
-Revision ID: 0011_compactor_fields_memory_facts
+Revision ID: 0011_compactor_facts
 Revises: 0010_authored_scenes
 Create Date: 2026-04-26 20:00:00.000000
 
@@ -58,7 +58,7 @@ from sqlalchemy.dialects.postgresql import ARRAY
 
 from alembic import op
 
-revision: str = "0011_compactor_fields_memory_facts"
+revision: str = "0011_compactor_facts"
 down_revision: Union[str, None] = "0010_authored_scenes"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
