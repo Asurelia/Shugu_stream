@@ -27,12 +27,12 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from shugu.memory.agent import MemoryAgent
-from shugu.memory.compactor import (
-    CompactionResult,
-    MemoryCompactor,
-    _build_system_prompt,
-    _build_user_prompt,
-    _parse_summary_response,
+from shugu.memory.compactor import CompactionResult, MemoryCompactor
+from shugu.memory.compactor_parsing import (
+    ParseError,
+    build_system_prompt,
+    build_user_prompt,
+    parse_summary_response,
 )
 from shugu.memory.types import MemoryItem
 
@@ -506,7 +506,7 @@ async def test_compact_all_eligible_no_subjects_returns_empty() -> None:
 # ── Tests parsing ─────────────────────────────────────────────────────────────
 
 
-async def test_parse_summary_response_valid_json() -> None:
+async def testparse_summary_response_valid_json() -> None:
     """Parse un JSON valide avec 2 facts."""
     raw = json.dumps({
         "summary_facts": [
@@ -514,7 +514,7 @@ async def test_parse_summary_response_valid_json() -> None:
             {"predicate": "game", "object": "chess", "confidence": 0.7},
         ]
     })
-    result = _parse_summary_response(raw)
+    result = parse_summary_response(raw)
 
     assert len(result) == 2
     assert result[0]["predicate"] == "name"
@@ -523,18 +523,18 @@ async def test_parse_summary_response_valid_json() -> None:
     assert result[1]["predicate"] == "game"
 
 
-async def test_parse_summary_response_json_with_preamble() -> None:
+async def testparse_summary_response_json_with_preamble() -> None:
     """Parse un JSON entouré de texte de courtoisie du LLM."""
     raw = "Voici le résumé condensé :\n" + json.dumps({
         "summary_facts": [{"predicate": "x", "object": "y", "confidence": 0.5}]
     }) + "\nJ'espère que c'est utile."
 
-    result = _parse_summary_response(raw)
+    result = parse_summary_response(raw)
     assert len(result) == 1
     assert result[0]["predicate"] == "x"
 
 
-async def test_parse_summary_response_clamps_confidence() -> None:
+async def testparse_summary_response_clamps_confidence() -> None:
     """confidence hors [0,1] est clampée."""
     raw = json.dumps({
         "summary_facts": [
@@ -542,34 +542,31 @@ async def test_parse_summary_response_clamps_confidence() -> None:
             {"predicate": "c", "object": "d", "confidence": -0.2},  # < 0
         ]
     })
-    result = _parse_summary_response(raw)
+    result = parse_summary_response(raw)
 
     assert result[0]["confidence"] == pytest.approx(1.0)
     assert result[1]["confidence"] == pytest.approx(0.0)
 
 
-async def test_parse_summary_response_empty_raises() -> None:
-    """Réponse vide → _ParseError."""
-    from shugu.memory.compactor import _ParseError
-    with pytest.raises(_ParseError, match="vide"):
-        _parse_summary_response("")
+async def testparse_summary_response_empty_raises() -> None:
+    """Réponse vide → ParseError."""
+    with pytest.raises(ParseError, match="vide"):
+        parse_summary_response("")
 
 
-async def test_parse_summary_response_non_json_raises() -> None:
-    """Texte sans bloc JSON → _ParseError."""
-    from shugu.memory.compactor import _ParseError
-    with pytest.raises(_ParseError, match="non-JSON"):
-        _parse_summary_response("Je suis un LLM qui oublie le format JSON demandé.")
+async def testparse_summary_response_non_json_raises() -> None:
+    """Texte sans bloc JSON → ParseError."""
+    with pytest.raises(ParseError, match="non-JSON"):
+        parse_summary_response("Je suis un LLM qui oublie le format JSON demandé.")
 
 
-async def test_parse_summary_response_missing_summary_facts_key_raises() -> None:
-    """JSON valide sans 'summary_facts' → _ParseError."""
-    from shugu.memory.compactor import _ParseError
-    with pytest.raises(_ParseError, match="summary_facts"):
-        _parse_summary_response('{"data": []}')
+async def testparse_summary_response_missing_summary_facts_key_raises() -> None:
+    """JSON valide sans 'summary_facts' → ParseError."""
+    with pytest.raises(ParseError, match="summary_facts"):
+        parse_summary_response('{"data": []}')
 
 
-async def test_parse_summary_response_skips_items_missing_fields() -> None:
+async def testparse_summary_response_skips_items_missing_fields() -> None:
     """Items sans predicate ou object sont ignorés (logged + skipped)."""
     raw = json.dumps({
         "summary_facts": [
@@ -578,7 +575,7 @@ async def test_parse_summary_response_skips_items_missing_fields() -> None:
             {"predicate": "ok", "object": "yes", "confidence": 0.8},  # valide
         ]
     })
-    result = _parse_summary_response(raw)
+    result = parse_summary_response(raw)
 
     assert len(result) == 1
     assert result[0]["predicate"] == "ok"
@@ -625,22 +622,22 @@ def test_compactor_constructor_rejects_invalid_target() -> None:
 # ── Tests prompt building ─────────────────────────────────────────────────────
 
 
-def test_build_system_prompt_contains_target_count() -> None:
+def testbuild_system_prompt_contains_target_count() -> None:
     """Le system prompt mentionne le nombre de facts cibles."""
-    prompt = _build_system_prompt(target_count=5)
+    prompt = build_system_prompt(target_count=5)
 
     assert "5" in prompt
     assert "JSON" in prompt
     assert "summary_facts" in prompt
 
 
-def test_build_user_prompt_contains_subject_and_facts() -> None:
+def testbuild_user_prompt_contains_subject_and_facts() -> None:
     """Le user prompt contient le subject et les facts formatés."""
     facts = [
         _make_fact(subject="viewer:test", predicate="color", obj="blue"),
         _make_fact(subject="viewer:test", predicate="game", obj="chess"),
     ]
-    prompt = _build_user_prompt("viewer:test", facts)
+    prompt = build_user_prompt("viewer:test", facts)
 
     assert "viewer:test" in prompt
     assert "color: blue" in prompt
