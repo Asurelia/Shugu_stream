@@ -1,0 +1,133 @@
+/**
+ * Tests — `catalogClient` (Phase E5.2).
+ *
+ * Couverture :
+ *   1. getAssetCatalog → GET /api/assets/catalog, retourne AssetCatalogOut.
+ *   2. Retour d'un catalogue vide (toutes sections = []).
+ *   3. CatalogClientError levée sur 401.
+ *   4. CatalogClientError levée sur 500.
+ *   5. CatalogClientError.message et .name corrects.
+ *
+ * Mock : `globalThis.fetch` stubbée.
+ */
+
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  getAssetCatalog,
+  CatalogClientError,
+  type AssetCatalogOut,
+} from "../api/catalogClient";
+
+// ─── Fixtures ────────────────────────────────────────────────────────────────
+
+const MOCK_CATALOG: AssetCatalogOut = {
+  vrm_avatars: [
+    { slug: "shugu", file: "/assets/vrm/shugu.vrm", sidecars: ["/assets/vrma/idle.vrma"] },
+  ],
+  outfits: [
+    { slug: "default", file: "/assets/vrm/outfits/default.png", display_name: "Tenue par défaut" },
+  ],
+  vrma_animations: [
+    { slug: "wave", file: "/assets/vrma/wave.vrma", duration_ms: 2000, loop: false },
+    { slug: "idle_loop", file: "/assets/vrma/idle.vrma", duration_ms: null, loop: true },
+  ],
+  vfx: [{ slug: "sparkle_pink", file: "/assets/vfx/sparkle_pink.json" }],
+  scenes: [{ slug: "main_talk", file: "/assets/scenes/main_talk.json" }],
+  props_3d: [],
+  faces: ["joy", "sad", "surprised"],
+  camera_modes: ["close_up", "wide"],
+  cached_at: "2026-01-01T12:00:00Z",
+};
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+function mockFetch(body: unknown, status = 200): void {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn().mockResolvedValue({
+      ok: status >= 200 && status < 300,
+      status,
+      text: () => Promise.resolve(JSON.stringify(body)),
+    }),
+  );
+}
+
+// ─── Tests ───────────────────────────────────────────────────────────────────
+
+beforeEach(() => {
+  vi.clearAllMocks();
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
+describe("catalogClient · getAssetCatalog", () => {
+  it("GET /api/assets/catalog retourne AssetCatalogOut complet", async () => {
+    mockFetch(MOCK_CATALOG);
+    const result = await getAssetCatalog();
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/assets/catalog",
+      expect.objectContaining({ credentials: "include" }),
+    );
+    expect(result.vrm_avatars).toHaveLength(1);
+    expect(result.vrm_avatars[0].slug).toBe("shugu");
+    expect(result.outfits[0].display_name).toBe("Tenue par défaut");
+    expect(result.vrma_animations).toHaveLength(2);
+    expect(result.faces).toEqual(["joy", "sad", "surprised"]);
+    expect(result.camera_modes).toEqual(["close_up", "wide"]);
+    expect(result.cached_at).toBe("2026-01-01T12:00:00Z");
+  });
+
+  it("catalogue vide : toutes sections sont des tableaux vides sans throw", async () => {
+    const emptyCatalog: AssetCatalogOut = {
+      vrm_avatars: [],
+      outfits: [],
+      vrma_animations: [],
+      vfx: [],
+      scenes: [],
+      props_3d: [],
+      faces: [],
+      camera_modes: [],
+      cached_at: "2026-01-01T00:00:00Z",
+    };
+    mockFetch(emptyCatalog);
+    const result = await getAssetCatalog();
+    expect(result.vrm_avatars).toHaveLength(0);
+    expect(result.props_3d).toHaveLength(0);
+  });
+
+  it("VrmaAnimationEntry avec loop:true est correctement parsée", async () => {
+    mockFetch(MOCK_CATALOG);
+    const result = await getAssetCatalog();
+    const idleAnim = result.vrma_animations.find((a) => a.slug === "idle_loop");
+    expect(idleAnim?.loop).toBe(true);
+    expect(idleAnim?.duration_ms).toBeNull();
+  });
+});
+
+describe("catalogClient · CatalogClientError", () => {
+  it("401 → CatalogClientError avec status=401", async () => {
+    mockFetch({ detail: "Unauthorized" }, 401);
+    await expect(getAssetCatalog()).rejects.toBeInstanceOf(CatalogClientError);
+    try {
+      await getAssetCatalog();
+    } catch (err) {
+      if (err instanceof CatalogClientError) {
+        expect(err.status).toBe(401);
+      }
+    }
+  });
+
+  it("500 → CatalogClientError avec status=500", async () => {
+    mockFetch({ detail: "Internal Server Error" }, 500);
+    await expect(getAssetCatalog()).rejects.toBeInstanceOf(CatalogClientError);
+  });
+
+  it("CatalogClientError.message contient [status] + detail", () => {
+    const err = new CatalogClientError(404, "Catalog not found");
+    expect(err.message).toBe("[404] Catalog not found");
+    expect(err.name).toBe("CatalogClientError");
+  });
+});
