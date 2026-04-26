@@ -25,12 +25,15 @@ Phase 2 — état :
 from __future__ import annotations
 
 from .agent import MemoryAgent
+from .compactor import CompactionResult, MemoryCompactor
 from .episodes import EventType, MemoryEpisode
 from .types import MemoryItem, MemoryKind, RecallQuery
 
 __all__ = [
+    "CompactionResult",
     "EventType",
     "MemoryAgent",
+    "MemoryCompactor",
     "MemoryEpisode",
     "MemoryItem",
     "MemoryKind",
