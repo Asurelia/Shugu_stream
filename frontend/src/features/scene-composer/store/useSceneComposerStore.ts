@@ -230,7 +230,15 @@ export const useSceneComposerStore = create<SceneComposerState>()((set) => ({
 
   setSelectedSceneId: (id) => set({ selectedSceneId: id }),
 
-  setViewerMode: (mode) => set({ viewerMode: mode }),
+  setViewerMode: (mode) =>
+    set((state) => {
+      // Si on bascule en "edit" alors qu'on était en "playing", stopper le Play
+      // automatiquement pour préserver l'invariant playing → preview.
+      if (mode === "edit" && state.playMode === "playing") {
+        return { viewerMode: "edit", playMode: "stopped" };
+      }
+      return { viewerMode: mode };
+    }),
 
   setCameraPreset: (preset) => set({ cameraPreset: preset }),
 

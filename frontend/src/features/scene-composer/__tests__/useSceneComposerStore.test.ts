@@ -470,3 +470,27 @@ describe("useSceneComposerStore · resetUI E5.4", () => {
     expect(selectCurrentVrmaUrl(state)).toBeNull();
   });
 });
+
+describe("useSceneComposerStore · MAJOR-1 invariant defense — setViewerMode + playMode", () => {
+  it("setViewerMode('edit') pendant playMode=playing force playMode=stopped (préserve invariant)", () => {
+    // Setup : Play actif → preview
+    useSceneComposerStore.getState().setPlayMode("playing");
+    expect(useSceneComposerStore.getState().playMode).toBe("playing");
+    expect(useSceneComposerStore.getState().viewerMode).toBe("preview");
+
+    // Action : user clique Édition dans header → setViewerMode("edit") direct
+    useSceneComposerStore.getState().setViewerMode("edit");
+
+    // Vérif : invariant préservé — passage edit doit avoir stoppé Play
+    expect(useSceneComposerStore.getState().viewerMode).toBe("edit");
+    expect(useSceneComposerStore.getState().playMode).toBe("stopped");
+  });
+
+  it("setViewerMode('preview') pendant playMode=stopped ne touche pas playMode", () => {
+    useSceneComposerStore.getState().setPlayMode("stopped");
+    useSceneComposerStore.getState().setViewerMode("preview");
+
+    expect(useSceneComposerStore.getState().viewerMode).toBe("preview");
+    expect(useSceneComposerStore.getState().playMode).toBe("stopped");
+  });
+});

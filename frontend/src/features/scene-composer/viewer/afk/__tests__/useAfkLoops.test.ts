@@ -302,4 +302,57 @@ describe("useAfkLoops hook", () => {
 
     expect(setCurrentVrmaUrl).not.toHaveBeenCalled();
   });
+
+  // MINOR-4 : Tests d'intégration au hook (conditions logiques appliquées ensemble)
+  it("ne déclenche PAS quand afkLoops.enabled = false (condition hook-level)", () => {
+    const setCurrentVrmaUrl = vi.fn();
+    const catalogue: VrmaAnimationEntry[] = [
+      makeVrma("idle_stand", "/idle_stand.vrma", true),
+    ];
+
+    // Setup : playMode=playing + idle suffisant + viewerCount<threshold MAIS enabled=false
+    renderHook(() =>
+      useAfkLoops({
+        playMode: "playing",
+        afkLoops: { enabled: false, viewerThreshold: 5, idleSeconds: 30 },
+        vrmaCatalogue: catalogue,
+        currentViewerCount: 0,
+        setCurrentVrmaUrl,
+      })
+    );
+
+    // Avance bien au-delà de idleSeconds
+    act(() => {
+      vi.advanceTimersByTime(120_000);
+    });
+
+    // Vérif : currentVrmaUrl n'a jamais été appelé
+    expect(setCurrentVrmaUrl).not.toHaveBeenCalled();
+  });
+
+  it("ne déclenche PAS quand currentViewerCount >= viewerThreshold (condition hook-level)", () => {
+    const setCurrentVrmaUrl = vi.fn();
+    const catalogue: VrmaAnimationEntry[] = [
+      makeVrma("idle_breathe", "/idle_breathe.vrma", true),
+    ];
+
+    // Setup : enabled=true + idle suffisant MAIS viewerCount=10 >= threshold=5
+    renderHook(() =>
+      useAfkLoops({
+        playMode: "playing",
+        afkLoops: { enabled: true, viewerThreshold: 5, idleSeconds: 30 },
+        vrmaCatalogue: catalogue,
+        currentViewerCount: 10,
+        setCurrentVrmaUrl,
+      })
+    );
+
+    // Avance au-delà du seuil inactivité
+    act(() => {
+      vi.advanceTimersByTime(120_000);
+    });
+
+    // Vérif : pas de déclenchement à cause du seuil viewers
+    expect(setCurrentVrmaUrl).not.toHaveBeenCalled();
+  });
 });
