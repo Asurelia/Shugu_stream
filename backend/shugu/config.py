@@ -349,6 +349,18 @@ class Settings(BaseSettings):
                     "OFF par défaut — uniquement pour CI/tests E2E Playwright.",
     )
 
+    # Phase E5.1 — ScenePlayer (Scene Composer execution déterministe).
+    # OFF par défaut — la PR pose la base backend, l'activation se fait
+    # une fois le frontend Composer (E5.2-E5.4) livré et les loops AFK
+    # validés. POST /api/scene-composer/scenes/{id}/play retourne 503
+    # tant que le flag est False (cohérent avec le pattern director_enabled).
+    scene_player_enabled: bool = Field(
+        default=False,
+        description="Active le ScenePlayer (exécution déterministe d'AuthoredScene). "
+                    "OFF par défaut — opt-in via SHUGU_SCENE_PLAYER_ENABLED=true. "
+                    "Si False, l'API /play retourne 503.",
+    )
+
     @field_validator("ip_hash_salt", mode="after")
     @classmethod
     def _validate_ip_hash_salt(cls, v: str, info) -> str:

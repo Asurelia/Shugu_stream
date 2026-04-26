@@ -43,6 +43,7 @@ from .routes import (
     account,
     admin,
     admin_users,
+    assets_catalog_api,
     auth,
     editor_ws,
     health,
@@ -52,6 +53,7 @@ from .routes import (
     operator_voice_ws,
     operator_ws,
     registry_api,
+    scene_composer_api,
     scene_editor_api,
     test_director_api,
     visitor_ws,
@@ -338,6 +340,33 @@ async def lifespan(app: FastAPI):
     from .director.workers import make_workers
     app.state.director_workers = make_workers(event_bus)
 
+    # Scene Composer ScenePlayer (Phase E5.1) — exécuteur déterministe.
+    # OFF par défaut (`scene_player_enabled=False`), aucun impact prod sans le flag.
+    # `start_play()` log warning + return si flag OFF, et `/api/scene-composer/.../play`
+    # renvoie 503 (cf. routes/scene_composer_api.py).
+    if settings.scene_player_enabled:
+        from sqlalchemy import select as _sa_select
+
+        from .db.models_scene_composer import AuthoredSceneRow as _AuthoredSceneRow
+        from .scene_composer.player import ScenePlayer
+
+        async def _load_authored_scene(scene_id: str):
+            """Loader async injecté dans ScenePlayer pour résoudre les loops."""
+            async with session_scope() as _session:
+                return (await _session.execute(
+                    _sa_select(_AuthoredSceneRow).where(_AuthoredSceneRow.id == scene_id)
+                )).scalar_one_or_none()
+
+        app.state.scene_player = ScenePlayer(
+            workers=app.state.director_workers,
+            settings=settings,
+            scene_loader=_load_authored_scene,
+        )
+        log.info("scene_composer.player_wired", extra={"flag": True})
+    else:
+        app.state.scene_player = None
+        log.info("scene_composer.player_disabled", extra={"flag": False})
+
     # Director (Phase E1) — background tasks Silence + SceneChangeRelay.
     # `start()` est un no-op tant que `settings.director_enabled=False`
     # (défaut), donc aucun impact prod sur les déploiements actuels.
@@ -434,6 +463,11 @@ async def lifespan(app: FastAPI):
         # Orchestrator s'arrête AVANT le background et le bus (il peut encore publier).
         if director_orchestrator is not None:
             await director_orchestrator.stop()
+        # ScenePlayer (Phase E5.1) — stop la scene en cours pour libérer la task
+        # avant de couper le bus (les workers broadcast pendant l'exécution).
+        scene_player = getattr(app.state, "scene_player", None)
+        if scene_player is not None:
+            await scene_player.stop_current()
         await director_bg.stop()
         await viewer_counter.stop()
         await prep_worker.stop()
@@ -469,6 +503,8 @@ def create_app() -> FastAPI:
     app.include_router(registry_api.public_router)
     app.include_router(registry_api.admin_router)
     app.include_router(scene_editor_api.router)  # /api/scene-editor/* — Phase C drafts/patterns/layouts/timeline
+    app.include_router(scene_composer_api.router)  # /api/scene-composer/* — Phase E5.1 authored scenes + play
+    app.include_router(assets_catalog_api.router)  # /api/assets/catalog — Phase E5.1 unified catalog
     app.include_router(hermes_state_api.router)
     app.include_router(visitor_ws.router)
     app.include_router(operator_ws.router)
