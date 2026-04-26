@@ -2,14 +2,23 @@
  * SceneComposerViewer — wrapper React autour du rig Three.js du Scene Composer.
  *
  * Responsabilité unique : gérer le cycle de vie React ↔ Three.js.
- *   - Mount : crée le rig (renderer + scène + caméra + helpers).
+ *   - Mount : crée le rig (renderer + scène + caméra + helpers + gizmo + selection).
  *   - Prop update : applique les changements de preset caméra sans recréer le rig.
  *   - Unmount : annule le RAF, dispose toutes les ressources GPU.
  *
- * OUT OF SCOPE E5.2 :
- *   - Gizmos / TransformControls (E5.3)
- *   - Drag-drop d'assets (E5.3)
- *   - Play Mode toolbar (E5.4)
+ * Extensions E5.3 :
+ *   - TransformControls (gizmo W/E/R) + coexistence OrbitControls
+ *   - Raycaster click-to-select (pointerdown → store.setSelectedMeshId)
+ *   - Drop target HTML5 (drop depuis AssetCataloguePanel → instancie prop 3D)
+ *   - Sync store.selectedMeshId → gizmo.attach(mesh)
+ *   - Sync store.propInstances → mount/unmount Object3D dans la scène
+ *   - Bidirectionnel : gizmo change → store.updateMeshTransform (debounce RAF)
+ *
+ * Modularité : les modules purs Three.js sont dans `three-stage/`, les hooks
+ * React dans `interactions/`. Ce composant câble ensemble les deux couches.
+ *
+ * Limite modularité : SceneComposerViewer reste < 400 lignes en E5.3 car
+ * l'ensemble rig + gizmo + selection + drop tient dans un seul `useEffect` mount.
  *
  * Pattern Three.js lifecycle : identique à `viewer-adapter.tsx` du Scene Editor
  * (Phase F) — RAF cancel au unmount, `cancelled` token pour le load VRM async.
@@ -29,10 +38,27 @@ import {
   tickAnimation,
   type AnimationRig,
 } from "./three-stage/animations";
+import {
+  attachTransformControls,
+  type TransformControlsHandle,
+} from "./three-stage/transform-controls";
+import { setupRaycasterSelection } from "./three-stage/raycaster-selection";
+import {
+  createPropInstance,
+  disposePropInstance,
+} from "./three-stage/prop-instances";
+import { useGizmoBindingWithCallbacks } from "./interactions/useGizmoBinding";
+import { useDragDropTarget } from "./interactions/useDragDropTarget";
 import type { SceneRig } from "./three-stage/createScene";
 import type { CameraRig } from "./three-stage/createCamera";
 import type { HelperSet } from "./three-stage/helpers";
 import type { VRM } from "@pixiv/three-vrm";
+import {
+  useSceneComposerStore,
+  selectSelectedMeshId,
+  selectPropInstances,
+} from "../store/useSceneComposerStore";
+import type { Prop3DEntry } from "../api/catalogClient";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -53,6 +79,16 @@ export interface SceneComposerViewerProps {
   vrmaUrl?: string;
   /** Si `true`, l'animation boucle (LoopRepeat). Défaut : `false`. */
   vrmaLoop?: boolean;
+}
+
+// ─── Helpers internes ─────────────────────────────────────────────────────────
+
+/**
+ * Génère un ID unique simple pour les instances de props.
+ * UUID-like — pas besoin d'un vrai UUID pour ce contexte.
+ */
+function generateInstanceId(): string {
+  return `prop_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
 }
 
 // ─── Composant ────────────────────────────────────────────────────────────────
@@ -77,11 +113,16 @@ export function SceneComposerViewer({
   const cameraRigRef = useRef<CameraRig | null>(null);
   const helpersRef = useRef<HelperSet | null>(null);
   const vrmRef = useRef<VRM | null>(null);
-  // Rig d'animation VRMA — null tant qu'aucune animation n'est chargée. Lu par
-  // `tickAnimation` dans la RAF loop et passé à `disposeAll` au cleanup.
   const animRigRef = useRef<AnimationRig | null>(null);
   const rafRef = useRef<number | null>(null);
   const clockRef = useRef(new THREE.Clock());
+
+  // Refs E5.3 — gizmo + selection + registry.
+  const gizmoHandleRef = useRef<TransformControlsHandle | null>(null);
+  /** Registry instanceId → Object3D pour la sélection et le gizmo attach. */
+  const meshRegistryRef = useRef<Map<string, THREE.Object3D>>(new Map());
+  /** Ref de la caméra exposée aux hooks interaction. */
+  const cameraRefForHooks = useRef<THREE.PerspectiveCamera | null>(null);
 
   // Refs latest pour les props lues dans les closures (RAF loop, async load).
   const cameraPresetRef = useRef<CameraPreset>(cameraPreset);
@@ -92,6 +133,56 @@ export function SceneComposerViewer({
   vrmaUrlRef.current = vrmaUrl;
   const vrmaLoopRef = useRef<boolean>(vrmaLoop);
   vrmaLoopRef.current = vrmaLoop;
+
+  // Store — sélecteurs fins.
+  const selectedMeshId = useSceneComposerStore(selectSelectedMeshId);
+  const propInstances = useSceneComposerStore(selectPropInstances);
+  const setSelectedMeshId = useSceneComposerStore((s) => s.setSelectedMeshId);
+  const addPropInstance = useSceneComposerStore((s) => s.addPropInstance);
+
+  // ── Hook useGizmoBindingWithCallbacks ─────────────────────────────────────
+  // Fournit `onGizmoChange` (callback stable) à passer dans attachTransformControls.
+  // Note : gizmoHandleRef.current sera null au mount initial — le hook est no-op
+  // jusqu'à ce que le rig soit initialisé (le useEffect mount set gizmoHandleRef).
+  const { onGizmoChange } = useGizmoBindingWithCallbacks({
+    gizmoHandle: gizmoHandleRef.current,
+    meshRegistry: meshRegistryRef,
+  });
+  // Ref latest pour que le callback onChange du gizmo lise toujours la version
+  // à jour (le hook peut re-render entre le mount et le premier drag).
+  const onGizmoChangeRef = useRef(onGizmoChange);
+  onGizmoChangeRef.current = onGizmoChange;
+
+  // ── Hook useDragDropTarget ────────────────────────────────────────────────
+  const handleAssetDropped = useCallback(
+    (asset: Prop3DEntry, worldPosition: THREE.Vector3) => {
+      const scene = sceneRigRef.current?.scene;
+      if (!scene) return;
+
+      const instanceId = generateInstanceId();
+      const obj = createPropInstance(asset, worldPosition, instanceId);
+      scene.add(obj);
+      meshRegistryRef.current.set(instanceId, obj);
+
+      addPropInstance({
+        id: instanceId,
+        assetSlug: asset.slug,
+        transform: {
+          position: [worldPosition.x, worldPosition.y, worldPosition.z],
+          rotation: [0, 0, 0],
+          scale: [1, 1, 1],
+        },
+      });
+    },
+    [addPropInstance],
+  );
+
+  useDragDropTarget({
+    canvasRef,
+    cameraRef: cameraRefForHooks,
+    onAssetDropped: handleAssetDropped,
+    disabled: viewMode === "preview",
+  });
 
   // ── Setup one-shot (mount) ───────────────────────────────────────────────
   useEffect(() => {
@@ -110,37 +201,81 @@ export function SceneComposerViewer({
     // 2. Camera + OrbitControls.
     const cameraRig = createCamera(canvas, w / h, cameraPresetRef.current);
     cameraRigRef.current = cameraRig;
+    cameraRefForHooks.current = cameraRig.camera;
 
     // 3. Helpers (edit mode uniquement — mais créés toujours pour dispose propre).
     const helpers = createHelpers(sceneRig.scene);
     helpersRef.current = helpers;
-    // Masquer en mode preview au mount.
     helpers.grid.visible = viewModeRef.current === "edit";
     helpers.axes.visible = viewModeRef.current === "edit";
 
-    // 4. Boucle RAF.
+    // 4. TransformControls (gizmo E5.3) — masqué par défaut, visible en edit mode.
+    const gizmoHandle = attachTransformControls(
+      cameraRig.camera,
+      canvas,
+      sceneRig.scene,
+      cameraRig.controls,
+      {
+        mode: "translate",
+        onChange: (obj) => {
+          // Debounce via le callback stable du hook useGizmoBindingWithCallbacks.
+          onGizmoChangeRef.current(obj);
+        },
+        onDraggingChanged: (dragging) => {
+          // OrbitControls déjà géré dans attachTransformControls via le paramètre orbit.
+          // Ce callback permet des effets UI supplémentaires si besoin.
+          void dragging;
+        },
+      },
+    );
+    gizmoHandleRef.current = gizmoHandle;
+
+    // Gizmo visible seulement en mode edit.
+    gizmoHandle.controls.visible = viewModeRef.current === "edit";
+    gizmoHandle.controls.enabled = viewModeRef.current === "edit";
+
+    // 5. Raycaster selection (click-to-pick).
+    const selectionHandle = setupRaycasterSelection(
+      sceneRig.scene,
+      cameraRig.camera,
+      canvas,
+      (mesh) => {
+        if (!mesh) {
+          // Clic dans le vide → désélection.
+          setSelectedMeshId(null);
+          gizmoHandle.attach(null);
+          return;
+        }
+        // Identifie l'instance via userData.instanceId.
+        const instanceId = mesh.userData["instanceId"] as string | undefined;
+        if (instanceId) {
+          setSelectedMeshId(instanceId);
+          gizmoHandle.attach(mesh);
+        }
+      },
+      {
+        ignoreNamePrefixes: ["__helper_", "__gizmo_"],
+        ignoreNames: ["__floor__"],
+      },
+    );
+
+    // 6. Boucle RAF.
     function tick(): void {
       const delta = clockRef.current.getDelta();
-
       cameraRig.controls.update();
-
-      // Avance le mixer VRMA si une animation est active. No-op si null.
       tickAnimation(animRigRef.current, delta);
 
-      // Update VRM update (blendshapes, springbones) si chargé.
       if (vrmRef.current) {
         vrmRef.current.update(delta);
       }
 
       const activeCamera = cameraRig.camera;
       sceneRig.renderer.render(sceneRig.scene, activeCamera);
-
       rafRef.current = requestAnimationFrame(tick);
     }
-
     rafRef.current = requestAnimationFrame(tick);
 
-    // 5. ResizeObserver pour adapter le renderer à la taille du conteneur.
+    // 7. ResizeObserver.
     const resizeObserver = new ResizeObserver((entries) => {
       for (const entry of entries) {
         const { width, height } = entry.contentRect;
@@ -153,7 +288,7 @@ export function SceneComposerViewer({
     });
     if (parent) resizeObserver.observe(parent);
 
-    // 6. Load VRM async, puis animation VRMA optionnelle (E5.2 : opt-in).
+    // 8. Load VRM async.
     loadVrm(vrmUrl, sceneRig.scene, token).then((vrm) => {
       if (token.cancelled || !vrm) return;
       vrmRef.current = vrm;
@@ -162,8 +297,6 @@ export function SceneComposerViewer({
       if (url) {
         playVrmaAnimation(vrm, url, vrmaLoopRef.current).then((rig) => {
           if (token.cancelled) {
-            // Composant déjà démonté — libérer immédiatement le mixer pour
-            // éviter une fuite (le `disposeAll` du cleanup a déjà tourné).
             rig?.stop();
             return;
           }
@@ -183,6 +316,19 @@ export function SceneComposerViewer({
 
       resizeObserver.disconnect();
 
+      // Dispose E5.3 : gizmo + selection + props (avant disposeAll).
+      selectionHandle.dispose();
+
+      // Dispose toutes les props de la scène.
+      for (const [, obj] of meshRegistryRef.current) {
+        sceneRig.scene.remove(obj);
+        disposePropInstance(obj);
+      }
+      meshRegistryRef.current.clear();
+
+      gizmoHandle.dispose();
+      gizmoHandleRef.current = null;
+
       disposeAll({
         renderer: sceneRigRef.current?.renderer,
         scene: sceneRigRef.current?.scene,
@@ -195,6 +341,7 @@ export function SceneComposerViewer({
 
       sceneRigRef.current = null;
       cameraRigRef.current = null;
+      cameraRefForHooks.current = null;
       helpersRef.current = null;
       vrmRef.current = null;
       animRigRef.current = null;
@@ -202,18 +349,94 @@ export function SceneComposerViewer({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // Mount-only — les props dynamiques sont lues via refs.
 
-  // ── Sync cameraPreset (prop change sans remount) ─────────────────────────
+  // ── Sync cameraPreset ────────────────────────────────────────────────────
   useEffect(() => {
     cameraRigRef.current?.applyPreset(cameraPreset);
   }, [cameraPreset]);
 
-  // ── Sync viewMode (toggle helpers visibility) ────────────────────────────
+  // ── Sync viewMode (helpers + gizmo visibility) ───────────────────────────
   useEffect(() => {
     const helpers = helpersRef.current;
-    if (!helpers) return;
-    helpers.grid.visible = viewMode === "edit";
-    helpers.axes.visible = viewMode === "edit";
+    const gizmoHandle = gizmoHandleRef.current;
+    const isEdit = viewMode === "edit";
+
+    if (helpers) {
+      helpers.grid.visible = isEdit;
+      helpers.axes.visible = isEdit;
+    }
+
+    if (gizmoHandle) {
+      gizmoHandle.controls.visible = isEdit;
+      gizmoHandle.controls.enabled = isEdit;
+      if (!isEdit) {
+        // Mode preview : désattacher le gizmo.
+        gizmoHandle.attach(null);
+      }
+    }
   }, [viewMode]);
+
+  // ── Sync selectedMeshId → gizmo attach ───────────────────────────────────
+  // Ce useEffect est le point de sync bidirectionnel Inspector → gizmo.
+  // Note : le gizmo → store est géré dans useGizmoBindingWithCallbacks.
+  useEffect(() => {
+    const gizmoHandle = gizmoHandleRef.current;
+    if (!gizmoHandle) return;
+
+    if (!selectedMeshId) {
+      gizmoHandle.attach(null);
+      return;
+    }
+
+    const mesh = meshRegistryRef.current.get(selectedMeshId);
+    gizmoHandle.attach(mesh ?? null);
+  }, [selectedMeshId]);
+
+  // ── Sync propInstances → scene (ajout/retrait) ───────────────────────────
+  // Ce useEffect réconcilie le store avec la scène Three.js.
+  // Attention : le drag-drop ajoute directement via handleAssetDropped +
+  // addPropInstance. Cet effect gère les removePropInstance (côté inspector).
+  useEffect(() => {
+    const scene = sceneRigRef.current?.scene;
+    if (!scene) return;
+
+    // Retire les props qui ne sont plus dans le store.
+    for (const [id, obj] of meshRegistryRef.current) {
+      if (!propInstances[id]) {
+        scene.remove(obj);
+        disposePropInstance(obj);
+        meshRegistryRef.current.delete(id);
+        // Si l'instance supprimée était sélectionnée, désélectionner.
+        // (lecture via closure — setSelectedMeshId est stable Zustand)
+      }
+    }
+  }, [propInstances]);
+
+  // ── Sync Inspector transform → mesh (store → Three.js) ───────────────────
+  // Applique les changements de transform (sliders inspector) sur les meshes.
+  // Guard : si le gizmo est en cours de drag, on ignore (évite feedback loop).
+  useEffect(() => {
+    for (const [id, instance] of Object.entries(propInstances)) {
+      const obj = meshRegistryRef.current.get(id);
+      if (!obj) continue;
+
+      // Guard feedback loop : si le gizmo est dragging cet objet, ignorer.
+      const gizmoHandle = gizmoHandleRef.current;
+      if (gizmoHandle?.controls.dragging && gizmoHandle.controls.object === obj) {
+        continue;
+      }
+
+      const { position, rotation, scale } = instance.transform;
+      const DEG_TO_RAD = Math.PI / 180;
+
+      obj.position.set(position[0], position[1], position[2]);
+      obj.rotation.set(
+        rotation[0] * DEG_TO_RAD,
+        rotation[1] * DEG_TO_RAD,
+        rotation[2] * DEG_TO_RAD,
+      );
+      obj.scale.set(scale[0], scale[1], scale[2]);
+    }
+  }, [propInstances]);
 
   // ── VRM URL change (reload) ──────────────────────────────────────────────
   const vrmUrlRef = useRef<string>(vrmUrl);
@@ -222,8 +445,6 @@ export function SceneComposerViewer({
       const sceneRig = sceneRigRef.current;
       if (!sceneRig) return;
 
-      // Dispose l'ancien VRM ET son animation si présents (sinon le mixer
-      // pointe sur un VRM libéré → throw au prochain tick).
       if (vrmRef.current || animRigRef.current) {
         disposeAll({
           scene: sceneRig.scene,
@@ -239,7 +460,6 @@ export function SceneComposerViewer({
         if (token.cancelled || !vrm) return;
         vrmRef.current = vrm;
 
-        // Re-jouer l'animation VRMA sur le nouveau VRM si une URL est définie.
         const animUrl = vrmaUrlRef.current;
         if (animUrl) {
           playVrmaAnimation(vrm, animUrl, vrmaLoopRef.current).then((rig) => {
