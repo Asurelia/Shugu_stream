@@ -3,7 +3,8 @@
  *
  * Responsabilité unique : gérer l'état de l'interface utilisateur du Scene
  * Composer (sélection de scène, mode viewer, preset caméra, layout des
- * panneaux, sélection mesh 3D, instances de props, mode de transformation).
+ * panneaux, sélection mesh 3D, instances de props, mode de transformation,
+ * mode play/stop, boucles AFK déterministes).
  * Ne stocke PAS les données métier (AuthoredScene) — celles-ci
  * sont fetchées au runtime via les API clients.
  *
@@ -19,6 +20,18 @@
  *   - `propInstances` : instances de props 3D droppées dans la scène
  *   - `transformMode` : mode du gizmo TransformControls (translate/rotate/scale)
  *   - `updateMeshTransform` : mutation bidirectionnelle gizmo ↔ inspector
+ *
+ * Extensions E5.4 :
+ *   - `playMode` : "stopped" | "playing" (contrôle la barre de lecture)
+ *   - `afkLoops` : config des boucles AFK déterministes (activé, seuil viewers, délai inactivité)
+ *   - `currentVrmaUrl` : URL VRMA actuellement jouée (piloté par useAfkLoops ou UI)
+ *   - `setPlayMode` : bascule playMode + applique règle de cohérence viewerMode
+ *   - `setAfkLoops` : merge partiel config AFK
+ *   - `setCurrentVrmaUrl` : pilote l'animation VRMA jouée dans le viewer
+ *
+ * Règles de cohérence E5.4 :
+ *   - setPlayMode("playing") → force viewerMode="preview"
+ *   - setPlayMode("stopped") → force viewerMode="edit" (round-trip symétrique)
  *
  * @module store/useSceneComposerStore
  */
@@ -36,6 +49,39 @@ export type ViewerMode = "edit" | "preview";
 
 /** Mode de transformation du gizmo TransformControls. */
 export type TransformMode = "translate" | "rotate" | "scale";
+
+/**
+ * Mode de lecture du Scene Composer.
+ *
+ * - "stopped" : mode édition, scène arrêtée (viewerMode="edit")
+ * - "playing" : mode lecture, scène en cours (viewerMode="preview")
+ */
+export type PlayMode = "stopped" | "playing";
+
+/**
+ * Configuration des boucles AFK déterministes (E5.4).
+ *
+ * Les boucles AFK jouent automatiquement une animation VRMA "idle" quand :
+ * - `enabled` est true
+ * - `currentViewerCount < viewerThreshold`
+ * - pas d'interaction utilisateur depuis `idleSeconds` secondes
+ *
+ * Aucun appel LLM — sélection purement déterministe basée sur le catalogue.
+ */
+export interface AfkLoopsConfig {
+  /** Active/désactive les boucles AFK. */
+  enabled: boolean;
+  /**
+   * Seuil de viewers connectés en dessous duquel les AFK loops se déclenchent.
+   * Par exemple, viewerThreshold=5 : AFK si moins de 5 viewers.
+   */
+  viewerThreshold: number;
+  /**
+   * Délai d'inactivité en secondes avant déclenchement de l'AFK loop.
+   * Minimum recommandé : 10s. Maximum : 300s (5 min).
+   */
+  idleSeconds: number;
+}
 
 /**
  * Transform d'un objet 3D dans la scène.
@@ -85,6 +131,23 @@ export interface SceneComposerState {
   /** Map des instances de props droppées dans la scène. */
   propInstances: Record<string, PropInstance>;
 
+  // ── Play Mode + AFK Loops (E5.4) ─────────────────────────────────────────
+  /**
+   * Mode de lecture. "playing" implique viewerMode="preview" (cohérence
+   * garantie par setPlayMode — ne pas modifier viewerMode directement si
+   * playMode="playing").
+   */
+  playMode: PlayMode;
+  /** Configuration des boucles AFK déterministes. */
+  afkLoops: AfkLoopsConfig;
+  /**
+   * URL VRMA actuellement jouée dans le viewer (null = aucune animation AFK).
+   *
+   * Pilotée par useAfkLoops ou par l'UI directement. Le viewer sync cette
+   * valeur → appel playVrmaAnimation sur le VRM chargé.
+   */
+  currentVrmaUrl: string | null;
+
   // ── Actions ──────────────────────────────────────────────────────────────
   setSelectedSceneId: (id: string | null) => void;
   setViewerMode: (mode: ViewerMode) => void;
@@ -108,6 +171,35 @@ export interface SceneComposerState {
    * Source bidirectionnelle : appelé depuis le gizmo (drag) ET depuis l'Inspector (sliders).
    */
   updateMeshTransform: (id: string, transform: Partial<ObjectTransform>) => void;
+
+  // ── Actions E5.4 ─────────────────────────────────────────────────────────
+  /**
+   * Bascule le mode lecture.
+   *
+   * Règles de cohérence (appliquées atomiquement) :
+   * - setPlayMode("playing") → viewerMode="preview"
+   * - setPlayMode("stopped") → viewerMode="edit" (round-trip symétrique)
+   *
+   * @example
+   * store.setPlayMode("playing"); // → playMode="playing", viewerMode="preview"
+   * store.setPlayMode("stopped"); // → playMode="stopped", viewerMode="edit"
+   */
+  setPlayMode: (mode: PlayMode) => void;
+  /**
+   * Merge partiel de la configuration AFK Loops.
+   *
+   * @example
+   * store.setAfkLoops({ enabled: false }); // désactive sans changer le reste
+   * store.setAfkLoops({ idleSeconds: 60, viewerThreshold: 3 });
+   */
+  setAfkLoops: (partial: Partial<AfkLoopsConfig>) => void;
+  /**
+   * Définit l'URL VRMA actuellement jouée par le viewer.
+   *
+   * Appelé par useAfkLoops quand une animation idle est sélectionnée.
+   * null = arrêt de l'animation AFK (retour à l'animation de base ou silence).
+   */
+  setCurrentVrmaUrl: (url: string | null) => void;
 }
 
 // ─── État initial ─────────────────────────────────────────────────────────────
@@ -121,6 +213,14 @@ const INITIAL_STATE = {
   selectedMeshId: null,
   transformMode: "translate" as TransformMode,
   propInstances: {} as Record<string, PropInstance>,
+  // E5.4
+  playMode: "stopped" as PlayMode,
+  afkLoops: {
+    enabled: true,
+    viewerThreshold: 5,
+    idleSeconds: 30,
+  } as AfkLoopsConfig,
+  currentVrmaUrl: null as string | null,
 };
 
 // ─── Store ────────────────────────────────────────────────────────────────────
@@ -172,6 +272,23 @@ export const useSceneComposerStore = create<SceneComposerState>()((set) => ({
         },
       };
     }),
+
+  // Actions E5.4
+  setPlayMode: (mode) =>
+    set({
+      playMode: mode,
+      // Cohérence bidirectionnelle :
+      // playing → preview (pour masquer helpers/gizmo en lecture)
+      // stopped → edit (round-trip symétrique prévisible)
+      viewerMode: mode === "playing" ? "preview" : "edit",
+    }),
+
+  setAfkLoops: (partial) =>
+    set((state) => ({
+      afkLoops: { ...state.afkLoops, ...partial },
+    })),
+
+  setCurrentVrmaUrl: (url) => set({ currentVrmaUrl: url }),
 }));
 
 // ─── Selectors granulaires ────────────────────────────────────────────────────
@@ -203,6 +320,17 @@ export const selectPropInstance =
   (id: string) =>
   (s: SceneComposerState): PropInstance | undefined =>
     s.propInstances[id];
+
+// Selectors E5.4
+/** Retourne le mode de lecture actuel. */
+export const selectPlayMode = (s: SceneComposerState): PlayMode => s.playMode;
+
+/** Retourne la configuration des boucles AFK. */
+export const selectAfkLoops = (s: SceneComposerState): AfkLoopsConfig => s.afkLoops;
+
+/** Retourne l'URL VRMA actuellement jouée (null = aucune). */
+export const selectCurrentVrmaUrl = (s: SceneComposerState): string | null =>
+  s.currentVrmaUrl;
 
 // ─── Dev global ───────────────────────────────────────────────────────────────
 

@@ -1,5 +1,5 @@
 /**
- * Tests — `useSceneComposerStore` (Phase E5.2 + E5.3).
+ * Tests — `useSceneComposerStore` (Phase E5.2 + E5.3 + E5.4).
  *
  * Couverture E5.2 :
  *   1. État initial correct.
@@ -21,6 +21,17 @@
  *  15. addPropInstance multiple : les instances coexistent.
  *  16. resetUI remet les champs E5.3 à leur valeur initiale.
  *
+ * Couverture E5.4 :
+ *  17. État initial E5.4 : playMode="stopped", afkLoops defaults, currentVrmaUrl=null.
+ *  18. setPlayMode("playing") → playMode="playing" + viewerMode="preview".
+ *  19. setPlayMode("stopped") → playMode="stopped" + viewerMode="edit".
+ *  20. setAfkLoops merge partiel sans écraser les autres champs.
+ *  21. setAfkLoops({ enabled: false }) désactive sans toucher viewerThreshold/idleSeconds.
+ *  22. setCurrentVrmaUrl définit l'URL.
+ *  23. setCurrentVrmaUrl(null) efface l'URL.
+ *  24. resetUI remet les champs E5.4 à leur valeur initiale.
+ *  25. selectPlayMode / selectAfkLoops / selectCurrentVrmaUrl retournent les bonnes valeurs.
+ *
  * Pattern : pas de mock React — on teste le store Zustand directement via
  * `getState()` / `setState()`.
  */
@@ -36,6 +47,9 @@ import {
   selectTransformMode,
   selectPropInstances,
   selectPropInstance,
+  selectPlayMode,
+  selectAfkLoops,
+  selectCurrentVrmaUrl,
   type PropInstance,
   type ObjectTransform,
 } from "../store/useSceneComposerStore";
@@ -333,5 +347,126 @@ describe("useSceneComposerStore · C2 fix — removePropInstance reset selection
 
     expect(useSceneComposerStore.getState().selectedMeshId).toBe("inst_A");
     expect(useSceneComposerStore.getState().propInstances["inst_B"]).toBeUndefined();
+  });
+});
+
+// ── Tests E5.4 ────────────────────────────────────────────────────────────────
+
+describe("useSceneComposerStore · état initial E5.4", () => {
+  it("playMode est 'stopped' par défaut", () => {
+    expect(selectPlayMode(useSceneComposerStore.getState())).toBe("stopped");
+  });
+
+  it("afkLoops a les valeurs par défaut attendues", () => {
+    const afk = selectAfkLoops(useSceneComposerStore.getState());
+    expect(afk.enabled).toBe(true);
+    expect(afk.viewerThreshold).toBe(5);
+    expect(afk.idleSeconds).toBe(30);
+  });
+
+  it("currentVrmaUrl est null par défaut", () => {
+    expect(selectCurrentVrmaUrl(useSceneComposerStore.getState())).toBeNull();
+  });
+});
+
+describe("useSceneComposerStore · actions E5.4 — setPlayMode", () => {
+  it("setPlayMode('playing') met playMode='playing' et force viewerMode='preview'", () => {
+    // État initial : viewerMode="edit"
+    expect(useSceneComposerStore.getState().viewerMode).toBe("edit");
+
+    useSceneComposerStore.getState().setPlayMode("playing");
+
+    const state = useSceneComposerStore.getState();
+    expect(selectPlayMode(state)).toBe("playing");
+    expect(selectViewerMode(state)).toBe("preview");
+  });
+
+  it("setPlayMode('stopped') met playMode='stopped' et force viewerMode='edit'", () => {
+    // Partir de playing/preview
+    useSceneComposerStore.getState().setPlayMode("playing");
+    expect(useSceneComposerStore.getState().viewerMode).toBe("preview");
+
+    useSceneComposerStore.getState().setPlayMode("stopped");
+
+    const state = useSceneComposerStore.getState();
+    expect(selectPlayMode(state)).toBe("stopped");
+    expect(selectViewerMode(state)).toBe("edit");
+  });
+
+  it("setPlayMode est idempotent : playing→playing ne change rien", () => {
+    useSceneComposerStore.getState().setPlayMode("playing");
+    useSceneComposerStore.getState().setPlayMode("playing");
+    expect(useSceneComposerStore.getState().playMode).toBe("playing");
+    expect(useSceneComposerStore.getState().viewerMode).toBe("preview");
+  });
+
+  it("setPlayMode('stopped') reset viewerMode même si viewerMode était 'preview' manuellement", () => {
+    // Forcer preview sans passer par setPlayMode
+    useSceneComposerStore.getState().setViewerMode("preview");
+    // Passer par stopped
+    useSceneComposerStore.getState().setPlayMode("stopped");
+    expect(useSceneComposerStore.getState().viewerMode).toBe("edit");
+  });
+});
+
+describe("useSceneComposerStore · actions E5.4 — setAfkLoops", () => {
+  it("setAfkLoops({ enabled: false }) désactive sans changer les autres champs", () => {
+    useSceneComposerStore.getState().setAfkLoops({ enabled: false });
+    const afk = selectAfkLoops(useSceneComposerStore.getState());
+    expect(afk.enabled).toBe(false);
+    expect(afk.viewerThreshold).toBe(5); // inchangé
+    expect(afk.idleSeconds).toBe(30);   // inchangé
+  });
+
+  it("setAfkLoops merge partiel : viewerThreshold + idleSeconds sans toucher enabled", () => {
+    useSceneComposerStore.getState().setAfkLoops({ viewerThreshold: 10, idleSeconds: 60 });
+    const afk = selectAfkLoops(useSceneComposerStore.getState());
+    expect(afk.enabled).toBe(true);      // inchangé
+    expect(afk.viewerThreshold).toBe(10);
+    expect(afk.idleSeconds).toBe(60);
+  });
+
+  it("setAfkLoops multiples merges successifs s'accumulent correctement", () => {
+    useSceneComposerStore.getState().setAfkLoops({ viewerThreshold: 3 });
+    useSceneComposerStore.getState().setAfkLoops({ idleSeconds: 120 });
+    const afk = selectAfkLoops(useSceneComposerStore.getState());
+    expect(afk.viewerThreshold).toBe(3);
+    expect(afk.idleSeconds).toBe(120);
+    expect(afk.enabled).toBe(true);
+  });
+});
+
+describe("useSceneComposerStore · actions E5.4 — setCurrentVrmaUrl", () => {
+  it("setCurrentVrmaUrl définit l'URL VRMA", () => {
+    useSceneComposerStore.getState().setCurrentVrmaUrl("/assets/vrma/idle_breathe.vrma");
+    expect(selectCurrentVrmaUrl(useSceneComposerStore.getState())).toBe(
+      "/assets/vrma/idle_breathe.vrma"
+    );
+  });
+
+  it("setCurrentVrmaUrl(null) efface l'URL VRMA", () => {
+    useSceneComposerStore.getState().setCurrentVrmaUrl("/assets/vrma/wait.vrma");
+    useSceneComposerStore.getState().setCurrentVrmaUrl(null);
+    expect(selectCurrentVrmaUrl(useSceneComposerStore.getState())).toBeNull();
+  });
+});
+
+describe("useSceneComposerStore · resetUI E5.4", () => {
+  it("resetUI remet playMode, afkLoops, currentVrmaUrl à leur valeur initiale", () => {
+    // Modifier les champs E5.4
+    useSceneComposerStore.getState().setPlayMode("playing");
+    useSceneComposerStore.getState().setAfkLoops({ enabled: false, viewerThreshold: 1, idleSeconds: 10 });
+    useSceneComposerStore.getState().setCurrentVrmaUrl("/assets/vrma/idle.vrma");
+
+    useSceneComposerStore.getState().resetUI();
+
+    const state = useSceneComposerStore.getState();
+    expect(selectPlayMode(state)).toBe("stopped");
+    expect(selectViewerMode(state)).toBe("edit");
+    const afk = selectAfkLoops(state);
+    expect(afk.enabled).toBe(true);
+    expect(afk.viewerThreshold).toBe(5);
+    expect(afk.idleSeconds).toBe(30);
+    expect(selectCurrentVrmaUrl(state)).toBeNull();
   });
 });
