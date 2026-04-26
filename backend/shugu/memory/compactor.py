@@ -33,10 +33,26 @@ Format strict JSON demandé :
 Un parse robuste avec fallback log + skip en cas de réponse invalide.
 Voir `compactor_parsing.py` pour les détails.
 
+## Configuration
+
+Mémoire PR 4 — Seuils configurables via env (shugu.config.Settings) :
+- `SHUGU_COMPACTOR_THRESHOLD` (défaut 20) : nombre minimum de facts actifs
+  pour déclencher le compactage.
+- `SHUGU_COMPACTOR_SUMMARY_COUNT` (défaut 6) : nombre cible de facts résumés.
+
 ## Usage
 
+    from shugu.config import get_settings
+    from shugu.memory import MemoryCompactor
+
+    settings = get_settings()
     brain = make_director_brain(settings, http_client)
-    compactor = MemoryCompactor(memory_agent=agent, brain=brain)
+    compactor = MemoryCompactor(
+        memory_agent=agent,
+        brain=brain,
+        threshold=settings.compactor_threshold,
+        target_summary_count=settings.compactor_summary_count,
+    )
 
     # Compacter un sujet spécifique
     result = await compactor.compact_subject("viewer:alice")
