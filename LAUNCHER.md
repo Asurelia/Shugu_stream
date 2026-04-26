@@ -16,12 +16,26 @@ Mode prod (après `npm run build`) : ouvrir un terminal et lancer `.\Shugu-Start
 
 | Pré-requis | Vérification |
 |---|---|
-| `python` dans PATH | `python --version` (3.11+) |
+| `python` dans PATH ou `backend/.venv` | `python --version` (3.11+). Le launcher préfère `backend/.venv/Scripts/python.exe` si présent. |
 | `npm` dans PATH | `npm --version` |
-| `ops/env/.env` configuré | Doit contenir au minimum `DATABASE_URL`, `REDIS_URL`, `MINIMAX_API_KEY` |
-| Postgres + Redis accessibles | docker compose up depuis ops/ ou services locaux |
+| `ops/env/.env` configuré | Doit contenir `SHUGU_POSTGRES_DSN`, `SHUGU_REDIS_URL`, `MINIMAX_API_KEY` |
+| **Postgres** sur `localhost:5432` | Service Windows natif ou container — DSN par défaut `postgres:postgres@localhost/shugu` |
+| **Redis** sur `127.0.0.1:6379` | **Auto-démarré** par le launcher via `docker compose up -d redis` (nécessite Docker Desktop UP) |
+| Docker Desktop | Requis si Redis n'est pas déjà accessible (sinon `/auth/me` retourne 500) |
 | (optionnel) `cloudflared.exe` | `C:\Users\<user>\cloudflared\cloudflared.exe` pour tunnel public |
 | (optionnel) `livekit-server.exe` | `C:\Users\<user>\livekit\livekit-server.exe` pour VIP voice room |
+
+### Pourquoi Redis est obligatoire
+
+Sans Redis, le backend démarre mais les endpoints d'auth plantent :
+1. `POST /auth/login` → 200 OK (JWT créé en DB)
+2. `GET /auth/me` → 500 Internal Server Error (le JWT verify essaie `redis.exists(...)` pour la JWT revocation list → ConnectionError)
+3. Frontend reste sur l'écran login malgré le succès du login
+
+Le launcher fait `docker compose up -d redis` automatiquement si :
+- Docker Desktop est démarré (`docker info` répond)
+- `ops/docker-compose.yml` existe (livré avec ce projet)
+- Le port 6379 n'est pas déjà occupé par un autre Redis (ex: Memurai natif Windows)
 
 Backend port par défaut : `8701` (override via `SHUGU_PORT` dans `.env`).
 Frontend : `http://127.0.0.1:3005`.

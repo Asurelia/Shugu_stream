@@ -69,6 +69,57 @@ if (Test-Path $VenvPython) {
 
 $BackendPort    = if ($env:SHUGU_PORT) { $env:SHUGU_PORT } else { "8701" }
 
+# --- 0) Backing services (Redis via Docker) ----------------------------------
+# Le backend a besoin de Redis pour : JWT revocation list (auth/me), pub/sub
+# events ambient, cache pgvector. Sans Redis → /auth/me retourne 500 et
+# l'utilisateur reste bloqué sur l'écran login malgré un POST /auth/login OK.
+$ComposeFile = Join-Path $Root "ops\docker-compose.yml"
+$RedisOk = $false
+
+# Test rapide : Redis déjà accessible ? (cas d'un Memurai natif ou docker manuel)
+$redisCheck = Test-NetConnection -ComputerName "127.0.0.1" -Port 6379 `
+    -InformationLevel Quiet -WarningAction SilentlyContinue
+if ($redisCheck) {
+    Write-Host ">> Redis déjà accessible sur 127.0.0.1:6379" -ForegroundColor DarkGray
+    $RedisOk = $true
+} elseif (Test-Path $ComposeFile) {
+    Write-Host ">> Redis absent — tentative démarrage via Docker..." -ForegroundColor Cyan
+    $dockerExe = (Get-Command docker -ErrorAction SilentlyContinue).Source
+    if (-not $dockerExe) {
+        Write-Warning "docker introuvable dans PATH — impossible de démarrer Redis."
+    } else {
+        # Vérifie que le daemon Docker est UP (Docker Desktop démarré).
+        & $dockerExe info 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warning "Docker daemon non joignable. Démarre Docker Desktop puis relance."
+            Write-Host "  (Le launcher continue mais le backend va planter sur /auth/me)" -ForegroundColor DarkYellow
+        } else {
+            & $dockerExe compose -f $ComposeFile up -d redis 2>&1 | Out-Null
+            if ($LASTEXITCODE -eq 0) {
+                # Attend que Redis soit ready (ping)
+                $deadline = (Get-Date).AddSeconds(15)
+                while ((Get-Date) -lt $deadline) {
+                    if (Test-NetConnection -ComputerName "127.0.0.1" -Port 6379 `
+                            -InformationLevel Quiet -WarningAction SilentlyContinue) {
+                        $RedisOk = $true
+                        break
+                    }
+                    Start-Sleep -Milliseconds 500
+                }
+                if ($RedisOk) {
+                    Write-Host ">> Redis démarré (container shugu-redis)" -ForegroundColor Green
+                } else {
+                    Write-Warning "Redis container démarré mais ne répond pas après 15s."
+                }
+            } else {
+                Write-Warning "docker compose up -d redis a échoué."
+            }
+        }
+    }
+} else {
+    Write-Warning "ops/docker-compose.yml introuvable — Redis non géré par le launcher."
+}
+
 # --- 1) Backend (uvicorn) ----------------------------------------------------
 Write-Host ">> Starting backend (uvicorn) on port $BackendPort..." -ForegroundColor Cyan
 $BackendArgs = @(
