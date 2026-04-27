@@ -37,6 +37,16 @@ DEFAULT_BROADCAST_TOPICS: frozenset[str] = frozenset(
         "editor:broadcast",
         "sense.raw",              # PR 1 Mémoire : IngestionWorker subscribe
         "memory.episode_stored",  # PR 1 Mémoire : préparé pour PR 3 fact extractor
+        # Streamer IA layers (L1 perception + L3 world). Sans ces entrées, en
+        # mode Redis multi-worker les events restent intra-process : un viewer
+        # connecté à un autre worker rate les world deltas → désynchronisation.
+        # Cf. test_arch_event_bus_broadcast.py qui enforce la cohérence
+        # entre topics publiés par les helpers et cette frozenset.
+        "sense.chat",             # L1.1 senses/bus.py — chat WS visiteurs
+        "sense.voice",            # L1.1 senses/bus.py — STT operator
+        "sense.event",            # L1.1 senses/bus.py — VIP raid/follow/sub
+        "sense.vision",           # L1.1 senses/bus.py — futur computer-vision
+        "world.delta",            # L3.2 world/publisher.py — diff WorldState
     }
 )
 # `editor:broadcast` — Phase D Scene Editor WebSocket. Topic unique partage
