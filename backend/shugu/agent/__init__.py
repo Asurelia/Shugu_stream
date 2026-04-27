@@ -10,6 +10,9 @@ Le `agent/` orchestre la boucle principale du streamer IA :
 Frontière publique exposée :
 - `Perception`, `Thought` (frozen dataclasses).
 - `Tool`, `ToolRegistry` — registre des outils LLM-callable.
+- `AgentLoop` — boucle agent stateless (L2.1+).
+- `Thinker` — Protocol du composant think (stub en L2.1, LLM en L2.2).
+- `WorldApply` — type alias du Callable d'application d'Action sur World.
 
 Ce module ne mute PAS L3 directement : il consomme `world.types`
 (Action variants + WorldState pour lecture) et l'application des actions
@@ -18,6 +21,7 @@ de l'impl world depuis agent".
 """
 from __future__ import annotations
 
+from .loop import AgentLoop, Thinker, WorldApply
 from .types import Perception, Thought
 
-__all__ = ["Perception", "Thought"]
+__all__ = ["AgentLoop", "Perception", "Thought", "Thinker", "WorldApply"]
