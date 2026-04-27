@@ -7,6 +7,10 @@ import "@/styles/viewer-proto.css";
 // classes `.ide-*` sont scoped sous `.ide-root` donc n'interfèrent pas
 // avec les autres pages.
 import "@/styles/scene-editor.css";
+// Scene Editor v2 (Phase 1+) : importé global ici car Next 13 pages router
+// interdit l'import de CSS global hors de `_app.tsx`. Toutes les classes
+// sont préfixées `sev2-` pour éviter les collisions.
+import "@/features/scene-editor-v2/styles.css";
 import type { AppProps } from "next/app";
 import "@charcoal-ui/icons";
 import { Quicksand, Comfortaa, Plus_Jakarta_Sans, Inter, JetBrains_Mono } from "next/font/google";
