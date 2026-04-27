@@ -395,7 +395,7 @@
   pointer-events: none;
   z-index: 0;
 }
-.lg-page > * { position: relative; z-index: 1; }
+.lg-page > *:not(.fixed):not(.absolute):not(.sticky) { position: relative; z-index: 1; }
 
 /* ── Utility glow ring for focus states ────────────────────── */
 
