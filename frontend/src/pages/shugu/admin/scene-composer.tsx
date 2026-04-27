@@ -47,7 +47,7 @@ export const getServerSideProps: GetServerSideProps = async (ctx) => {
       if (me?.username) {
         return {
           redirect: {
-            destination: `/${encodeURIComponent(me.username)}/admin/scene-composer`,
+            destination: `/${encodeURIComponent(me.username)}/admin/scene-editor-v2`,
             permanent: false,
           },
         };
@@ -82,7 +82,7 @@ export default function LegacySceneComposerRedirect() {
       if (cancelled) return;
       if (me?.username) {
         router.replace(
-          `/${encodeURIComponent(me.username)}/admin/scene-composer`,
+          `/${encodeURIComponent(me.username)}/admin/scene-editor-v2`,
         );
       } else {
         router.replace("/login");

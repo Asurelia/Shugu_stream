@@ -93,7 +93,7 @@ export function AdminAuthGuard({ children, fallback = DEFAULT_FALLBACK }: Props)
     }
     if (!urlUsername) return;
     if (operator.username.toLowerCase() !== urlUsername.toLowerCase()) {
-      router.replace(`/${encodeURIComponent(operator.username)}/admin/scene-editor`);
+      router.replace(`/${encodeURIComponent(operator.username)}/admin/scene-editor-v2`);
     }
   }, [authChecked, operator, urlUsername, router]);
 
