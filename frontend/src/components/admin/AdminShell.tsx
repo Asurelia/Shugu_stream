@@ -29,7 +29,6 @@ type SidebarItem = { section: Section; label: string; path: string; icon: string
 
 const SIDEBAR: SidebarItem[] = [
   { section: "overview",     label: "Live Control",  path: "",               icon: "◉" },
-  { section: "creator-home", label: "Creator Home",  path: "/creator-home",  icon: "✧" },
   { section: "scene-editor", label: "Scene Editor",  path: "/scene-editor",  icon: "◈" },
   { section: "analytics",    label: "Analytics",     path: "/analytics",     icon: "∿" },
   { section: "community",    label: "Community",     path: "/community",     icon: "✦" },
@@ -81,7 +80,10 @@ export function AdminShell({ active, title, subtitle, headerRight, children }: P
   return (
     <div className="lg-page font-quicksand">
       {/* Sidebar rail ----------------------------------------------- */}
-      <aside className="lg-rail fixed left-0 top-0 bottom-0 z-30 hidden md:flex flex-col w-[224px]">
+      <aside
+        className="lg-rail fixed left-0 top-0 z-30 hidden md:flex flex-col w-[224px]"
+        style={{ height: "100vh" }}
+      >
         {/* Logo + identité */}
         <div className="px-4 pt-5 pb-4 flex items-center gap-3 shrink-0">
           <div
@@ -198,9 +200,9 @@ export function AdminShell({ active, title, subtitle, headerRight, children }: P
       </nav>
 
       {/* Main -------------------------------------------------------- */}
-      <main className="md:pl-[224px] pt-[52px] md:pt-0 min-h-screen">
-        <div className="px-5 sm:px-8 py-7 max-w-[1400px] mx-auto">
-          <div className="flex items-end justify-between mb-6 gap-4 flex-wrap">
+      <main className="md:pl-[224px] pt-[44px] md:pt-0 min-h-screen">
+        <div className="px-5 sm:px-8 pt-4 pb-8 sm:pt-5 max-w-[1400px] mx-auto">
+          <div className="flex items-end justify-between mb-4 gap-4 flex-wrap">
             <div className="min-w-0">
               <h1 className="font-comfortaa font-bold text-2xl sm:text-3xl text-shugu-cream tracking-tight">
                 {title}
