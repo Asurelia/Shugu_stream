@@ -12,20 +12,21 @@
  */
 
 import { SplitLayout } from "../../shell/SplitLayout";
+import { Outliner } from "./panels/Outliner";
 
 export function Workspace3D() {
   return (
     <SplitLayout id="scene3d:left" direction="horizontal" defaultRatio={0.18}>
       <div className="sev2-panel sev2-panel--side">
         <SplitLayout id="scene3d:left-stack" direction="vertical" defaultRatio={0.55}>
-          <PanelPlaceholder title="Outliner" hint="Hierarchy de la scène — Phase 2" />
-          <PanelPlaceholder title="Library" hint="VRM, Outfits, Anims, Props, Decor, VFX — Phase 2" />
+          <Outliner />
+          <PanelPlaceholder title="Library" hint="VRM, Outfits, Anims, Props, Decor, VFX — Phase 2.B" />
         </SplitLayout>
       </div>
       <SplitLayout id="scene3d:center-right" direction="horizontal" defaultRatio={0.78}>
         <ViewportPlaceholder />
         <div className="sev2-panel sev2-panel--side">
-          <PanelPlaceholder title="Properties" hint="Transform / Material / Animation — Phase 2" />
+          <PanelPlaceholder title="Properties" hint="Transform / Material / Animation — Phase 2.D" />
         </div>
       </SplitLayout>
     </SplitLayout>
