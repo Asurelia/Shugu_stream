@@ -13,6 +13,7 @@ Frontière publique exposée :
   MoodSetAction, PropSpawnAction) — commandes mutables typées.
 - `apply(state, action) -> new_state` — reducer pur.
 - `publish_world_delta(bus, prev, next)` — diff + publish.
+- `WorldStateStore` — conteneur thread-safe + auto-publish (L3.3).
 
 Ce module n'importe NI `shugu.senses` NI `shugu.agent` (couche feuille).
 Le test arch `test_arch_layers_l0.py` enforce cette règle.
@@ -21,6 +22,7 @@ from __future__ import annotations
 
 from .publisher import diff, publish_world_delta
 from .reducers import apply
+from .state_store import WorldStateStore
 from .types import (
     ActionUnion,
     AvatarPoseAction,
@@ -37,6 +39,7 @@ __all__ = [
     "PropSpawnAction",
     "SceneTransitionAction",
     "WorldState",
+    "WorldStateStore",
     "apply",
     "diff",
     "publish_world_delta",
