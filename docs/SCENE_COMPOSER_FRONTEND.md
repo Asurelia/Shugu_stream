@@ -2,11 +2,13 @@
 
 Documentation de l'implémentation du Scene Composer frontend.
 
+> **⚠ Note 2026-04-27** : la route `/[username]/admin/scene-composer` (et son alias `/shugu/admin/scene-composer`) a été supprimée en Phase A de la refonte admin (PR `fix/admin-quick-wins-phase-a`). Le moteur 3D Three.js documenté ci-dessous est désormais réutilisé via `frontend/src/features/scene-composer/SceneComposerApp` qui sera intégré comme onglet "Scènes" du nouveau **Scene Studio** (`/[username]/admin/scene-editor`) en Phase B. Cette doc reste utile pour comprendre l'architecture du moteur 3D mais les sections sur les routes Next.js sont obsolètes.
+
 ## Architecture
 
 ```mermaid
 graph TD
-    PAGE["pages/[username]/admin/scene-composer.tsx<br/>(route Next.js dynamic)"]
+    PAGE["~~pages/[username]/admin/scene-composer.tsx~~<br/>(route supprimée Phase A)<br/>SceneComposerApp direct"]
     GUARD["AdminAuthGuard<br/>(auth + redirect)"]
     APP["SceneComposerApp<br/>(shell principal)"]
     STORE["useSceneComposerStore<br/>(UI state Zustand)"]
@@ -39,17 +41,16 @@ graph TD
 
 ### Route
 
-| Fichier | Description |
-|---|---|
-| `pages/[username]/admin/scene-composer.tsx` | **Route officielle** dynamic Next.js (alignement pattern `scene-editor.tsx`), AdminAuthGuard, dynamic import ssr:false |
-| `pages/shugu/admin/scene-composer.tsx` | Route legacy → redirect 308 vers `/${username}/admin/scene-composer` (server-side via `getServerSideProps` + fallback client) |
+~~| Fichier | Description |~~
+~~|---|---|~~
+~~| `pages/[username]/admin/scene-composer.tsx` | **Route officielle** dynamic Next.js (alignement pattern `scene-editor.tsx`), AdminAuthGuard, dynamic import ssr:false |~~
+~~| `pages/shugu/admin/scene-composer.tsx` | Route legacy → redirect 308 vers `/${username}/admin/scene-composer` (server-side via `getServerSideProps` + fallback client) |~~
 
-**Note alignement** (fix M2 PR #26) : avant la review, la route était sous
-`/shugu/admin/scene-composer` (statique) — incohérent avec `scene-editor.tsx`
-qui est sous `[username]/admin/`. M2 aligne sur le pattern dynamic et conserve
-l'ancienne route comme alias redirect (compat bookmarks). Le redirect mismatch
-d'`AdminAuthGuard` ligne 96 cible toujours `scene-editor` — un fix transverse
-pour préserver le path est listé en TODO mais hors scope M2.
+**Note historique suppression Phase A (PR fix/admin-quick-wins-phase-a, 2026-04-27)** : les deux routes
+`pages/[username]/admin/scene-composer.tsx` (route officielle) et `pages/shugu/admin/scene-composer.tsx` (alias redirect)
+ont été supprimées. Le moteur 3D `SceneComposerApp` est réutilisé comme module réutilisable et sera intégré en Phase B
+comme onglet "Scènes" du Scene Studio (`/[username]/admin/scene-editor`). Les documentations historiques sur l'alignement
+M2 et le redirect pattern restent ci-dessous pour référence architecturale, mais les routes Next.js mentionnées n'existent plus.
 
 ### Shell
 
