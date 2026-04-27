@@ -27,7 +27,7 @@
 import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
 
-import type { DockablePanelKey } from "@/features/scene-editor/dnd-context";
+import type { DockablePanelKey } from "@/features/editor-shared";
 
 /* ─────────────────────────── TYPES ─────────────────────────── */
 

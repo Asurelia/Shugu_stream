@@ -16,7 +16,7 @@ import {
   useSceneEditorStore,
   selectCurrentInspector,
 } from "../useSceneEditorStore";
-import { MOCK_INSPECTOR, MOCK_HIERARCHY } from "@/features/scene-editor/mock-data";
+import { MOCK_INSPECTOR, MOCK_HIERARCHY } from "@/features/editor-shared";
 
 beforeEach(() => {
   useSceneEditorStore.getState().resetUI();

@@ -8,27 +8,13 @@
  */
 
 import { createContext, useContext } from "react";
-import type { AssetItem } from "./mock-data";
+import type { AssetItem, DockablePanelKey } from "@/features/editor-shared";
 
 export type DockId = "viewport" | "right" | "bottom";
 
-/**
- * Sous-ensemble de panels qui peuvent vivre dans un dock (tabs draggable).
- * Note : `hierarchy` est volontairement exclu — il a sa propre colonne
- * fixe à gauche et n'est pas un tab. Garder ce type strict évite que des
- * opérations de drag-drop ou move-tab ne reçoivent un panelKey invalide.
- */
-export type DockablePanelKey =
-  | "scene" | "live"
-  | "inspector" | "effects" | "stream" | "perf"
-  | "assets" | "timeline" | "patterns" | "mixer";
-
-/**
- * Ensemble complet des panels du Scene Editor — inclut les non-dockables
- * comme `hierarchy`. C'est ce type qui est utilisé pour le routing popout
- * (chaque panel peut être pop-out, dockable ou pas).
- */
-export type PanelKey = DockablePanelKey | "hierarchy";
+// dnd-context.ts (legacy) — re-exporté depuis editor-shared pendant la transition.
+// Phase 6 supprimera ce fichier et ses consumers legacy.
+export type { DockablePanelKey, PanelKey } from "@/features/editor-shared";
 
 export type DragPayload =
   | { kind: "asset"; asset: AssetItem }
