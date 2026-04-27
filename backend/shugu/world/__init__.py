@@ -19,6 +19,7 @@ Le test arch `test_arch_layers_l0.py` enforce cette règle.
 """
 from __future__ import annotations
 
+from .reducers import apply
 from .types import (
     ActionUnion,
     AvatarPoseAction,
@@ -35,4 +36,5 @@ __all__ = [
     "PropSpawnAction",
     "SceneTransitionAction",
     "WorldState",
+    "apply",
 ]
