@@ -19,6 +19,7 @@ Le test arch `test_arch_layers_l0.py` enforce cette règle.
 """
 from __future__ import annotations
 
+from .publisher import diff, publish_world_delta
 from .reducers import apply
 from .types import (
     ActionUnion,
@@ -37,4 +38,6 @@ __all__ = [
     "SceneTransitionAction",
     "WorldState",
     "apply",
+    "diff",
+    "publish_world_delta",
 ]
