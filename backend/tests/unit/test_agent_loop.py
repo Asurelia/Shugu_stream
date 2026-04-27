@@ -1,15 +1,14 @@
-"""Tests TDD pour L2.1 — AgentLoop.tick() mécanique perceive→think→act.
+"""Tests TDD pour L2.2 — AgentLoop.tick() migré async.
+
+Migration L2.1 → L2.2 :
+- AgentLoop.tick() est maintenant `async def` (Thinker.think() est async).
+- Tous les tests deviennent `async def` avec `await loop.tick(...)`.
+- Le Thinker stub a son `.think()` en `async def` pour respecter le Protocol.
+- Les assertions d'ordre et de contenu restent identiques à L2.1.
 
 Stratégie de test :
-- On injecte des stubs (Thinker + world_apply) pour tester UNIQUEMENT la
-  mécanique de dispatch — sans LLM réel.
-- Les tests exercent chaque garantie du contrat de AgentLoop :
-  1. Le Thinker est appelé avec la bonne Perception.
-  2. world_apply est appelé dans l'ordre pour chaque Action.
-  3. L'état final retourné est celui après la dernière application.
-  4. Si planned_actions est vide, world_apply n'est pas appelé.
-  5. Un objet sans .think() lève au tick().
-  6. tick() retourne (thought, world_state) en tuple.
+- Stubs injectés (Thinker + world_apply) pour tester UNIQUEMENT la mécanique.
+- Le Thinker stub est async (même si trivial) pour correspondre au Protocol.
 """
 from __future__ import annotations
 
@@ -52,15 +51,17 @@ def _make_perception(world: WorldState | None = None) -> Perception:
 
 
 # ---------------------------------------------------------------------------
-# Stubs
+# Stubs async
 # ---------------------------------------------------------------------------
 
 @dataclass
 class RecordingThinker:
-    """Thinker stub qui enregistre les Perceptions reçues et retourne un Thought fixe.
+    """Thinker stub async — enregistre les Perceptions reçues, retourne un Thought fixe.
 
     `returned_thought` : Thought retourné à chaque appel à .think().
     `received_perceptions` : liste des Perceptions passées (pour assertion d'identité).
+
+    Note : think() est `async def` depuis L2.2 (Protocol Thinker async).
     """
     returned_thought: Thought
     received_perceptions: list[Perception]
@@ -69,7 +70,7 @@ class RecordingThinker:
         self.returned_thought = thought
         self.received_perceptions = []
 
-    def think(self, perception: Perception) -> Thought:
+    async def think(self, perception: Perception) -> Thought:
         self.received_perceptions.append(perception)
         return self.returned_thought
 
@@ -101,7 +102,8 @@ def _make_recording_world_apply():
 # T1 — tick_calls_thinker_with_perception
 # ---------------------------------------------------------------------------
 
-def test_tick_calls_thinker_with_perception() -> None:
+@pytest.mark.asyncio
+async def test_tick_calls_thinker_with_perception() -> None:
     """AgentLoop.tick(perception) appelle thinker.think() avec exactement cette Perception.
 
     On vérifie l'identité de l'objet (is), pas juste l'égalité, pour détecter
@@ -113,20 +115,21 @@ def test_tick_calls_thinker_with_perception() -> None:
 
     loop = AgentLoop(thinker=thinker, world_apply=world_apply)
     perception = _make_perception()
-    loop.tick(perception)
+    await loop.tick(perception)
 
     assert len(thinker.received_perceptions) == 1
     assert thinker.received_perceptions[0] is perception
 
 
 # ---------------------------------------------------------------------------
-# T2 — tick_applies_each_planned_action_on_world
+# T2 — tick_applies_each_planned_action_in_order
 # ---------------------------------------------------------------------------
 
-def test_tick_applies_each_planned_action_in_order() -> None:
+@pytest.mark.asyncio
+async def test_tick_applies_each_planned_action_in_order() -> None:
     """tick() appelle world_apply 3 fois dans l'ordre avec a1, a2, a3.
 
-    On vérifie que l'ordre préservé ET que world_apply reçoit bien chaque
+    On vérifie que l'ordre est préservé ET que world_apply reçoit bien chaque
     action sans en sauter ni en répéter.
     """
     a1 = AvatarPoseAction(pose="wave")
@@ -137,7 +140,7 @@ def test_tick_applies_each_planned_action_in_order() -> None:
     world_apply, call_log = _make_recording_world_apply()
 
     loop = AgentLoop(thinker=thinker, world_apply=world_apply)
-    loop.tick(_make_perception())
+    await loop.tick(_make_perception())
 
     assert len(call_log) == 3
     _, action_0 = call_log[0]
@@ -152,7 +155,8 @@ def test_tick_applies_each_planned_action_in_order() -> None:
 # T3 — tick_returns_final_world_state
 # ---------------------------------------------------------------------------
 
-def test_tick_returns_final_world_state() -> None:
+@pytest.mark.asyncio
+async def test_tick_returns_final_world_state() -> None:
     """tick() retourne le WorldState APRÈS application de toutes les actions.
 
     Le stub world_apply incrémente clock_ms de 10ms à chaque appel.
@@ -169,7 +173,7 @@ def test_tick_returns_final_world_state() -> None:
     world_apply, call_log = _make_recording_world_apply()
 
     loop = AgentLoop(thinker=thinker, world_apply=world_apply)
-    returned_thought, final_state = loop.tick(perception)
+    returned_thought, final_state = await loop.tick(perception)
 
     # Après a1 : clock_ms=10. Après a2 : clock_ms=20.
     assert final_state.clock_ms == 20
@@ -182,7 +186,8 @@ def test_tick_returns_final_world_state() -> None:
 # T4 — tick_with_empty_planned_actions_returns_initial_world
 # ---------------------------------------------------------------------------
 
-def test_tick_with_empty_planned_actions_returns_initial_world() -> None:
+@pytest.mark.asyncio
+async def test_tick_with_empty_planned_actions_returns_initial_world() -> None:
     """Si planned_actions est vide, world_apply n'est PAS appelé.
 
     Le state retourné est EXACTEMENT perception.world_snapshot (identité).
@@ -195,38 +200,38 @@ def test_tick_with_empty_planned_actions_returns_initial_world() -> None:
     world_apply, call_log = _make_recording_world_apply()
 
     loop = AgentLoop(thinker=thinker, world_apply=world_apply)
-    _, final_state = loop.tick(perception)
+    _, final_state = await loop.tick(perception)
 
     assert len(call_log) == 0, "world_apply ne doit pas être appelé sans actions"
     assert final_state is initial_world
 
 
 # ---------------------------------------------------------------------------
-# T5 — thinker_protocol_defines_think_method
+# T5 — thinker_protocol_defines_think_method (async)
 # ---------------------------------------------------------------------------
 
-def test_thinker_without_think_raises_on_tick() -> None:
+@pytest.mark.asyncio
+async def test_thinker_without_think_raises_on_tick() -> None:
     """Un objet sans méthode .think() lève AttributeError au moment du tick().
 
-    AgentLoop est un frozen dataclass — il n'y a pas de validation au __init__
-    (Protocols Python ne sont pas runtime_checkable par défaut). L'erreur
-    survient au premier appel tick(), quand on appelle thinker.think().
+    L'AttributeError se propage à travers l'await, donc on l'attrape avec
+    pytest.raises autour du await.
     """
     world_apply, _ = _make_recording_world_apply()
     bad_thinker = NonThinker()
 
-    # On passe bad_thinker sans typage strict — Python le laisse passer à __init__.
     loop = AgentLoop(thinker=bad_thinker, world_apply=world_apply)  # type: ignore[arg-type]
 
     with pytest.raises(AttributeError):
-        loop.tick(_make_perception())
+        await loop.tick(_make_perception())
 
 
 # ---------------------------------------------------------------------------
 # T6 — tick_returns_thought_alongside_world_state
 # ---------------------------------------------------------------------------
 
-def test_tick_returns_thought_alongside_world_state() -> None:
+@pytest.mark.asyncio
+async def test_tick_returns_thought_alongside_world_state() -> None:
     """tick() retourne (thought, world_state) — le caller accède au reasoning.
 
     On vérifie que :
@@ -244,7 +249,7 @@ def test_tick_returns_thought_alongside_world_state() -> None:
     world_apply, _ = _make_recording_world_apply()
 
     loop = AgentLoop(thinker=thinker, world_apply=world_apply)
-    result = loop.tick(perception)
+    result = await loop.tick(perception)
 
     assert isinstance(result, tuple)
     assert len(result) == 2
