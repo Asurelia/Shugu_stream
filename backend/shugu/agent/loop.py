@@ -1,20 +1,19 @@
-"""Boucle Agent (L2) — squelette perceive → think → act.
+"""Boucle Agent (L2) — perceive → think (LLM async) → act.
 
-Ce module contient la mécanique pure du cycle agent, sans LLM réel. L'objectif
-est de rendre la mécanique de dispatch testable de manière déterministe en
-injectant les dépendances (Thinker, world_apply) depuis l'extérieur.
+Ce module contient la mécanique pure du cycle agent. L'objectif est de rendre
+la mécanique de dispatch testable de manière déterministe en injectant les
+dépendances (Thinker, world_apply) depuis l'extérieur.
 
-Décision sync vs async
------------------------
-L2.1 est **synchrone**. Justifications :
+Migration L2.1 → L2.2 : sync → async
+---------------------------------------
+`AgentLoop.tick()` passe de `def` à `async def` car :
 
-1. Il n'y a pas encore de LLM réel — une boucle sync est plus simple et
-   directement testable sans `asyncio.run()` dans les tests.
-2. L2.2 (branchement LLM) introduira `async def` dans le Thinker Protocol
-   car les BrainAdapters sont async (`core/protocols.py`). On adaptera la
-   signature `tick()` à ce moment-là (migration ciblée, une seule PR).
-3. Ajouter async maintenant serait de la complexité accidentelle — "premature
-   async" — sans bénéfice observable en L2.1.
+1. `LLMThinker.think()` est async (BrainAdapter.respond() est un async
+   generator — `core/protocols.py`). Awaiter le Thinker ici est obligatoire.
+2. `WorldApply` reste **sync** (reducer pur) — les reducers L3 n'ont aucune
+   raison d'être async (pas d'I/O, pas de réseau).
+3. La migration est locale : loop.py + test_agent_loop.py uniquement. Aucun
+   autre caller n'existe encore (pas de wiring app.py en L2.2).
 
 Architecture de la classe
 ---------------------------
@@ -48,21 +47,20 @@ from .types import Perception, Thought
 class Thinker(Protocol):
     """Contrat du composant qui produit un Thought à partir d'une Perception.
 
-    En L2.1 on injecte des stubs pour tester la mécanique du dispatch.
-    En L2.2 on injectera un LLMThinker qui appelle un BrainAdapter (async)
-    avec les tools du ToolRegistry. La signature `think()` passera alors à
-    `async def think(...)` — la migration est limitée à loop.py + LLMThinker.
+    Depuis L2.2, la signature est `async def think(...)` car le LLMThinker
+    appelle un BrainAdapter (async generator). Les stubs de test implémentent
+    ce Protocol par structural typing (duck typing) — aucun héritage requis.
 
-    Usage attendu (L2.2) :
+    Usage (L2.2+) :
         class LLMThinker:
-            def __init__(self, brain: BrainAdapter, registry: ToolRegistry): ...
             async def think(self, perception: Perception) -> Thought: ...
 
-    Les stubs de test implémentent ce protocol par structural typing (duck
-    typing) — aucun héritage requis.
+        class StubThinker:
+            async def think(self, perception: Perception) -> Thought:
+                return Thought(reasoning="test", planned_actions=())
     """
 
-    def think(self, perception: Perception) -> Thought:
+    async def think(self, perception: Perception) -> Thought:
         """Analyse la Perception et retourne un Thought avec les actions planifiées.
 
         Paramètres :
@@ -117,25 +115,27 @@ class AgentLoop:
         4. Return    → (thought, final_world_state).
 
     Exemple d'utilisation :
-        thinker = LLMThinker(brain=brain_adapter, registry=tool_registry)
+        thinker = LLMThinker(brain=brain_adapter, tools=registry, parser=parser,
+                              identity=identity)
         loop = AgentLoop(thinker=thinker, world_apply=world_apply)
-        thought, new_world = loop.tick(current_perception)
+        thought, new_world = await loop.tick(current_perception)
     """
 
     thinker: Thinker
-    """Composant Think — transforme une Perception en Thought.
+    """Composant Think — transforme une Perception en Thought (async depuis L2.2).
 
-    En L2.1 : stub de test. En L2.2 : LLMThinker avec BrainAdapter.
+    En L2.1 : stub de test sync. En L2.2 : LLMThinker avec BrainAdapter async.
     """
 
     world_apply: WorldApply
     """Fonction pure d'application d'Action → nouveau WorldState.
 
     Fournie par le wiring app. En L3.1 : `shugu.world.reducers.apply`.
+    Reste sync en L2.2 (reducer pur, pas d'I/O).
     """
 
-    def tick(self, perception: Perception) -> tuple[Thought, WorldState]:
-        """Un tour de boucle agent : perceive → think → act.
+    async def tick(self, perception: Perception) -> tuple[Thought, WorldState]:
+        """Un tour de boucle agent : perceive → think (async) → act.
 
         Applique les actions planifiées dans l'ordre sur le WorldState contenu
         dans la Perception. Si `planned_actions` est vide, retourne le snapshot
@@ -156,7 +156,7 @@ class AgentLoop:
             - Le WorldState intermédiaire de chaque action est passé à la
               suivante (chaining pur : a1(s) → s1, a2(s1) → s2, ...).
         """
-        thought = self.thinker.think(perception)
+        thought = await self.thinker.think(perception)
         world = perception.world_snapshot
         for action in thought.planned_actions:
             world = self.world_apply(world, action)
