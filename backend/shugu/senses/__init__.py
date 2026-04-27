@@ -16,6 +16,7 @@ Ce module n'importe NI `shugu.agent` NI `shugu.world` (couche feuille).
 """
 from __future__ import annotations
 
+from .bus import publish_sense_event
 from .types import SenseEvent, SenseKind
 
-__all__ = ["SenseEvent", "SenseKind"]
+__all__ = ["SenseEvent", "SenseKind", "publish_sense_event"]
