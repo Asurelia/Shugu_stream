@@ -135,10 +135,10 @@ async def test_publish_swallows_bus_errors(caplog: pytest.LogCaptureFixture) -> 
     class _FailingBus:
         """Stub minimal satisfaisant le protocol EventBus (structural typing)."""
 
-        async def publish(self, topic: str, event: dict) -> None:  # noqa: ARG002
+        async def publish(self, _topic: str, _event: dict) -> None:
             raise RuntimeError("bus indisponible")
 
-        def subscribe(self, topic: str):  # type: ignore[override]  # noqa: ARG002
+        def subscribe(self, _topic: str):  # type: ignore[return]
             raise NotImplementedError  # jamais appelé dans ce test
 
         async def close(self) -> None:
