@@ -6,7 +6,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, field_validator
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Resolve the env file path in a portable way:
@@ -38,6 +38,11 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",
+        # Permet de passer un kwarg par nom de field (ex: Settings(env="dev"))
+        # MÊME quand un validation_alias est défini. Sans ce flag, pydantic v2
+        # n'accepte que les noms d'alias en kwarg, ce qui casse les tests qui
+        # construisent Settings(env=..., ip_hash_salt=..., ...).
+        populate_by_name=True,
     )
 
     # Binding
@@ -169,17 +174,21 @@ class Settings(BaseSettings):
         default=20,
         ge=1,
         le=500,
+        validation_alias=AliasChoices("COMPACTOR_THRESHOLD", "SHUGU_COMPACTOR_THRESHOLD"),
         description="Nombre minimum de facts actifs pour déclencher le compactage. "
                     "Défaut 20. Bornes [1, 500]. "
-                    "Env: SHUGU_COMPACTOR_THRESHOLD",
+                    "Env: SHUGU_COMPACTOR_THRESHOLD (ou COMPACTOR_THRESHOLD)",
     )
     compactor_summary_count: int = Field(
         default=6,
         ge=1,
         le=50,
+        validation_alias=AliasChoices(
+            "COMPACTOR_SUMMARY_COUNT", "SHUGU_COMPACTOR_SUMMARY_COUNT"
+        ),
         description="Nombre cible de facts résumés après le compactage. "
                     "Défaut 6. Bornes [1, 50]. "
-                    "Env: SHUGU_COMPACTOR_SUMMARY_COUNT",
+                    "Env: SHUGU_COMPACTOR_SUMMARY_COUNT (ou COMPACTOR_SUMMARY_COUNT)",
     )
 
     # VIP bridge — v4 Phase 1 Brique 1.2. `vip_agent` (Worker LiveKit Agents,
@@ -199,15 +208,18 @@ class Settings(BaseSettings):
     # Environment (dev, test, production) — défaut "production" pour fail-safe en prod.
     env: str = Field(
         default="production",
+        validation_alias=AliasChoices("ENV", "SHUGU_ENV"),
         description="Environnement d'exécution : 'production', 'test', 'dev', 'ci'. "
-                    "Lit SHUGU_ENV, défaut 'production' pour sécurité.",
+                    "Lit SHUGU_ENV (ou ENV), défaut 'production' pour sécurité.",
     )
 
     # Crypto
     ip_hash_salt: str = Field(
         default="",
+        validation_alias=AliasChoices("IP_HASH_SALT", "SHUGU_IP_HASH_SALT"),
         description="Sel pour hashing des IPs visiteurs (subject mémoire). "
                     "OBLIGATOIRE en prod pour pseudonymat visitors. "
+                    "Env: SHUGU_IP_HASH_SALT (ou IP_HASH_SALT). "
                     "Génère un secret aléatoire 32+ chars : "
                     "python -c 'import secrets; print(secrets.token_urlsafe(32))'",
     )
@@ -253,8 +265,9 @@ class Settings(BaseSettings):
     # sur les usernames chat.
     vip_usernames: list[str] = Field(
         default_factory=list,
+        validation_alias=AliasChoices("VIP_USERNAMES", "SHUGU_VIP_USERNAMES"),
         description="Whitelist des usernames VIP qui déclenchent `vip_arrival` triggers. "
-                    "Accepte CSV ou JSON array via env SHUGU_VIP_USERNAMES.",
+                    "Accepte CSV ou JSON array via env SHUGU_VIP_USERNAMES (ou VIP_USERNAMES).",
     )
     director_enabled: bool = Field(
         default=False,
@@ -282,8 +295,10 @@ class Settings(BaseSettings):
     )
     director_model: str = Field(
         default="claude-haiku-4-5-20251001",
+        validation_alias=AliasChoices("DIRECTOR_MODEL", "SHUGU_DIRECTOR_MODEL"),
         description="Modèle Anthropic utilisé par l'orchestrator Director. "
-                    "Défaut : Haiku 4.5 (latence ~500ms). Override via SHUGU_DIRECTOR_MODEL.",
+                    "Défaut : Haiku 4.5 (latence ~500ms). "
+                    "Override via SHUGU_DIRECTOR_MODEL (ou DIRECTOR_MODEL).",
     )
     director_max_ticks_per_hour: int = Field(
         default=200,
@@ -299,6 +314,9 @@ class Settings(BaseSettings):
     # Override via SHUGU_DIRECTOR_LLM_PROVIDER=anthropic pour Claude Haiku/Sonnet.
     director_llm_provider: Literal["minimax", "anthropic", "openai", "ollama"] = Field(
         default="minimax",
+        validation_alias=AliasChoices(
+            "DIRECTOR_LLM_PROVIDER", "SHUGU_DIRECTOR_LLM_PROVIDER"
+        ),
         description="Provider LLM Director (default minimax — réutilise l'infra ShuguPersonaBrain). "
                     "minimax | anthropic | openai (E2.6) | ollama (E2.6).",
     )
@@ -363,9 +381,13 @@ class Settings(BaseSettings):
     # Activer uniquement en CI avec SHUGU_TEST_TRIGGERS_ENABLED=true.
     test_triggers_enabled: bool = Field(
         default=False,
+        validation_alias=AliasChoices(
+            "TEST_TRIGGERS_ENABLED", "SHUGU_TEST_TRIGGERS_ENABLED"
+        ),
         description="Active la route POST /api/test/director/trigger (operator-only). "
                     "Gated par ce flag + auth operator. "
-                    "OFF par défaut — uniquement pour CI/tests E2E Playwright.",
+                    "OFF par défaut — uniquement pour CI/tests E2E Playwright. "
+                    "Opt-in via SHUGU_TEST_TRIGGERS_ENABLED (ou TEST_TRIGGERS_ENABLED).",
     )
 
     # Phase E5.1 — ScenePlayer (Scene Composer execution déterministe).
@@ -375,9 +397,35 @@ class Settings(BaseSettings):
     # tant que le flag est False (cohérent avec le pattern director_enabled).
     scene_player_enabled: bool = Field(
         default=False,
+        validation_alias=AliasChoices(
+            "SCENE_PLAYER_ENABLED", "SHUGU_SCENE_PLAYER_ENABLED"
+        ),
         description="Active le ScenePlayer (exécution déterministe d'AuthoredScene). "
-                    "OFF par défaut — opt-in via SHUGU_SCENE_PLAYER_ENABLED=true. "
+                    "OFF par défaut — opt-in via SHUGU_SCENE_PLAYER_ENABLED=true "
+                    "(ou SCENE_PLAYER_ENABLED=true). "
                     "Si False, l'API /play retourne 503.",
+    )
+
+    # L2.3 — AgentLoop streamer IA autonome (wiring L1+L2+L3).
+    # OFF par défaut : le wiring assemble les composants dans app.py sans démarrer
+    # la boucle. Si False, aucun AgentComponents n'est créé (économise la mémoire
+    # et évite un crash si brain/identity ne sont pas encore configurés).
+    # Le démarrage effectif de la boucle (AgentRunner) sera L2.4.
+    streamer_agent_enabled: bool = Field(
+        default=False,
+        # Régression P1 review #50 : sans alias, pydantic-settings lit
+        # STREAMER_AGENT_ENABLED (nom du field uppercase) et ignore
+        # SHUGU_STREAMER_AGENT_ENABLED documenté. AliasChoices accepte
+        # les deux pour ne pas casser les déploiements qui suivent l'une
+        # ou l'autre convention.
+        validation_alias=AliasChoices(
+            "STREAMER_AGENT_ENABLED",
+            "SHUGU_STREAMER_AGENT_ENABLED",
+        ),
+        description="Active le wiring de l'AgentLoop streamer IA (assemble L1+L2+L3 dans app.py). "
+                    "OFF par défaut — opt-in via SHUGU_STREAMER_AGENT_ENABLED=true "
+                    "(ou STREAMER_AGENT_ENABLED=true). "
+                    "Le démarrage effectif de la boucle (AgentRunner) est L2.4.",
     )
 
     @field_validator("ip_hash_salt", mode="after")

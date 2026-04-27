@@ -17,6 +17,8 @@ Frontière publique exposée :
 - `ActionParser` — Protocol du parser texte LLM → ActionUnion (L2.2).
 - `XmlTagActionParser` — implémentation ActionParser via regex XML-like (L2.2).
 - `build_prompt` — constructeur de prompt LLM depuis une Perception (L2.2).
+- `AgentComponents` — conteneur frozen des composants assemblés (L2.3).
+- `build_agent_components` — factory de wiring L1+L2+L3 (L2.3).
 
 Ce module ne mute PAS L3 directement : il consomme `world.types`
 (Action variants + WorldState pour lecture) et l'application des actions
@@ -28,16 +30,21 @@ from __future__ import annotations
 from .action_parser import ActionParser, XmlTagActionParser
 from .llm_thinker import LLMThinker, build_prompt
 from .loop import AgentLoop, Thinker, WorldApply
+from .tools import ToolRegistry
 from .types import Perception, Thought
+from .wiring import AgentComponents, build_agent_components
 
 __all__ = [
     "ActionParser",
+    "AgentComponents",
     "AgentLoop",
     "LLMThinker",
     "Perception",
     "Thought",
     "Thinker",
+    "ToolRegistry",
     "WorldApply",
     "XmlTagActionParser",
+    "build_agent_components",
     "build_prompt",
 ]
