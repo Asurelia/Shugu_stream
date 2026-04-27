@@ -16,7 +16,6 @@ import { fetchAuthStatus, logout } from "@/services/shuguClient";
 
 type Section =
   | "overview"
-  | "creator-home"
   | "scene-editor"
   | "analytics"
   | "community"
@@ -29,11 +28,9 @@ type SidebarItem = { section: Section; label: string; path: string; icon: string
 
 const SIDEBAR: SidebarItem[] = [
   { section: "overview",     label: "Live Control",  path: "",               icon: "◉" },
-  { section: "creator-home", label: "Creator Home",  path: "/creator-home",  icon: "✧" },
   { section: "scene-editor", label: "Scene Editor",  path: "/scene-editor",  icon: "◈" },
   { section: "analytics",    label: "Analytics",     path: "/analytics",     icon: "∿" },
   { section: "community",    label: "Community",     path: "/community",     icon: "✦" },
-  { section: "assets",       label: "Assets",        path: "/assets",        icon: "◇" },
   { section: "schedule",     label: "Schedule",      path: "/schedule",      icon: "◷" },
   { section: "moderation",   label: "Moderation",    path: "/moderation",    icon: "⊘" },
   { section: "users",        label: "Utilisateurs",  path: "/users",         icon: "◆" },
@@ -81,7 +78,7 @@ export function AdminShell({ active, title, subtitle, headerRight, children }: P
   return (
     <div className="lg-page font-quicksand">
       {/* Sidebar rail ----------------------------------------------- */}
-      <aside className="lg-rail fixed left-0 top-0 bottom-0 z-30 hidden md:flex flex-col w-[224px]">
+      <aside className="lg-rail fixed left-0 top-0 bottom-0 z-30 hidden lg:flex flex-col w-[224px]">
         {/* Logo + identité */}
         <div className="px-4 pt-5 pb-4 flex items-center gap-3 shrink-0">
           <div
@@ -174,7 +171,7 @@ export function AdminShell({ active, title, subtitle, headerRight, children }: P
 
       {/* Mobile top rail -------------------------------------------- */}
       <nav
-        className="md:hidden fixed top-0 left-0 right-0 z-30 flex items-center gap-2 overflow-x-auto px-3 py-2 lg-rail"
+        className="lg:hidden fixed top-0 left-0 right-0 z-30 flex items-center gap-2 overflow-x-auto px-3 py-2 lg-rail"
         style={{ borderRight: "0", borderBottom: "1px solid rgba(255,255,255,0.06)" }}
       >
         {SIDEBAR.map((item) => {
@@ -198,7 +195,7 @@ export function AdminShell({ active, title, subtitle, headerRight, children }: P
       </nav>
 
       {/* Main -------------------------------------------------------- */}
-      <main className="md:pl-[224px] pt-[52px] md:pt-0 min-h-screen">
+      <main className="lg:pl-[224px] pt-[52px] lg:pt-0 min-h-screen">
         <div className="px-5 sm:px-8 py-7 max-w-[1400px] mx-auto">
           <div className="flex items-end justify-between mb-6 gap-4 flex-wrap">
             <div className="min-w-0">
