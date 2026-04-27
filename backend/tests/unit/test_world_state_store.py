@@ -320,3 +320,81 @@ def test_read_consistency_design_note() -> None:
     # Après une mutation synchrone (simulate via a basic check)
     # La vraie preuve de l'atomicité est dans la docstring ci-dessus.
     # T7 (concurrent_applies) est le test empirique de non-perte d'action.
+
+
+# ---------------------------------------------------------------------------
+# T9 (review fix P1) — apply atomique vs cancellation
+# ---------------------------------------------------------------------------
+
+async def test_apply_publishes_even_when_caller_is_cancelled() -> None:
+    """Régression P1 review #49 : la publication doit aller jusqu'au bout
+    même si le caller (la task qui await store.apply) est cancellé.
+
+    Avant le fix : `self._state = new_state` PUIS `await publish_world_delta`.
+    Si la task est cancellée pendant le await publish, l'état est avancé
+    mais aucun delta n'est émis → subscribers manquent ce changement, les
+    diffs suivants partent de la nouvelle baseline → drift permanent.
+
+    Fix : `asyncio.shield(publish_world_delta(...))` — le publish continue
+    son exécution même si le await externe est cancellé.
+
+    Setup du test :
+    - Un bus avec un publish() lent (sleep 50ms) pour ouvrir une fenêtre
+      de cancellation.
+    - On lance store.apply(), on cancelle la task au milieu, on attend que
+      le publish shielded ait fini, puis on vérifie qu'un subscriber a bien
+      reçu le delta.
+    """
+    import asyncio as _asyncio
+
+    received: list[dict] = []
+    publish_started = _asyncio.Event()
+    publish_done = _asyncio.Event()
+
+    class SlowBus:
+        """Bus stub : enregistre les publishs avec un delay artificiel."""
+
+        async def publish(self, topic: str, event: dict) -> None:
+            publish_started.set()
+            # Délai pour ouvrir la fenêtre de cancellation
+            await _asyncio.sleep(0.05)
+            received.append({"topic": topic, "event": event})
+            publish_done.set()
+
+        def subscribe(self, topic: str):  # pragma: no cover (non utilisé ici)
+            raise NotImplementedError
+
+        async def close(self) -> None:  # pragma: no cover
+            pass
+
+    from shugu.world.state_store import WorldStateStore
+
+    bus = SlowBus()
+    store = WorldStateStore(initial=_base_state(), bus=bus)
+
+    # Lancer apply() comme une task séparée, qu'on va cancel
+    apply_task = _asyncio.create_task(store.apply(AvatarPoseAction(pose="wave")))
+
+    # Attendre que le publish démarre
+    await _asyncio.wait_for(publish_started.wait(), timeout=1.0)
+
+    # Cancel la task externe — sans shield, la coroutine publish s'arrêterait
+    import pytest as _pytest
+
+    apply_task.cancel()
+    with _pytest.raises(_asyncio.CancelledError):
+        await apply_task
+
+    # Avec shield : le publish continue son exécution. On l'attend.
+    await _asyncio.wait_for(publish_done.wait(), timeout=1.0)
+
+    # Le delta a bien été publié malgré la cancellation
+    assert len(received) == 1, (
+        f"Le publish shielded doit avoir abouti malgré la cancellation, "
+        f"mais received={received}"
+    )
+    assert received[0]["topic"] == "world.delta"
+    assert received[0]["event"]["avatar_pose"] == "wave"
+
+    # L'état du store est cohérent : avancé conformément à l'action
+    assert store.read().avatar_pose == "wave"

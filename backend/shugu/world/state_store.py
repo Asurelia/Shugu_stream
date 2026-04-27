@@ -156,7 +156,17 @@ class WorldStateStore:
             prev = self._state
             new_state = _apply_reducer(prev, action)
             self._state = new_state
-            await publish_world_delta(self._bus, prev, new_state)
+            # Régression P1 review #49 : sans shield, une cancellation (timeout,
+            # shutdown, gather supérieur) entre l'assignation `_state = new_state`
+            # et le `await publish_world_delta` laisserait l'état avancé sans
+            # émettre le delta. Les diffs suivants partiraient de `new_state`
+            # comme baseline → les subscribers manqueraient pour toujours les
+            # champs changés par cette transition. asyncio.shield garantit que
+            # la publication va jusqu'au bout même si le caller est cancellé ;
+            # la CancelledError reste propagée au caller (raise).
+            await asyncio.shield(
+                publish_world_delta(self._bus, prev, new_state)
+            )
             return new_state
 
     async def replace(self, state: WorldState) -> WorldState:
@@ -180,7 +190,11 @@ class WorldStateStore:
         async with self._write_lock:
             prev = self._state
             self._state = state
-            await publish_world_delta(self._bus, prev, state)
+            # Idem apply() : shield contre cancellation entre write et publish
+            # (cf. commentaire dans apply()).
+            await asyncio.shield(
+                publish_world_delta(self._bus, prev, state)
+            )
             return state
 
 
