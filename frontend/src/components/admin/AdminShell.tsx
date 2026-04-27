@@ -29,7 +29,7 @@ type SidebarItem = { section: Section; label: string; path: string; icon: string
 
 const SIDEBAR: SidebarItem[] = [
   { section: "overview",     label: "Live Control",  path: "",               icon: "◉" },
-  { section: "scene-editor", label: "Scene Editor",  path: "/scene-editor",  icon: "◈" },
+  { section: "scene-editor", label: "Scene Editor",  path: "/scene-editor-v2",  icon: "◈" },
   { section: "analytics",    label: "Analytics",     path: "/analytics",     icon: "∿" },
   { section: "community",    label: "Community",     path: "/community",     icon: "✦" },
   { section: "assets",       label: "Assets",        path: "/assets",        icon: "◇" },
