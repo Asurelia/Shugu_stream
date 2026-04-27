@@ -380,6 +380,18 @@ class Settings(BaseSettings):
                     "Si False, l'API /play retourne 503.",
     )
 
+    # L2.3 — AgentLoop streamer IA autonome (wiring L1+L2+L3).
+    # OFF par défaut : le wiring assemble les composants dans app.py sans démarrer
+    # la boucle. Si False, aucun AgentComponents n'est créé (économise la mémoire
+    # et évite un crash si brain/identity ne sont pas encore configurés).
+    # Le démarrage effectif de la boucle (AgentRunner) sera L2.4.
+    streamer_agent_enabled: bool = Field(
+        default=False,
+        description="Active le wiring de l'AgentLoop streamer IA (assemble L1+L2+L3 dans app.py). "
+                    "OFF par défaut — opt-in via SHUGU_STREAMER_AGENT_ENABLED=true. "
+                    "Le démarrage effectif de la boucle (AgentRunner) est L2.4.",
+    )
+
     @field_validator("ip_hash_salt", mode="after")
     @classmethod
     def _validate_ip_hash_salt(cls, v: str, info) -> str:

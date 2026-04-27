@@ -23,8 +23,10 @@ from .adapters.tts_edge import EdgeTTS
 from .adapters.tts_elevenlabs import ElevenLabsTTS
 from .adapters.tts_fallback import FallbackTTS
 from .adapters.tts_minimax import MiniMaxTTS
+from .agent.wiring import build_agent_components
 from .config import get_settings
 from .core.event_bus_factory import make_event_bus
+from .core.identity import OperatorIdentity
 from .core.observability import Metrics, SlidingRateLimiter
 from .core.quota import QuotaTracker
 from .core.registry import init_registry
@@ -366,6 +368,26 @@ async def lifespan(app: FastAPI):
     else:
         app.state.scene_player = None
         log.info("scene_composer.player_disabled", extra={"flag": False})
+
+    # L2.3 — AgentLoop streamer IA (wiring L1+L2+L3, PAS de démarrage boucle).
+    # Conditionnel sur settings.streamer_agent_enabled (défaut False).
+    # Utilise brain_shugu comme BrainAdapter — le brain persona principal.
+    # Identity : OperatorIdentity(username="streamer") car l'agent agit au
+    # niveau opérateur (contrôle du avatar, scènes, mood — scope admin).
+    # world_apply importé ICI (pas dans wiring.py) pour respecter l'arch L0 D4 :
+    # agent/ ne peut pas importer shugu.world.reducers directement.
+    if settings.streamer_agent_enabled:
+        from .world import apply as _world_apply
+        _agent_components = build_agent_components(
+            brain=brain_shugu,
+            identity=OperatorIdentity(username="streamer"),
+            world_apply=_world_apply,
+        )
+        app.state.agent_components = _agent_components
+        log.info("streamer_agent.wired", extra={"loop": "assembled", "tools": 0})
+    else:
+        app.state.agent_components = None
+        log.info("streamer_agent.disabled", extra={"reason": "streamer_agent_enabled=False"})
 
     # Director (Phase E1) — background tasks Silence + SceneChangeRelay.
     # `start()` est un no-op tant que `settings.director_enabled=False`
