@@ -24,7 +24,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Literal
+from types import MappingProxyType
+from typing import Literal, Mapping
 
 # Liste fermée des kinds Phase 1. Étendre = PR explicite + handler agent.
 SenseKind = Literal["chat", "voice", "event", "vision"]
@@ -46,8 +47,17 @@ class SenseEvent:
     """
     kind: SenseKind
     subject: str
-    payload: dict
+    payload: Mapping[str, object]
     ts: datetime
+
+    def __post_init__(self) -> None:
+        # Bug P2 : un dict standard reste mutable même sur un dataclass frozen.
+        # On wrap dans MappingProxyType + copie superficielle pour (1) bloquer
+        # la mutation via `ev.payload[k] = ...` (lève TypeError) et (2) isoler
+        # l'event de mutations ultérieures sur le dict d'origine. Frozen exige
+        # object.__setattr__ pour réécrire le champ.
+        if not isinstance(self.payload, MappingProxyType):
+            object.__setattr__(self, "payload", MappingProxyType(dict(self.payload)))
 
     @property
     def topic(self) -> str:
@@ -63,7 +73,10 @@ class SenseEvent:
         return {
             "kind": self.kind,
             "subject": self.subject,
-            "payload": self.payload,
+            # Conversion explicite : MappingProxyType n'est pas JSON-sérialisable
+            # par défaut, et on veut un dict mutable côté consommateur du bus
+            # pour permettre l'enrichissement (redaction PII, etc.).
+            "payload": dict(self.payload),
             "ts": self.ts.isoformat(),
         }
 

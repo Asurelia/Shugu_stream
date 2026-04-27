@@ -31,6 +31,8 @@ Choix de design :
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from types import MappingProxyType
+from typing import Mapping
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,7 +46,17 @@ class Tool:
     """
     name: str
     description: str
-    params_schema: dict = field(default_factory=dict)
+    params_schema: Mapping[str, object] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        # Bug P3 : sans wrap, un caller peut muter `tool.params_schema[...]` ou
+        # le dict d'origine après register() → drift entre le schema affiché au
+        # LLM et celui que le runtime exécute. MappingProxyType + copie
+        # superficielle bloquent les deux scénarios.
+        if not isinstance(self.params_schema, MappingProxyType):
+            object.__setattr__(
+                self, "params_schema", MappingProxyType(dict(self.params_schema))
+            )
 
 
 class ToolRegistry:

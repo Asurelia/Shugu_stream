@@ -73,34 +73,71 @@ def _backend_root() -> pathlib.Path:
 
 
 def _import_lines(tree: ast.AST) -> list[tuple[int, str]]:
-    """Extrait toutes les lignes d'import sous forme dot-notation.
+    """Extrait toutes les lignes d'import sous forme dot-notation BRUTE.
 
-    Pour `from .agent import Foo` (relatif), `ast.unparse` renvoie
-    `from .agent import Foo` qu'on ne peut pas matcher directement. On
-    normalise : pour `ImportFrom` avec `level > 0`, on saute (les imports
-    relatifs internes au layer sont permis ; un layer ne peut pas remonter
-    avec `..agent` sans que ça apparaisse aussi comme `shugu.agent` dans
-    l'arbre absolu si on parse un fichier dans `shugu/X/`).
+    Encode les imports relatifs avec un sentinel `__relative__:<level>:<module>`
+    qui sera résolu en absolu par `_absolute_module`. Pour `from X import A, B`
+    on yield (1) `X` (le module parent) et (2) `X.A`, `X.B` pour chaque alias —
+    nécessaire pour matcher les sous-modules importés via `from ..world import state`
+    contre la règle d'isolation `forbidden = ('shugu.world',)`.
+
+    Bug P1 corrigé : `from .. import world` (module=None, names=[world])
+    était autrefois ignoré silencieusement. Désormais chaque alias génère
+    une entrée `__relative__:<level>:<alias.name>`.
     """
     lines: list[tuple[int, str]] = []
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
                 lines.append((node.lineno, alias.name))
-        elif isinstance(node, ast.ImportFrom):
-            if node.level and node.level > 0:
-                # Import relatif — résolu en absolu plus loin par _absolute_module.
-                lines.append((node.lineno, f"__relative__:{node.level}:{node.module or ''}"))
-            elif node.module:
-                lines.append((node.lineno, node.module))
+            continue
+        if not isinstance(node, ast.ImportFrom):
+            continue
+
+        level = node.level or 0
+        module = node.module or ""
+
+        if level > 0:
+            # Émet le module parent puis chaque alias comme sous-module potentiel.
+            if module:
+                lines.append((node.lineno, f"__relative__:{level}:{module}"))
+                for alias in node.names:
+                    if alias.name == "*":
+                        continue
+                    lines.append(
+                        (node.lineno, f"__relative__:{level}:{module}.{alias.name}")
+                    )
+            else:
+                # `from .. import X, Y` — chaque alias devient un sous-module
+                # du package résolu.
+                for alias in node.names:
+                    if alias.name == "*":
+                        continue
+                    lines.append((node.lineno, f"__relative__:{level}:{alias.name}"))
+            continue
+
+        if module:
+            lines.append((node.lineno, module))
+            for alias in node.names:
+                if alias.name == "*":
+                    continue
+                lines.append((node.lineno, f"{module}.{alias.name}"))
+
     return lines
 
 
 def _absolute_module(file_in_layer: pathlib.Path, repo_root: pathlib.Path, raw: str) -> str:
     """Convertit un import relatif `__relative__:level:name` en chemin absolu.
 
-    Ex: fichier `shugu/agent/loop.py`, import `__relative__:2:world.state`
-    → `shugu.world.state`.
+    Ex: fichier `shugu/agent/loop.py` (= package `shugu.agent`) :
+      - `__relative__:1:types`       → `shugu.agent.types`
+      - `__relative__:2:`            → `shugu`            (cas dégénéré, jamais émis)
+      - `__relative__:2:world`       → `shugu.world`
+      - `__relative__:2:world.state` → `shugu.world.state`
+
+    Règle PEP 328 : `level=1` = package courant, `level=2` = package parent, etc.
+    `package_parts` = parts du fichier moins le module final (le .py). Pour
+    `level=N`, on garde `len(package_parts) - (N - 1)` premiers segments.
     """
     if not raw.startswith("__relative__:"):
         return raw
@@ -108,12 +145,16 @@ def _absolute_module(file_in_layer: pathlib.Path, repo_root: pathlib.Path, raw: 
     level = int(level_str)
     rel = file_in_layer.relative_to(repo_root / "backend")
     parts = list(rel.with_suffix("").parts)
-    # Remonter `level` crans (1 = même package, 2 = parent, etc.).
-    if len(parts) < level:
-        return name  # Cas dégénéré, on log tel quel.
-    base = parts[: -level]
-    full = ".".join(base + ([name] if name else []))
-    return full
+    # parts inclut le nom du module final ; le package = parts sans le dernier.
+    package_parts = parts[:-1]
+    keep = len(package_parts) - (level - 1)
+    if keep < 0:
+        # Tentative de remonter au-dessus de la racine — malformé, fallback.
+        return name
+    base_parts = package_parts[:keep]
+    if name:
+        base_parts = base_parts + name.split(".")
+    return ".".join(base_parts)
 
 
 def test_layer_directories_exist() -> None:
@@ -181,6 +222,46 @@ def test_layer_isolation_no_forbidden_imports() -> None:
     assert not violations, (
         "Violations d'isolation Layers L0 détectées :\n"
         + "\n".join(f"  • {v}" for v in violations)
+    )
+
+
+def test_relative_imports_without_module_name_are_resolved() -> None:
+    """Régression P1 : `from .. import world` doit être détecté comme interdit.
+
+    Avant fix : `_import_lines` enregistrait `__relative__:2:` (module vide)
+    et `_absolute_module` renvoyait une chaîne vide → aucun match contre
+    `shugu.world` → bypass silencieux du test arch.
+
+    Le test crée un fichier temporaire qui simule `agent/loop.py` faisant
+    `from .. import world`, parse via les mêmes helpers, et vérifie que la
+    résolution donne bien `shugu.world` (matchable contre forbidden).
+    """
+    import textwrap
+    repo_root = _backend_root()
+    fake_file = repo_root / "backend" / "shugu" / "agent" / "loop.py"
+
+    source = textwrap.dedent(
+        """
+        from __future__ import annotations
+        from .. import world
+        from ..world import state as world_state
+        from . import types
+        """
+    )
+    tree = ast.parse(source, filename=str(fake_file))
+    resolved = [
+        _absolute_module(fake_file, repo_root, raw)
+        for _, raw in _import_lines(tree)
+    ]
+
+    # `from .. import world`         → shugu.world
+    # `from ..world import state ...` → shugu.world.state (raw='world.state', level=2)
+    # `from . import types`           → shugu.agent.types
+    assert "shugu.world" in resolved, (
+        f"`from .. import world` mal résolu : {resolved}"
+    )
+    assert any(r.startswith("shugu.world.state") for r in resolved), (
+        f"`from ..world import state` mal résolu : {resolved}"
     )
 
 

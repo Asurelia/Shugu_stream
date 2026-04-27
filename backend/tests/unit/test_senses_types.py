@@ -9,13 +9,16 @@ Invariants enforcés par ces tests :
    Justification : replay déterministe + cache hash + thread safety.
 2. `SenseKind` est un Literal fermé — l'ajout d'un kind exige une PR explicite
    (étend Literal + handler côté agent). Pas de strings libres qui dérivent.
-3. `SenseEvent.payload` est un dict en lecture seule à l'usage : on documente
-   l'invariant et on vérifie qu'une mutation tentée par référence ne casse
-   pas l'égalité par hash (puisque payload est pris dans le hash via tuple
-   normalization). NOTE : Python ne fait pas de deep-freeze ; le test ne
-   peut pas l'enforcer côté runtime — il documente la convention par doc.
-4. `SenseEvent` est hashable (conséquence de frozen + champs hashables) →
-   utilisable comme clé de cache déduplication côté agent.
+3. `SenseEvent.payload` est wrappé dans `MappingProxyType` au __post_init__
+   pour bloquer (a) `ev.payload[k] = ...` et (b) les mutations via le dict
+   d'origine partagé par référence. La copie est superficielle : si payload
+   contient un dict imbriqué, il reste mutable — on documente la convention
+   "payload est un dict plat de scalaires" plutôt que d'imposer un deep-freeze
+   coûteux (pas de cas réel Phase 1 qui le justifie).
+4. `SenseEvent` n'est PAS hashable (un dict field — même via MappingProxy —
+   n'est pas hashable). C'est un trade-off conscient : la mutabilité figée
+   suffit pour le replay et l'audit, on ne dépend pas du hash pour la
+   déduplication (qui se fait par `(subject, ts)` côté memory).
 """
 from __future__ import annotations
 
@@ -98,6 +101,38 @@ def test_sense_event_topic_is_namespaced() -> None:
         ts=datetime.now(timezone.utc),
     )
     assert ev.topic == "sense.chat"
+
+
+def test_sense_event_payload_is_immutable_after_construction() -> None:
+    """Régression P2 : le payload doit être figé après __init__.
+
+    Avant fix : payload était un dict standard ; un caller pouvait muter
+    `ev.payload["text"] = "..."` ou muter le dict d'origine partagé par
+    référence. Cela cassait l'invariant replay-safe.
+
+    Après fix : __post_init__ wrap dans `types.MappingProxyType(dict(payload))`
+    → (1) tentative de mutation via la proxy lève TypeError, (2) la copie
+    superficielle isole de mutations sur le dict d'origine.
+    """
+    from shugu.senses.types import SenseEvent
+
+    original = {"text": "hello"}
+    ev = SenseEvent(
+        kind="chat",
+        subject="visitor:abc",
+        payload=original,
+        ts=datetime.now(timezone.utc),
+    )
+
+    # (1) Mutation via la proxy interdite.
+    with pytest.raises(TypeError):
+        ev.payload["text"] = "intercepted"  # type: ignore[index]
+
+    # (2) Mutation du dict d'origine ne fuit pas dans l'event.
+    original["text"] = "mutated_after"
+    assert ev.payload["text"] == "hello", (
+        "le payload event doit être isolé du dict d'origine"
+    )
 
 
 def test_sense_event_to_bus_dict_serializes_payload() -> None:

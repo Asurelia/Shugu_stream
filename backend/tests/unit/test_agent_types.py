@@ -96,6 +96,37 @@ def test_tool_registry_list_names_sorted() -> None:
     assert reg.list_names() == ["anim", "mood", "say"]
 
 
+def test_tool_params_schema_is_immutable_after_construction() -> None:
+    """Régression P3 : params_schema figé après __init__.
+
+    Avant fix : un caller pouvait muter `tool.params_schema["..."] = ...`
+    ou muter le schéma d'origine partagé par référence après register() →
+    drift entre ce que le LLM voit et ce qui est exécuté.
+
+    Après fix : __post_init__ wrap dans `MappingProxyType(dict(schema))` →
+    (1) mutation via la proxy lève TypeError, (2) mutation du dict d'origine
+    ne fuit pas dans le tool enregistré.
+    """
+    from shugu.agent.tools import Tool
+
+    original_schema = {"type": "object", "properties": {"text": {"type": "string"}}}
+    tool = Tool(
+        name="say",
+        description="speak text",
+        params_schema=original_schema,
+    )
+
+    # (1) Mutation via la proxy interdite.
+    with pytest.raises(TypeError):
+        tool.params_schema["type"] = "string"  # type: ignore[index]
+
+    # (2) Mutation du dict d'origine ne fuit pas dans le tool.
+    original_schema["type"] = "string"
+    assert tool.params_schema["type"] == "object", (
+        "le schema du tool doit être isolé du dict d'origine"
+    )
+
+
 def test_tool_registry_get_unknown_raises() -> None:
     """get(unknown) lève KeyError — pas de None silencieux."""
     from shugu.agent.tools import ToolRegistry
