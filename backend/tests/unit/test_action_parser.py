@@ -155,3 +155,76 @@ def test_parse_text_without_tags_is_safe() -> None:
     parser = XmlTagActionParser()
     result = parser.parse(narrative)
     assert result == ()
+
+
+# ---------------------------------------------------------------------------
+# T9 (review fix) — mood.set rejette les valeurs hors Mood Literal
+# ---------------------------------------------------------------------------
+
+def test_parse_mood_unknown_value_skipped(caplog: pytest.LogCaptureFixture) -> None:
+    """`<action kind="mood.set" mood="excited"/>` est rejeté + warning.
+
+    Régression P2 review #48 : sans validation, le LLM pouvait halluciner
+    un mood ("excited", "ecstatic") absent de Mood Literal, qui se propageait
+    silencieusement vers le reducer et le viewer. Le parser skip+warn.
+    """
+    parser = XmlTagActionParser()
+    with caplog.at_level(logging.WARNING):
+        result = parser.parse('<action kind="mood.set" mood="excited"/>')
+
+    # L'action invalide est skippée → tuple vide.
+    assert result == ()
+    # Warning loggé avec le mood incriminé pour debug.
+    assert any(
+        "malformed" in rec.message.lower() and "mood.set" in rec.message
+        for rec in caplog.records
+    )
+
+
+def test_parse_mood_valid_values_pass() -> None:
+    """Les moods déclarés dans Mood Literal sont tous acceptés."""
+    parser = XmlTagActionParser()
+    for mood in ("neutral", "happy", "angry", "sad", "relaxed", "surprised"):
+        result = parser.parse(f'<action kind="mood.set" mood="{mood}"/>')
+        assert len(result) == 1, f"mood={mood} doit être accepté"
+        assert isinstance(result[0], MoodSetAction)
+        assert result[0].mood == mood
+
+
+# ---------------------------------------------------------------------------
+# T10 (review fix) — prop.spawn rejette NaN/Infinity
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("bad_coord", ["nan", "NaN", "inf", "-inf", "Infinity"])
+def test_parse_prop_spawn_rejects_non_finite_coords(
+    bad_coord: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Coordonnées non-finies (nan, inf, -inf) → skip + warning.
+
+    Régression P2 review #48 : `float("nan")` / `float("inf")` ne lèvent pas
+    ValueError ; ces valeurs cassent ensuite la sérialisation JSON et le
+    rendu Three.js. Le parser doit forcer la finitude via math.isfinite.
+    """
+    parser = XmlTagActionParser()
+    with caplog.at_level(logging.WARNING):
+        result = parser.parse(
+            f'<action kind="prop.spawn" prop_id="cup_01" '
+            f'x="{bad_coord}" y="0" z="0"/>'
+        )
+    assert result == ()
+    assert any(
+        "malformed" in rec.message.lower() and "prop.spawn" in rec.message
+        for rec in caplog.records
+    )
+
+
+def test_parse_prop_spawn_finite_coords_pass() -> None:
+    """Coordonnées finies (positives, négatives, zéro, décimales) → action ok."""
+    parser = XmlTagActionParser()
+    result = parser.parse(
+        '<action kind="prop.spawn" prop_id="cup_01" x="-3.14" y="0" z="2.5"/>'
+    )
+    assert len(result) == 1
+    action = result[0]
+    assert isinstance(action, PropSpawnAction)
+    assert (action.x, action.y, action.z) == (-3.14, 0.0, 2.5)

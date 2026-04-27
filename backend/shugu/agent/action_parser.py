@@ -39,16 +39,22 @@ Extension : ajouter un cas dans `_build()` + test TDD dédié.
 from __future__ import annotations
 
 import logging
+import math
 import re
-from typing import Protocol
+from typing import Protocol, get_args
 
 from ..world.types import (
     ActionUnion,
     AvatarPoseAction,
+    Mood,
     MoodSetAction,
     PropSpawnAction,
     SceneTransitionAction,
 )
+
+# Set des moods autorisés, dérivé du Literal Mood — single source of truth.
+# Si on étend Mood dans world/types.py, ce set est mis à jour automatiquement.
+_ALLOWED_MOODS: frozenset[str] = frozenset(get_args(Mood))
 
 log = logging.getLogger(__name__)
 
@@ -155,14 +161,27 @@ class XmlTagActionParser:
         if kind == "scene.transition":
             return SceneTransitionAction(target_scene_id=attrs["target_scene_id"])
         if kind == "mood.set":
-            return MoodSetAction(mood=attrs["mood"])  # type: ignore[arg-type]
+            # Validation contre Mood Literal — un LLM peut halluciner un mood
+            # ("excited", "ecstatic", etc.) absent du contrat WorldState.
+            # Sans cette garde, le mood invalide se propagerait jusqu'au reducer
+            # et au viewer qui ne saurait pas le rendre. Skip + warning.
+            mood_val = attrs["mood"]
+            if mood_val not in _ALLOWED_MOODS:
+                raise ValueError(
+                    f"mood {mood_val!r} not in allowed set {sorted(_ALLOWED_MOODS)}"
+                )
+            return MoodSetAction(mood=mood_val)  # type: ignore[arg-type]
         if kind == "prop.spawn":
-            return PropSpawnAction(
-                prop_id=attrs["prop_id"],
-                x=float(attrs["x"]),
-                y=float(attrs["y"]),
-                z=float(attrs["z"]),
-            )
+            # Coordonnées finies obligatoires : float() accepte "nan", "inf",
+            # "-inf" sans lever — ces valeurs casseraient ensuite la
+            # sérialisation JSON (NaN n'est pas valide en JSON strict) et le
+            # rendu Three.js. On force la finitude via math.isfinite.
+            x, y, z = float(attrs["x"]), float(attrs["y"]), float(attrs["z"])
+            if not (math.isfinite(x) and math.isfinite(y) and math.isfinite(z)):
+                raise ValueError(
+                    f"prop.spawn coords must be finite (x={x}, y={y}, z={z})"
+                )
+            return PropSpawnAction(prop_id=attrs["prop_id"], x=x, y=y, z=z)
         log.warning("action_parser.unknown_kind kind=%s", kind)
         return None
 
