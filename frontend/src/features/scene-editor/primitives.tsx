@@ -21,14 +21,10 @@ import {
 
 /* ─────────────────────────────── ICONS ─────────────────────────────── */
 
-export type IconName =
-  | "caret" | "close" | "min" | "max" | "popout" | "drag" | "search" | "plus"
-  | "folder" | "record" | "play" | "pause" | "stop" | "skip" | "undo" | "redo"
-  | "move" | "rotate" | "scale" | "eye" | "eyeOff" | "lock" | "unlock"
-  | "camera" | "person" | "image" | "text" | "audio" | "fx" | "scene"
-  | "grid" | "wand" | "broadcast" | "mic" | "keyboard" | "bolt" | "link"
-  | "plug" | "layers" | "sliders" | "ruler" | "clock" | "chart" | "warn"
-  | "check" | "dot" | "code" | "wrench" | "heart" | "star";
+// primitives.tsx (legacy) — IconName re-exporté depuis editor-shared (Phase 5.5).
+// Phase 6 supprimera ce fichier et ses consumers legacy.
+import type { IconName } from "@/features/editor-shared";
+export type { IconName } from "@/features/editor-shared";
 
 const ICON_PATHS: Record<IconName, string> = {
   caret: "M5 3l5 5-5 5z",
@@ -321,16 +317,9 @@ export function Splitter({ orientation = "horizontal", onResize }: SplitterProps
 
 /* ───────────────────────────── TREEVIEW ───────────────────────────── */
 
-export type TreeNodeData = {
-  id: string;
-  label: string;
-  icon?: IconName;
-  kind?: string;
-  open?: boolean;
-  visible?: boolean;
-  locked?: boolean;
-  children?: TreeNodeData[];
-};
+// primitives.tsx (legacy) — TreeNodeData re-exporté depuis editor-shared (Phase 5.5).
+import type { TreeNodeData } from "@/features/editor-shared";
+export type { TreeNodeData } from "@/features/editor-shared";
 
 type TreeProps = {
   nodes: TreeNodeData[];

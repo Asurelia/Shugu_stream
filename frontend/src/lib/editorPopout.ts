@@ -65,7 +65,7 @@
  * bruyant (on accepte une expérience dégradée sans sync).
  */
 
-import type { PanelKey } from "@/features/scene-editor/dnd-context";
+import type { PanelKey } from "@/features/editor-shared";
 
 const CHANNEL_NAME = "scene-editor";
 

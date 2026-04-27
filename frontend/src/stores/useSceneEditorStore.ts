@@ -56,8 +56,8 @@ import {
   type PatternItem,
   type SceneSummary,
   type TimelineData,
-} from "@/features/scene-editor/mock-data";
-import type { TreeNodeData } from "@/features/scene-editor/primitives";
+  type TreeNodeData,
+} from "@/features/editor-shared";
 
 /* ─────────────────────────── TYPES ─────────────────────────── */
 
