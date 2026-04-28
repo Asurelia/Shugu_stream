@@ -121,13 +121,24 @@ async def test_lifespan_starts_runner_when_flag_enabled() -> None:
 
         # Séparer le démarrage du lifespan (peut échouer sur infra manquante)
         # des assertions (ne doivent JAMAIS être swallowées en pytest.skip).
-        # Si `except Exception` englobe les assertions, une AssertionError est
-        # convertie silencieusement en skip — le test ne peut jamais échouer.
+        #
+        # Régression P2 review #52 : un `except Exception` large ici catch
+        # AssertionError (qui hérite de Exception) si une assertion fuyait
+        # un jour dans ce bloc — un wiring cassé serait silencieusement
+        # converti en skip en CI, masquant la régression. Defense in depth :
+        # on narrow l'except aux types d'erreurs *uniquement* émises par
+        # un démarrage de lifespan infra-manquante (RuntimeError pour
+        # pydantic/FastAPI startup, OSError/ConnectionError pour Redis/DB
+        # injoignables, ImportError/ValueError pour modules ou config
+        # manquants). AssertionError n'est PAS dans la liste — si une
+        # assertion migrait dans ce try par refactor ultérieur, elle
+        # propagerait comme test failure, pas comme skip silencieux.
         client = TestClient(test_app)
         try:
             client.__enter__()
-        except Exception as exc:
-            # Lifespan startup échoue — infra indisponible (Redis, DB, ...).
+        except (
+            RuntimeError, OSError, ConnectionError, ImportError, ValueError,
+        ) as exc:
             pytest.skip(
                 f"TestClient lifespan failed ({type(exc).__name__}: {exc}) — "
                 "dépendances extérieures indisponibles (Redis, DB, etc.). "
@@ -184,10 +195,15 @@ async def test_lifespan_does_not_create_runner_when_flag_disabled() -> None:
 
         test_app = create_app()
 
+        # Régression P2 review #52 : same narrowing que T1 — except restreint
+        # aux types d'erreurs infra. AssertionError ne peut plus être skippée
+        # même si une assertion migrait par refactor dans ce bloc.
         client = TestClient(test_app)
         try:
             client.__enter__()
-        except Exception as exc:
+        except (
+            RuntimeError, OSError, ConnectionError, ImportError, ValueError,
+        ) as exc:
             pytest.skip(
                 f"TestClient lifespan failed ({type(exc).__name__}: {exc}) — "
                 "dépendances extérieures indisponibles. "
