@@ -75,6 +75,50 @@ def set_deps(deps: VoiceWSDeps) -> None:
     _deps = deps
 
 
+async def _handle_voice_transcript(
+    deps: VoiceWSDeps,
+    identity: OperatorIdentity,
+    text: str,
+) -> None:
+    """Publie sense.raw + sense.voice pour un transcript STT opérateur.
+
+    Extrait de la closure `on_transcript` pour être testable indépendamment.
+    La signature mirror celle de `_handle_visitor_message` / `_handle_operator_message`.
+
+    Appelé par `on_transcript` (closure dans operator_voice_ws) avec `_deps` +
+    l'identity courante. Ne declenche PAS hermes_embodied — c'est le rôle de
+    l'appelant (séparation des responsabilités).
+    """
+    if deps.event_bus is None:
+        return
+    operator_username_lc = identity.username.lower()
+    voice_subject = f"operator:{operator_username_lc}"
+    voice_payload = {"text": text}
+
+    # Mémoire PR 2 — sense.raw (legacy memory path, conservé intact).
+    await publish_sense_raw(
+        event_bus=deps.event_bus,
+        settings=deps.settings,
+        subject=voice_subject,
+        event_type="voice_in",
+        actor=voice_subject,
+        payload=voice_payload,
+        session_id=identity.session_id,
+    )
+
+    # L1.3 — sense.voice pour l'AgentRunner. Inconditionnel sur
+    # streamer_agent_enabled : c'est l'AgentRunner qui s'inscrit OU non.
+    await publish_sense_event(
+        bus=deps.event_bus,
+        event=SenseEvent(
+            kind="voice",
+            subject=voice_subject,
+            payload=voice_payload,
+            ts=datetime.now(timezone.utc),
+        ),
+    )
+
+
 @router.websocket("/ws/operator/voice")
 async def operator_voice_ws(
     ws: WebSocket,
@@ -119,39 +163,10 @@ async def operator_voice_ws(
         the Picker's ready queue and streams TTS back to visitors. Nothing
         we need to return here; voice_duplex tracks the state transition."""
         log.info("voice.hermes_invoke", username=identity.username, chars=len(text))
-        # Mémoire PR 2 — publish sense.raw avec le transcript voice. C'est
-        # le seul moment où le texte materialise (avant on n'a que des PCM
-        # frames). No-op si event_bus=None ou memory_enabled=False. Choix
-        # await documenté côté retour adversarial H2.
-        if _deps.event_bus is not None:
-            operator_username_lc = identity.username.lower()
-            voice_subject = f"operator:{operator_username_lc}"
-            voice_payload = {"text": text}
-
-            await publish_sense_raw(
-                event_bus=_deps.event_bus,
-                settings=_deps.settings,
-                subject=voice_subject,
-                event_type="voice_in",
-                actor=voice_subject,
-                payload=voice_payload,
-                session_id=identity.session_id,
-            )
-
-            # L1.3 — publie aussi sur sense.voice pour l'AgentRunner.
-            # Dans la même garde event_bus is not None que publish_sense_raw :
-            # pas de bus → pas de publish (cohérent avec le design existant).
-            # Inconditionnnel sur streamer_agent_enabled : c'est l'AgentRunner
-            # qui s'inscrit OU non, pas le publisher qui gate.
-            await publish_sense_event(
-                bus=_deps.event_bus,
-                event=SenseEvent(
-                    kind="voice",
-                    subject=voice_subject,
-                    payload=voice_payload,
-                    ts=datetime.now(timezone.utc),
-                ),
-            )
+        assert _deps is not None
+        # L1.3 — sense.raw (legacy) + sense.voice (AgentRunner). Logique
+        # déléguée au helper module-level pour rester testable.
+        await _handle_voice_transcript(_deps, identity, text)
         try:
             await _deps.hermes_embodied.run_once(  # type: ignore[union-attr]
                 text, identity=identity, priority_tier=0,
