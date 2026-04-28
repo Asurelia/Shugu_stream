@@ -24,27 +24,48 @@ Choix de design :
 4. **`Tool` est frozen** : un tool enregistré ne peut pas être muté après
    coup (sinon le LLM verrait un schema, l'app en exécuterait un autre).
 
-5. Le handler concret (callable async) n'est PAS dans `Tool` à ce stade —
-   le couplage callable/registry vient en Phase 1.1 (avec sa propre PR
-   et tests dédiés). Phase L0 fige le contrat du registre.
+5. **`Tool.handler`** (L2.6) : callable async optionnel invoqué quand le LLM
+   produit un tag `<tool name="..."/>`. `None` par défaut — `dispatch()` lève
+   `ValueError` si un handler est absent. Handlers concrets (TTS, anim worker,
+   scene_composer) enregistrés en L2.7 — L2.6 livre uniquement la mécanique
+   du dispatcher.
+
+6. **`dispatch()` swallows handler exceptions** : un tool buggué (réseau TTS
+   coupé, timeout anim) ne doit pas tuer la boucle agent. Le runner reçoit
+   une garantie de non-crash ; l'opérateur voit le warning dans les logs.
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
+from typing import Awaitable, Callable, Mapping
+
+log = logging.getLogger(__name__)
+
+# Type du handler async d'un Tool.
+# Reçoit les paramètres extraits du tag <tool name="..." .../>  et produit
+# un side-effect (TTS audio, anim queue, etc.). Retour ignoré (None expected).
+ToolHandler = Callable[[dict], Awaitable[None]]
+"""Handler async d'un Tool — reçoit les params extraits du tag, fait l'effet."""
 
 
 @dataclass(frozen=True, slots=True)
 class Tool:
-    """Métadonnées d'un outil LLM-callable.
+    """Métadonnées + handler optionnel d'un outil LLM-callable.
 
     `name` : identifiant unique dans le registre (ex: "say", "set_pose").
     `description` : description en langage naturel pour le LLM.
     `params_schema` : JSON-Schema du payload (forwardé tel quel au LLM
                       provider qui supporte tool calling).
+    `handler` : callable async optionnel (L2.6). Si fourni, invoqué par
+                `ToolRegistry.dispatch()` avec les params du tag. Si None,
+                `dispatch()` lève `ValueError`. Handlers concrets en L2.7.
     """
+
     name: str
     description: str
-    params_schema: dict = field(default_factory=dict)
+    params_schema: Mapping[str, object] = field(default_factory=dict)
+    handler: ToolHandler | None = None
 
 
 class ToolRegistry:
@@ -87,5 +108,39 @@ class ToolRegistry:
         """Liste triée des noms enregistrés — déterminisme replay/test."""
         return sorted(self._tools.keys())
 
+    async def dispatch(self, name: str, params: dict) -> None:
+        """Invoque le handler du tool identifié par `name`.
 
-__all__ = ["Tool", "ToolRegistry"]
+        Workflow :
+        1. Récupère le tool via `get(name)` — lève `KeyError` si inconnu.
+        2. Vérifie que `tool.handler is not None` — lève `ValueError` sinon.
+        3. Invoque `await tool.handler(params)`.
+        4. Si le handler raise : log warning + swallow (pas de re-raise).
+           Un tool buggué ne doit pas tuer la boucle agent.
+
+        Paramètres :
+            name   : nom du tool à dispatcher (doit être enregistré).
+            params : dict des paramètres extraits du tag LLM.
+
+        Lève :
+            KeyError   si `name` n'est pas dans le registre.
+            ValueError si le tool n'a pas de handler (`tool.handler is None`).
+        """
+        tool = self.get(name)  # Lève KeyError si inconnu — intentionnel.
+        if tool.handler is None:
+            raise ValueError(
+                f"tool '{name}' has no handler — register with handler= to dispatch. "
+                "Concrete handlers are registered in L2.7."
+            )
+        try:
+            await tool.handler(params)
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "tool_registry.dispatch_failed name=%s params=%r error=%r",
+                name,
+                params,
+                exc,
+            )
+
+
+__all__ = ["Tool", "ToolHandler", "ToolRegistry"]

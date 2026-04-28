@@ -103,3 +103,95 @@ def test_tool_registry_get_unknown_raises() -> None:
     reg = ToolRegistry()
     with pytest.raises(KeyError):
         reg.get("nonexistent")
+
+
+# ---------------------------------------------------------------------------
+# L2.6 — Tool.handler + ToolRegistry.dispatch
+# ---------------------------------------------------------------------------
+
+
+async def test_tool_registry_dispatch_invokes_handler() -> None:
+    """T5 — register tool avec handler → dispatch invoque le handler avec les params."""
+    from shugu.agent.tools import Tool, ToolRegistry
+
+    calls: list[dict] = []
+
+    async def my_handler(params: dict) -> None:
+        calls.append(params)
+
+    reg = ToolRegistry()
+    tool = Tool(name="say", description="TTS", handler=my_handler)
+    reg.register(tool)
+    await reg.dispatch("say", {"text": "hello"})
+    assert calls == [{"text": "hello"}], f"Handler pas invoqué avec les bons params: {calls}"
+
+
+async def test_tool_registry_dispatch_unknown_raises_key_error() -> None:
+    """T6 — dispatch unknown name → KeyError."""
+    from shugu.agent.tools import ToolRegistry
+
+    reg = ToolRegistry()
+    with pytest.raises(KeyError):
+        await reg.dispatch("nonexistent", {})
+
+
+async def test_tool_registry_dispatch_no_handler_raises_value_error() -> None:
+    """T7 — dispatch tool sans handler → ValueError."""
+    from shugu.agent.tools import Tool, ToolRegistry
+
+    reg = ToolRegistry()
+    tool = Tool(name="say", description="TTS", handler=None)
+    reg.register(tool)
+    with pytest.raises(ValueError, match="handler"):
+        await reg.dispatch("say", {})
+
+
+async def test_tool_registry_dispatch_swallows_handler_exception(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """T8 — dispatch handler qui raise → swallow + warning log (pas de re-raise)."""
+    import logging
+
+    from shugu.agent.tools import Tool, ToolRegistry
+
+    async def broken_handler(params: dict) -> None:
+        raise RuntimeError("TTS crashed")
+
+    reg = ToolRegistry()
+    reg.register(Tool(name="say", description="TTS", handler=broken_handler))
+
+    with caplog.at_level(logging.WARNING, logger="shugu.agent.tools"):
+        # Ne doit PAS lever
+        await reg.dispatch("say", {})
+
+    assert any("say" in r.message or "handler" in r.message.lower()
+               for r in caplog.records), (
+        f"Aucun warning émis après handler exception. Logs: {[r.message for r in caplog.records]}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# L2.6 — Thought étendu avec tool_calls
+# ---------------------------------------------------------------------------
+
+
+def test_thought_with_default_tool_calls() -> None:
+    """T9 — Thought peut être instancié sans tool_calls (default tuple vide)."""
+    from shugu.agent.types import Thought
+
+    t = Thought(reasoning="test", planned_actions=())
+    assert t.tool_calls == (), f"Attendu tool_calls=(), obtenu {t.tool_calls!r}"
+
+
+def test_thought_with_non_empty_tool_calls_is_frozen() -> None:
+    """T10 — Thought avec tool_calls non-vide est frozen comme avant."""
+    from dataclasses import FrozenInstanceError
+
+    from shugu.agent.tool_call_parser import ToolCall
+    from shugu.agent.types import Thought
+
+    tc = ToolCall(name="say", params={"text": "hello"})
+    t = Thought(reasoning="test", planned_actions=(), tool_calls=(tc,))
+    assert t.tool_calls == (tc,)
+    with pytest.raises(FrozenInstanceError):
+        t.tool_calls = ()  # type: ignore[misc]

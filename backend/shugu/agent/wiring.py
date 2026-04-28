@@ -64,6 +64,7 @@ from .action_parser import XmlTagActionParser
 from .llm_thinker import LLMThinker
 from .loop import AgentLoop, WorldApply
 from .runner import AgentRunner, AgentRunnerConfig, WorldStoreLike
+from .tool_call_parser import XmlTagToolCallParser
 from .tools import ToolRegistry
 
 
@@ -206,11 +207,13 @@ def build_agent_components(
     """
     registry = ToolRegistry()
     parser = XmlTagActionParser()
+    tool_call_parser = XmlTagToolCallParser()
     thinker = LLMThinker(
         brain=brain,
         tools=registry,
         parser=parser,
         identity=identity,
+        tool_call_parser=tool_call_parser,
     )
     loop = AgentLoop(
         thinker=thinker,
@@ -221,6 +224,7 @@ def build_agent_components(
         world_store=world_store,
         bus=bus,
         config=runner_config,
+        tool_registry=registry,
     )
     world = initial_world if initial_world is not None else _DEFAULT_INITIAL_WORLD
     return AgentComponents(
