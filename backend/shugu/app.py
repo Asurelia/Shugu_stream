@@ -369,22 +369,50 @@ async def lifespan(app: FastAPI):
         app.state.scene_player = None
         log.info("scene_composer.player_disabled", extra={"flag": False})
 
-    # L2.3 — AgentLoop streamer IA (wiring L1+L2+L3, PAS de démarrage boucle).
+    # L2.5 — AgentRunner streamer IA (wiring L1+L2+L3 + démarrage boucle runtime).
     # Conditionnel sur settings.streamer_agent_enabled (défaut False).
     # Utilise brain_shugu comme BrainAdapter — le brain persona principal.
     # Identity : OperatorIdentity(username="streamer") car l'agent agit au
     # niveau opérateur (contrôle du avatar, scènes, mood — scope admin).
-    # world_apply importé ICI (pas dans wiring.py) pour respecter l'arch L0 D4 :
-    # agent/ ne peut pas importer shugu.world.reducers directement.
+    #
+    # Ordre d'assemblage :
+    # 1. WorldState initial (valeurs neutres : idle, default, neutral).
+    # 2. WorldStateStore(initial_world, event_bus) — instancié ICI (hors wiring.py)
+    #    pour respecter l'arch L0 D4 : agent/ ne peut pas importer shugu.world.
+    # 3. build_agent_components → AgentComponents (loop + runner + store).
+    # 4. runner.start() — démarre les tâches asyncio (subscribe + tick).
+    #
+    # Pourquoi world_apply et WorldStateStore sont importés ICI (pas dans wiring.py) :
+    # test_arch_layers_l0.py interdit à agent/ d'importer shugu.world (sauf world.types).
+    # app.py est hors scope de l'arch test — il peut tout importer librement.
     if settings.streamer_agent_enabled:
+        from .world import WorldState as _WorldState
+        from .world import WorldStateStore as _WorldStateStore
         from .world import apply as _world_apply
+
+        _initial_world = _WorldState(
+            avatar_pose="idle",
+            scene_id="default",
+            mood="neutral",
+            props=(),
+            clock_ms=0,
+        )
+        _world_store = _WorldStateStore(_initial_world, event_bus)
         _agent_components = build_agent_components(
             brain=brain_shugu,
             identity=OperatorIdentity(username="streamer"),
             world_apply=_world_apply,
+            bus=event_bus,
+            world_store=_world_store,
         )
         app.state.agent_components = _agent_components
-        log.info("streamer_agent.wired", extra={"loop": "assembled", "tools": 0})
+        # Démarrage de la boucle runtime (sense → tick → act).
+        # start() est idempotent — sûr à appeler plusieurs fois si nécessaire.
+        await _agent_components.runner.start()
+        log.info(
+            "streamer_agent.runner_started",
+            extra={"loop": "active", "tick_interval_ms": 500},
+        )
     else:
         app.state.agent_components = None
         log.info("streamer_agent.disabled", extra={"reason": "streamer_agent_enabled=False"})
@@ -495,6 +523,18 @@ async def lifespan(app: FastAPI):
         await prep_worker.stop()
         await picker.stop()
         await ambient.stop()
+        # AgentRunner s'arrête AVANT event_bus.close() — raison identique aux
+        # workers ci-dessous : le runner hold des subscriptions actives sur
+        # sense.chat, sense.voice, sense.event, sense.vision via _consume_topic().
+        # Si le bus se ferme en premier, les générateurs async sont bloqués sur
+        # q.get() dans InProcessEventBus._subs, causant un deadlock ou une
+        # exception non-catchée selon l'implémentation du bus. stop() annule
+        # proprement les tâches consumer + la tâche tick, et attend leur
+        # terminaison effective (await task) avant de retourner.
+        _agent_comps = getattr(app.state, "agent_components", None)
+        if _agent_comps is not None:
+            await _agent_comps.runner.stop()
+            log.info("streamer_agent.runner_stopped")
         # IngestionWorker s'arrête AVANT event_bus.close() — il hold une
         # subscription active sur sense.raw ; fermer le bus d'abord laisserait
         # le générateur bloqué sur q.get() indéfiniment.
