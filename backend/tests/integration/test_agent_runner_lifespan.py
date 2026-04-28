@@ -119,28 +119,36 @@ async def test_lifespan_starts_runner_when_flag_enabled() -> None:
 
         test_app = create_app()
 
-        # Le TestClient entre/sort du lifespan via le context manager.
-        # on vérifie juste que le runner démarre sans lever d'exception.
+        # Séparer le démarrage du lifespan (peut échouer sur infra manquante)
+        # des assertions (ne doivent JAMAIS être swallowées en pytest.skip).
+        # Si `except Exception` englobe les assertions, une AssertionError est
+        # convertie silencieusement en skip — le test ne peut jamais échouer.
+        client = TestClient(test_app)
         try:
-            with TestClient(test_app):
-                components = test_app.state.agent_components
-                assert components is not None, (
-                    "app.state.agent_components est None alors que "
-                    "streamer_agent_enabled=True — le wiring L2.5 n'a pas câblé le runner."
-                )
-                assert isinstance(components.runner, AgentRunner), (
-                    f"runner doit être AgentRunner, got {type(components.runner)}"
-                )
-                assert components.runner._tick_task is not None, (
-                    "runner._tick_task est None — runner.start() n'a pas été appelé "
-                    "dans le lifespan startup."
-                )
-        except Exception:
-            # Si TestClient échoue (ex: Redis indisponible en CI), on skippe.
+            client.__enter__()
+        except Exception as exc:
+            # Lifespan startup échoue — infra indisponible (Redis, DB, ...).
             pytest.skip(
-                "TestClient lifespan failed — dépendances extérieures indisponibles "
-                "(Redis, DB, etc.). Test skippé en env sans infra."
+                f"TestClient lifespan failed ({type(exc).__name__}: {exc}) — "
+                "dépendances extérieures indisponibles (Redis, DB, etc.). "
+                "Test skippé en env sans infra."
             )
+        try:
+            # Ces assertions doivent ÉCHOUER (pas skipper) si le wiring est cassé.
+            components = test_app.state.agent_components
+            assert components is not None, (
+                "app.state.agent_components est None alors que "
+                "streamer_agent_enabled=True — le wiring L2.5 n'a pas câblé le runner."
+            )
+            assert isinstance(components.runner, AgentRunner), (
+                f"runner doit être AgentRunner, got {type(components.runner)}"
+            )
+            assert components.runner._tick_task is not None, (
+                "runner._tick_task est None — runner.start() n'a pas été appelé "
+                "dans le lifespan startup."
+            )
+        finally:
+            client.__exit__(None, None, None)
     finally:
         os.environ.pop("STREAMER_AGENT_ENABLED", None)
         from shugu.config import get_settings
@@ -176,17 +184,23 @@ async def test_lifespan_does_not_create_runner_when_flag_disabled() -> None:
 
         test_app = create_app()
 
+        client = TestClient(test_app)
         try:
-            with TestClient(test_app):
-                assert test_app.state.agent_components is None, (
-                    "app.state.agent_components devrait être None quand "
-                    "streamer_agent_enabled=False (comportement L2.3 préservé)."
-                )
-        except Exception:
+            client.__enter__()
+        except Exception as exc:
             pytest.skip(
-                "TestClient lifespan failed — dépendances extérieures indisponibles. "
+                f"TestClient lifespan failed ({type(exc).__name__}: {exc}) — "
+                "dépendances extérieures indisponibles. "
                 "Test skippé en env sans infra."
             )
+        try:
+            # Cette assertion doit ÉCHOUER (pas skipper) si le wiring est cassé.
+            assert test_app.state.agent_components is None, (
+                "app.state.agent_components devrait être None quand "
+                "streamer_agent_enabled=False (comportement L2.3 préservé)."
+            )
+        finally:
+            client.__exit__(None, None, None)
     finally:
         from shugu.config import get_settings
         get_settings.cache_clear()
