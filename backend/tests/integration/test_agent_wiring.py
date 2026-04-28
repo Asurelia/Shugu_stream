@@ -9,6 +9,10 @@ Couverture :
 - T2 : initial_world défaut correct (avatar_pose=idle, ...).
 - T3 : initial_world custom transmis tel quel.
 - T4 : e2e tick minimal — brain stub retourne une action, world mute.
+
+L2.5 — Migration des appels build_agent_components :
+bus et world_store sont désormais requis. Chaque test construit un
+InProcessEventBus + WorldStateStore frais pour respecter l'isolation.
 """
 from __future__ import annotations
 
@@ -20,14 +24,32 @@ import pytest
 from shugu.agent.loop import AgentLoop
 from shugu.agent.types import Perception
 from shugu.agent.wiring import AgentComponents, build_agent_components
+from shugu.core.event_bus import InProcessEventBus
 from shugu.core.identity import VisitorIdentity
 from shugu.core.protocols import BrainDelta
 from shugu.senses.types import SenseEvent
+from shugu.world import WorldState, WorldStateStore
 from shugu.world import apply as world_apply
-from shugu.world.types import WorldState
 
 # Marker module-level
 pytestmark = pytest.mark.integration
+
+
+def _make_bus() -> InProcessEventBus:
+    """Crée un bus in-process frais pour l'isolation entre tests."""
+    return InProcessEventBus()
+
+
+def _make_world_store(bus: InProcessEventBus) -> WorldStateStore:
+    """Crée un WorldStateStore avec l'état initial par défaut."""
+    initial = WorldState(
+        avatar_pose="idle",
+        scene_id="default",
+        mood="neutral",
+        props=(),
+        clock_ms=0,
+    )
+    return WorldStateStore(initial=initial, bus=bus)
 
 
 # ---------------------------------------------------------------------------
@@ -78,11 +100,15 @@ async def test_build_components_returns_agent_loop() -> None:
     """
     brain = _BrainIdle()
     identity = VisitorIdentity()
+    bus = _make_bus()
+    world_store = _make_world_store(bus)
 
     result = build_agent_components(
         brain=brain,
         identity=identity,
         world_apply=world_apply,
+        bus=bus,
+        world_store=world_store,
     )
 
     assert isinstance(result, AgentComponents)
@@ -117,11 +143,15 @@ async def test_build_components_default_initial_world() -> None:
     """
     brain = _BrainIdle()
     identity = VisitorIdentity()
+    bus = _make_bus()
+    world_store = _make_world_store(bus)
 
     result = build_agent_components(
         brain=brain,
         identity=identity,
         world_apply=world_apply,
+        bus=bus,
+        world_store=world_store,
     )
 
     w = result.initial_world
@@ -141,6 +171,8 @@ async def test_build_components_custom_initial_world() -> None:
     """Avec un initial_world fourni, il est retourné tel quel (pas de remplacement)."""
     brain = _BrainIdle()
     identity = VisitorIdentity()
+    bus = _make_bus()
+    world_store = _make_world_store(bus)
     custom_world = WorldState(
         avatar_pose="wave",
         scene_id="main_talk",
@@ -153,6 +185,8 @@ async def test_build_components_custom_initial_world() -> None:
         brain=brain,
         identity=identity,
         world_apply=world_apply,
+        bus=bus,
+        world_store=world_store,
         initial_world=custom_world,
     )
 
@@ -180,11 +214,15 @@ async def test_e2e_tick_minimal_avatar_pose_wave() -> None:
     """
     brain = _BrainAvatarWave()
     identity = VisitorIdentity()
+    bus = _make_bus()
+    world_store = _make_world_store(bus)
 
     result = build_agent_components(
         brain=brain,
         identity=identity,
         world_apply=world_apply,
+        bus=bus,
+        world_store=world_store,
     )
 
     sense = SenseEvent(
