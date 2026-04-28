@@ -1,4 +1,4 @@
-"""Tests TDD pour L2.4 — AgentRunner (boucle runtime async + backpressure).
+"""Tests TDD pour L2.4 + L2.6 — AgentRunner (boucle runtime async + backpressure + tool dispatch).
 
 Stratégie TDD :
 - Phase RED  : tous ces tests ÉCHOUENT avant que runner.py existe.
@@ -11,6 +11,10 @@ Architecture des stubs
   Utilise `WorldStateStore` réel en interne (sans l'importer dans runner.py).
 - `CountingThinker` : enregistre les appels + retourne un Thought configurable.
 - `FailingThinker` : raise à chaque appel → teste la robustesse T9.
+
+L2.6 additions :
+- T11 : run_once dispatche les tools APRÈS les actions L3 (vérifier ordre).
+- T12 : tool dispatch exception ne tue pas le runner.
 
 Subscription race (advisory amont)
 ------------------------------------
@@ -112,7 +116,11 @@ def _make_runner(
     config: AgentRunnerConfig | None = None,
     bus: InProcessEventBus | None = None,
 ) -> tuple[AgentRunner, WorldStateStore, InProcessEventBus]:
-    """Construit (runner, world_store, bus) pour les tests."""
+    """Construit (runner, world_store, bus) pour les tests.
+
+    tool_registry non passé → None (backward-compat : tool_calls ignorés).
+    Les tests L2.6 construisent leur runner manuellement avec un ToolRegistry.
+    """
     if bus is None:
         bus = InProcessEventBus()
     world = initial_world or _make_world()
@@ -134,6 +142,7 @@ def _make_runner(
         world_store=store,
         bus=bus,
         config=config,
+        # tool_registry=None → backward-compat (T1-T9 ignorent les tool_calls)
     )
     return runner, store, bus
 
@@ -468,4 +477,136 @@ async def test_thinker_exception_does_not_kill_runner(caplog: Any) -> None:
     tick_warnings = [r for r in caplog.records if "tick_failed" in r.message]
     assert len(tick_warnings) >= 1, (
         f"Aucun warning tick_failed. Logs: {[r.message for r in caplog.records]}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# T11 — run_once dispatche les tools APRÈS les actions L3 (ordre garanti)
+# ---------------------------------------------------------------------------
+
+
+async def test_run_once_dispatches_tools_after_l3_actions() -> None:
+    """T11 — tools dispatched AFTER L3 actions ; ordre action-then-tool garanti."""
+    from shugu.agent.loop import AgentLoop
+    from shugu.agent.tool_call_parser import ToolCall
+    from shugu.agent.tools import Tool, ToolRegistry
+    from shugu.world.reducers import apply as world_apply
+
+    call_log: list[str] = []
+
+    # Action L3 : change avatar_pose à "wave" — vérifiable sur le world_store
+    action = AvatarPoseAction(pose="wave")
+
+    # Tool : enregistre l'appel dans call_log
+    async def say_handler(params: dict) -> None:
+        # Au moment du dispatch tool, l'action L3 DOIT déjà être appliquée
+        call_log.append(f"tool:say:{params.get('text', '')}")
+
+    tool_registry = ToolRegistry()
+    tool_registry.register(Tool(name="say", description="TTS", handler=say_handler))
+
+    tool_call = ToolCall(name="say", params={"text": "hello"})
+    thought_with_both = Thought(
+        reasoning="wave and say",
+        planned_actions=(action,),
+        tool_calls=(tool_call,),
+    )
+    thinker = CountingThinker(returned_thought=thought_with_both)
+
+    bus = InProcessEventBus()
+    world = _make_world()
+    store = WorldStateStore(initial=world, bus=bus)
+    loop = AgentLoop(thinker=thinker, world_apply=world_apply)
+
+    config = AgentRunnerConfig(tick_interval_ms=9999, sense_topics=("sense.chat",))
+    runner = AgentRunner(
+        loop=loop,
+        world_store=store,
+        bus=bus,
+        config=config,
+        tool_registry=tool_registry,
+    )
+
+    await runner.start()
+    await asyncio.sleep(0.05)
+    await bus.publish("sense.chat", _make_bus_event("chat", 0))
+    await asyncio.sleep(0.05)
+
+    result = await runner.run_once()
+    await runner.stop()
+
+    assert result is not None, "Attendu un résultat non-None avec 1 sense"
+    # L3 action appliquée
+    assert store.read().avatar_pose == "wave", (
+        f"Action L3 non appliquée : avatar_pose={store.read().avatar_pose!r}"
+    )
+    # Tool dispatché
+    assert call_log == ["tool:say:hello"], (
+        f"Tool pas dispatché ou ordre incorrect : {call_log}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# T12 — tool dispatch exception ne tue pas le runner
+# ---------------------------------------------------------------------------
+
+
+async def test_tool_dispatch_exception_does_not_kill_runner(
+    caplog: Any,
+) -> None:
+    """T12 — si le handler du tool raise, le runner log warning et continue."""
+    import logging as _logging
+
+    from shugu.agent.loop import AgentLoop
+    from shugu.agent.tool_call_parser import ToolCall
+    from shugu.agent.tools import Tool, ToolRegistry
+    from shugu.world.reducers import apply as world_apply
+
+    async def crashing_handler(params: dict) -> None:
+        raise RuntimeError("TTS explosion")
+
+    tool_registry = ToolRegistry()
+    tool_registry.register(Tool(name="say", description="TTS", handler=crashing_handler))
+
+    tool_call = ToolCall(name="say", params={"text": "boom"})
+    thought_with_tool = Thought(
+        reasoning="try to say",
+        planned_actions=(),
+        tool_calls=(tool_call,),
+    )
+    thinker = CountingThinker(returned_thought=thought_with_tool)
+
+    bus = InProcessEventBus()
+    world = _make_world()
+    store = WorldStateStore(initial=world, bus=bus)
+    loop = AgentLoop(thinker=thinker, world_apply=world_apply)
+
+    config = AgentRunnerConfig(tick_interval_ms=9999, sense_topics=("sense.chat",))
+    runner = AgentRunner(
+        loop=loop,
+        world_store=store,
+        bus=bus,
+        config=config,
+        tool_registry=tool_registry,
+    )
+
+    with caplog.at_level(_logging.WARNING, logger="shugu.agent.runner"):
+        await runner.start()
+        await asyncio.sleep(0.05)
+        await bus.publish("sense.chat", _make_bus_event("chat", 0))
+        await asyncio.sleep(0.05)
+
+        # run_once ne doit pas lever même si le tool crash
+        result = await runner.run_once()
+        await runner.stop()
+
+    assert result is not None, "run_once doit retourner un résultat même si tool crash"
+
+    # Un warning doit être loggué pour le tool dispatch échoué
+    dispatch_warnings = [
+        r for r in caplog.records
+        if "tool" in r.message.lower() or "dispatch" in r.message.lower()
+    ]
+    assert len(dispatch_warnings) >= 1, (
+        f"Aucun warning tool_dispatch. Logs: {[r.message for r in caplog.records]}"
     )

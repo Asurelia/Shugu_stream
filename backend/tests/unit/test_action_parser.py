@@ -228,3 +228,38 @@ def test_parse_prop_spawn_finite_coords_pass() -> None:
     action = result[0]
     assert isinstance(action, PropSpawnAction)
     assert (action.x, action.y, action.z) == (-3.14, 0.0, 2.5)
+
+
+# ---------------------------------------------------------------------------
+# T11 (review fix P2 #54) — `/` et `>` doivent être permis dans les valeurs
+# ---------------------------------------------------------------------------
+
+def test_parse_action_with_slash_in_value() -> None:
+    """Régression P2 review #54 (latent ici aussi) : `/` dans une valeur
+    d'attribut doit être accepté.
+
+    Avant fix : la regex `[^/>]+?` rejetait `/`. Cas réel : un prop_id qui
+    contiendrait un namespace style `assets/cup_01` ou un futur scene_id avec
+    un `/` (ex: `kitchen/morning`) serait silencieusement skippé.
+    """
+    parser = XmlTagActionParser()
+    result = parser.parse(
+        '<action kind="prop.spawn" prop_id="assets/cup_01" x="0" y="0" z="0"/>'
+    )
+    assert len(result) == 1, (
+        f"prop_id avec `/` doit être accepté, got {len(result)} actions"
+    )
+    assert isinstance(result[0], PropSpawnAction)
+    assert result[0].prop_id == "assets/cup_01"
+
+
+def test_parse_action_with_greater_than_in_value() -> None:
+    """Un `>` dans une valeur d'attribut doit aussi être accepté."""
+    parser = XmlTagActionParser()
+    result = parser.parse(
+        '<action kind="scene.transition" target_scene_id="kitchen > bedroom"/>'
+    )
+    # Note: target_scene_id avec espace+`>` reste valide pour le parser
+    # (la validation sémantique du target est hors scope du parser).
+    assert len(result) == 1
+    assert result[0].target_scene_id == "kitchen > bedroom"

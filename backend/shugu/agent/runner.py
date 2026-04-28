@@ -1,12 +1,20 @@
-"""AgentRunner — boucle runtime async : perception → think → act (L2.4).
+"""AgentRunner — boucle runtime async : perception → think → act (L2.4 + L2.6).
 
 Responsabilité unique
 ----------------------
 Ce module démarre et orchestre la boucle de vie du streamer IA autonome.
 Il consomme continuellement les ``SenseEvent`` publiés sur le bus (topics
 ``sense.*``), agrège une ``Perception`` à chaque intervalle de tick, appelle
-l'``AgentLoop`` pour produire un ``Thought``, puis applique les actions sur le
-``WorldStateStore``.
+l'``AgentLoop`` pour produire un ``Thought``, puis :
+
+1. Applique chaque ``planned_action`` (L3) sur le ``WorldStateStore`` (mutations
+   déterministes, auto-publish world.delta).
+2. Dispatche chaque ``tool_call`` (L2.6) via ``ToolRegistry.dispatch()``
+   (side-effects async : TTS, anim, etc.).
+
+L'ordre action-then-tool est garanti : les mutations WorldState sont committées
+AVANT que les side-effects ne démarrent. Un handler TTS peut ainsi lire le
+world_store et voir un state déjà à jour.
 
 Pourquoi tick-based plutôt qu'event-driven ?
 ---------------------------------------------
@@ -56,6 +64,11 @@ local ``WorldStoreLike`` avec les méthodes ``read()`` et ``apply()``.
 ``WorldStateStore`` satisfait ce Protocol par structural typing (duck typing) —
 aucun héritage requis. Le caller (``app.py``, tests) injecte l'objet réel.
 
+Même pattern pour ``ToolRegistry`` : on déclare un Protocol local
+``ToolRegistryLike`` avec la méthode ``dispatch()``. La vraie ``ToolRegistry``
+satisfait ce Protocol par structural typing. L2.6 ne re-importe pas
+``ToolRegistry`` concrètement — l'injection de dépendance reste propre.
+
 Imports explicitement autorisés :
 - ``..core.protocols`` : ``EventBus`` (Protocol, couche core).
 - ``..senses.types``   : ``SenseEvent`` (DTO public L1, allowlisté).
@@ -83,7 +96,7 @@ log = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Protocol local — isole runner.py de shugu.world.state_store
+# Protocols locaux — isolent runner.py des implémentations concrètes
 # ---------------------------------------------------------------------------
 
 
@@ -106,6 +119,25 @@ class WorldStoreLike(Protocol):
 
     async def apply(self, action: ActionUnion) -> WorldState:
         """Applique une action et retourne le nouvel état (async, sérialisé)."""
+        ...
+
+
+class ToolRegistryLike(Protocol):
+    """Contrat minimal attendu du ToolRegistry par l'AgentRunner (L2.6).
+
+    Défini ici comme Protocol local pour éviter un import direct de
+    ``shugu.agent.tools.ToolRegistry`` (couplage circulaire difficile à
+    justifier si ToolRegistry évolue). ``ToolRegistry`` satisfait ce Protocol
+    par structural typing — aucun héritage requis.
+
+    Méthode requise :
+    - ``dispatch(name, params)`` : invoque le handler du tool identifié par
+      `name` avec `params`. Lève ``KeyError`` si inconnu, ``ValueError`` si
+      pas de handler. Swallows les exceptions du handler (log warning).
+    """
+
+    async def dispatch(self, name: str, params: dict) -> None:
+        """Dispatche un ToolCall vers son handler async."""
         ...
 
 
@@ -154,6 +186,7 @@ class AgentRunner:
             loop=agent_components.loop,
             world_store=world_store,
             bus=event_bus,
+            tool_registry=tool_registry,
         )
         await runner.start()
         # ... lifespan ...
@@ -166,11 +199,15 @@ class AgentRunner:
             thought, new_world = result
 
     Paramètres :
-        loop        : ``AgentLoop`` stateless câblé avec Thinker + world_apply.
-        world_store : Objet satisfaisant ``WorldStoreLike`` (en production :
-                      ``WorldStateStore``). Injecté pour respecter arch L0 D4.
-        bus         : ``EventBus`` (``InProcessEventBus`` ou ``RedisEventBus``).
-        config      : ``AgentRunnerConfig`` (valeurs par défaut si None).
+        loop          : ``AgentLoop`` stateless câblé avec Thinker + world_apply.
+        world_store   : Objet satisfaisant ``WorldStoreLike`` (en production :
+                        ``WorldStateStore``). Injecté pour respecter arch L0 D4.
+        bus           : ``EventBus`` (``InProcessEventBus`` ou ``RedisEventBus``).
+        config        : ``AgentRunnerConfig`` (valeurs par défaut si None).
+        tool_registry : Objet satisfaisant ``ToolRegistryLike`` (L2.6). Si None,
+                        les tool_calls du Thought sont ignorés silencieusement
+                        (backward-compat L2.4 → L2.6). En production :
+                        ``ToolRegistry`` peuplé via ``build_agent_components``.
     """
 
     def __init__(
@@ -180,11 +217,13 @@ class AgentRunner:
         world_store: WorldStoreLike,
         bus: EventBus,
         config: AgentRunnerConfig | None = None,
+        tool_registry: ToolRegistryLike | None = None,
     ) -> None:
         self._loop = loop
         self._world_store = world_store
         self._bus = bus
         self._config = config or AgentRunnerConfig()
+        self._tool_registry = tool_registry
 
         # Queue bornée : deque(maxlen=N) drop automatiquement l'élément le plus
         # ancien quand on append au-delà de la capacité (comportement stdlib).
@@ -299,6 +338,8 @@ class AgentRunner:
             return None
 
         # Appliquer chaque action planifiée sur le store (auto-publish world.delta).
+        # Les Actions L3 sont commitées AVANT les ToolCalls : un handler TTS peut
+        # lire le world_store et voir le state déjà à jour.
         for action in thought.planned_actions:
             try:
                 await self._world_store.apply(action)
@@ -308,6 +349,21 @@ class AgentRunner:
                     action,
                     exc,
                 )
+
+        # Dispatcher les ToolCalls (side-effects) APRÈS les actions L3.
+        # Handlers concrets (TTS, anim, scene) enregistrés en L2.7.
+        # Si tool_registry est None (backward-compat), les tool_calls sont ignorés.
+        if self._tool_registry is not None and thought.tool_calls:
+            for tool_call in thought.tool_calls:
+                try:
+                    await self._tool_registry.dispatch(tool_call.name, tool_call.params)
+                except Exception as exc:
+                    log.warning(
+                        "agent_runner.tool_dispatch_failed name=%s params=%r error=%r",
+                        tool_call.name,
+                        tool_call.params,
+                        exc,
+                    )
 
         return thought, self._world_store.read()
 
@@ -404,4 +460,4 @@ class AgentRunner:
             return None
 
 
-__all__ = ["AgentRunner", "AgentRunnerConfig", "WorldStoreLike"]
+__all__ = ["AgentRunner", "AgentRunnerConfig", "ToolRegistryLike", "WorldStoreLike"]

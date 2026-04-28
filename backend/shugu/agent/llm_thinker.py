@@ -35,6 +35,7 @@ from dataclasses import dataclass
 from ..core.identity import Identity
 from ..core.protocols import BrainAdapter
 from .action_parser import ActionParser
+from .tool_call_parser import ToolCallParser
 from .tools import ToolRegistry
 from .types import Perception, Thought
 
@@ -42,9 +43,11 @@ from .types import Perception, Thought
 def build_prompt(perception: Perception, tool_names: list[str]) -> str:
     """Construit le prompt LLM à partir d'une Perception et des tools disponibles.
 
-    Format Phase L2.2 : décrit le world state courant + les senses récents +
-    liste les tools disponibles (si non vide). Le LLM répond en texte libre
-    avec des tags `<action kind="..." .../> `intercalés pour les actions.
+    Format Phase L2.6 : décrit le world state courant + les senses récents +
+    liste les tools disponibles. Le LLM répond en texte libre avec deux types
+    de tags intercalés :
+    - `<action kind="..." attr="..."/>` pour les mutations WorldState (L3).
+    - `<tool name="..." attr="..."/>` pour les side-effects async (L2.6).
 
     Paramètres :
         perception : vue agrégée de l'environnement à l'instant t.
@@ -61,7 +64,8 @@ def build_prompt(perception: Perception, tool_names: list[str]) -> str:
 
         Available tools: say, set_pose
 
-        Respond with text + <action kind="..." attr="..."/> tags for each action.
+        Respond with text + <action kind="..." attr="..."/> tags for world state changes.
+        Use <tool name="..." attr="..."/> tags for side-effects (TTS, animations, etc.).
     """
     ws = perception.world_snapshot
     lines = [
@@ -77,13 +81,14 @@ def build_prompt(perception: Perception, tool_names: list[str]) -> str:
         lines.append("")
         lines.append(f"Available tools: {', '.join(tool_names)}")
     lines.append("")
-    lines.append('Respond with text + <action kind="..." attr="..."/> tags for each action.')
+    lines.append('Respond with text + <action kind="..." attr="..."/> tags for world state changes.')
+    lines.append('Use <tool name="..." attr="..."/> tags for side-effects (TTS, animations, etc.).')
     return "\n".join(lines)
 
 
 @dataclass(frozen=True, slots=True)
 class LLMThinker:
-    """Thinker concret : LLM + tools + action parser.
+    """Thinker concret : LLM + tools + action parser + tool call parser.
 
     Implémente le Protocol `Thinker` de `agent/loop.py` :
         async def think(self, perception: Perception) -> Thought
@@ -92,15 +97,19 @@ class LLMThinker:
         1. Construit un prompt via `build_prompt(perception, tools.list_names())`.
         2. Streame les deltas via `brain.respond(prompt=..., history=[], identity=...)`.
         3. Accumule le texte de chaque delta jusqu'au premier `delta.done=True`.
-        4. Parse les actions depuis le texte accumulé via `parser.parse(text)`.
-        5. Retourne `Thought(reasoning=texte, planned_actions=tuple_d_actions)`.
+        4. Parse les actions (L3) depuis le texte via `parser.parse(text)`.
+        5. Parse les tool calls via `tool_call_parser.parse(text)` (L2.6).
+        6. Retourne `Thought(reasoning=texte, planned_actions=..., tool_calls=...)`.
 
     Attributs :
-        brain    : BrainAdapter — le backend LLM (MiniMax, Hermes, mock).
-        tools    : ToolRegistry — les tools LLM-callable ; leurs noms apparaissent
-                   dans le prompt pour guider le LLM.
-        parser   : ActionParser — convertit le texte brut en tuple d'ActionUnion.
-        identity : Identity — l'identité passée au brain (historique, logs).
+        brain           : BrainAdapter — le backend LLM (MiniMax, Hermes, mock).
+        tools           : ToolRegistry — les tools LLM-callable ; leurs noms
+                          apparaissent dans le prompt pour guider le LLM.
+        parser          : ActionParser — convertit le texte brut en ActionUnion.
+        identity        : Identity — l'identité passée au brain (logs, rate-limiting).
+        tool_call_parser: ToolCallParser — convertit les tags <tool .../> en ToolCall.
+                          Optional (None → tool_calls=() dans le Thought) pour
+                          backward-compat avec les callers L2.2-L2.5.
 
     Usage :
         thinker = LLMThinker(
@@ -108,6 +117,7 @@ class LLMThinker:
             tools=registry,
             parser=XmlTagActionParser(),
             identity=VisitorIdentity(),
+            tool_call_parser=XmlTagToolCallParser(),
         )
         thought = await thinker.think(perception)
     """
@@ -119,23 +129,33 @@ class LLMThinker:
     """Registre des outils LLM-callable. Leurs noms sont inclus dans le prompt."""
 
     parser: ActionParser
-    """Parser texte → ActionUnion. Injecté pour permettre le swap (XML → JSON)."""
+    """Parser texte → ActionUnion (tags <action kind="..."/>). Injecté pour swap."""
 
     identity: Identity
     """Identité passée au brain (pour personnalisation, logs, rate-limiting)."""
+
+    tool_call_parser: ToolCallParser | None = None
+    """Parser texte → ToolCall (tags <tool name="..."/>). None → tool_calls=() (L2.6).
+
+    Optionnel pour backward-compat : les callers L2.2-L2.5 qui n'injectent pas
+    ce parser obtiennent un Thought avec tool_calls vide — comportement identique
+    à avant l'introduction de L2.6.
+    """
 
     async def think(self, perception: Perception) -> Thought:
         """Un tour de réflexion LLM : Perception → Thought.
 
         Streame les tokens du brain et accumule jusqu'au premier delta.done=True.
-        Le texte accumulé constitue le `reasoning` du Thought. Les `planned_actions`
-        sont extraites par le parser depuis ce même texte.
+        Le texte accumulé constitue le `reasoning` du Thought.
+        Les `planned_actions` (Actions L3) et `tool_calls` (L2.6) sont extraits
+        par leurs parsers respectifs depuis ce même texte.
 
         Paramètres :
             perception : vue agrégée de l'environnement à l'instant t.
 
         Retour :
-            Thought avec reasoning=texte_brut_complet, planned_actions=tuple.
+            Thought avec reasoning=texte_brut_complet, planned_actions=tuple,
+            tool_calls=tuple (vide si tool_call_parser est None).
         """
         prompt = build_prompt(perception, self.tools.list_names())
         chunks: list[str] = []
@@ -149,7 +169,12 @@ class LLMThinker:
                 break
         text = "".join(chunks)
         actions = self.parser.parse(text)
-        return Thought(reasoning=text, planned_actions=actions)
+        tool_calls = (
+            self.tool_call_parser.parse(text)
+            if self.tool_call_parser is not None
+            else ()
+        )
+        return Thought(reasoning=text, planned_actions=actions, tool_calls=tool_calls)
 
 
 __all__ = ["LLMThinker", "build_prompt"]
