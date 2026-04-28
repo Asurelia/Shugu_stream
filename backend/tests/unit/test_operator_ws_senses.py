@@ -20,7 +20,6 @@ import pytest
 from shugu.core.event_bus import InProcessEventBus
 from shugu.routes import operator_ws
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------

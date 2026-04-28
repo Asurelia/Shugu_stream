@@ -20,12 +20,9 @@ from __future__ import annotations
 import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
-
 from shugu.core.event_bus import InProcessEventBus
 from shugu.core.identity import OperatorIdentity
 from shugu.routes.operator_voice_ws import VoiceWSDeps, _handle_voice_transcript
-
 
 # ---------------------------------------------------------------------------
 # Helpers
