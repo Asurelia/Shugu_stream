@@ -24,7 +24,6 @@ import pytest
 from shugu.core.event_bus import InProcessEventBus
 from shugu.routes import visitor_ws
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
