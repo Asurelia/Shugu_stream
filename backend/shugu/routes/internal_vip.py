@@ -18,6 +18,7 @@ from __future__ import annotations
 import hmac
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Optional
 
 import structlog
@@ -28,6 +29,8 @@ from ..core.protocols import EventBus
 from ..core.vip_bridge import VipEventIn, VipToolCall, VipToolResult
 from ..memory.sense_publish import publish_sense_raw
 from ..pipeline.queue import QueuedMessage, RedisQueue, new_msg_id
+from ..senses.bus import publish_sense_event
+from ..senses.types import SenseEvent
 
 log = structlog.get_logger(__name__)
 
@@ -104,13 +107,29 @@ async def post_event(
     # No-op si memory_enabled=False.
     user_lc = (event.user or "").strip().lower()
     if user_lc:
+        vip_subject = f"vip:{user_lc}"
+        vip_payload = {"kind": event.kind, "room": event.room, "data": payload.get("payload", {})}
+
         await publish_sense_raw(
             event_bus=deps.event_bus,
             settings=deps.settings,
-            subject=f"vip:{user_lc}",
+            subject=vip_subject,
             event_type="vip_event",
-            actor=f"vip:{user_lc}",
-            payload={"kind": event.kind, "room": event.room, "data": payload.get("payload", {})},
+            actor=vip_subject,
+            payload=vip_payload,
+        )
+
+        # L1.3 — publie aussi sur sense.event pour l'AgentRunner.
+        # event_type=vip_event (arrivée participant, raid, etc.) → kind="event".
+        # Inconditionnnel : pas de gate sur streamer_agent_enabled côté publisher.
+        await publish_sense_event(
+            bus=deps.event_bus,
+            event=SenseEvent(
+                kind="event",
+                subject=vip_subject,
+                payload=vip_payload,
+                ts=datetime.now(timezone.utc),
+            ),
         )
 
     log.debug("internal_vip.event_published", kind=event.kind, room=event.room)
@@ -145,14 +164,32 @@ async def post_tool(
         # Mémoire PR 2 — publish sense.raw event_type=chat_in (un VIP qui chatte
         # via le bridge LiveKit). Avant l'enqueue, comme visitor_ws / operator_ws.
         # No-op si memory_enabled=False.
+        vip_chat_subject = f"vip:{sender_lc}"
+        vip_chat_payload = {"text": text, "via": "internal_vip.chat_post"}
+
         await publish_sense_raw(
             event_bus=deps.event_bus,
             settings=deps.settings,
-            subject=f"vip:{sender_lc}",
+            subject=vip_chat_subject,
             event_type="chat_in",
-            actor=f"vip:{sender_lc}",
-            payload={"text": text, "via": "internal_vip.chat_post"},
+            actor=vip_chat_subject,
+            payload=vip_chat_payload,
             session_id=session_id,
+        )
+
+        # L1.3 — publie aussi sur sense.chat pour l'AgentRunner.
+        # event_type=chat_in (VIP qui chatte via LiveKit bridge) → kind="chat".
+        # 5ème site : chat.post n'est PAS un "vip_event" mais bien un chat_in
+        # → le topic correct est sense.chat, pas sense.event.
+        # Inconditionnnel sur streamer_agent_enabled (anti-pattern évité).
+        await publish_sense_event(
+            bus=deps.event_bus,
+            event=SenseEvent(
+                kind="chat",
+                subject=vip_chat_subject,
+                payload=vip_chat_payload,
+                ts=datetime.now(timezone.utc),
+            ),
         )
 
         msg = QueuedMessage(

@@ -11,6 +11,7 @@ import asyncio
 import json
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Optional
 
 import structlog
@@ -25,6 +26,8 @@ from ..core.protocols import EventBus, ModerationLayer
 from ..director.wiring import publish_chat_trigger
 from ..memory.sense_publish import publish_sense_raw
 from ..pipeline.queue import QueuedMessage, RedisQueue, new_msg_id
+from ..senses.bus import publish_sense_event
+from ..senses.types import SenseEvent
 
 router = APIRouter()
 log = structlog.get_logger(__name__)
@@ -161,14 +164,31 @@ async def _handle_operator_message(
     # publish_chat_trigger qui lowercase aussi le sender). No-op si
     # memory_enabled=False. Choix await (cf. retour adversarial H2).
     operator_username_lc = identity.username.lower()
+    op_subject = f"operator:{operator_username_lc}"
+    op_payload = {"text": text, "target": target, "nonce": nonce}
+
     await publish_sense_raw(
         event_bus=_deps.event_bus,
         settings=_deps.settings,
-        subject=f"operator:{operator_username_lc}",
+        subject=op_subject,
         event_type="chat_in",
-        actor=f"operator:{operator_username_lc}",
-        payload={"text": text, "target": target, "nonce": nonce},
+        actor=op_subject,
+        payload=op_payload,
         session_id=identity.session_id,
+    )
+
+    # L1.3 — publie aussi sur sense.chat pour l'AgentRunner (streamer IA).
+    # Appelé avant le branch target=hermes/shugu : le sens (ce que dit l'opérateur)
+    # est capturé indépendamment de la destination aval. Inconditionnnel : pas
+    # de gate sur streamer_agent_enabled côté publisher (anti-pattern).
+    await publish_sense_event(
+        bus=_deps.event_bus,
+        event=SenseEvent(
+            kind="chat",
+            subject=op_subject,
+            payload=op_payload,
+            ts=datetime.now(timezone.utc),
+        ),
     )
 
     if target == "hermes":
