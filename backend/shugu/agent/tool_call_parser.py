@@ -39,11 +39,14 @@ from typing import Protocol
 log = logging.getLogger(__name__)
 
 # Regex du tag self-closing : <tool attrs/>
-# On capture les attributs bruts pour les parser ensuite avec _ATTR_RE.
-# Même stratégie que XmlTagActionParser : regex simple + ciblée > html.parser
-# (le pattern est strict, le texte LLM peut contenir du HTML hostile).
+# On capture les paires key="value" explicitement plutôt qu'un blob générique
+# `[^/>]+?` qui rejetait silencieusement `/` et `>` dans les valeurs (ex:
+# `text="https://example.com"` ou `expr="a > b"`).
+# Régression P2 review #54 : un say-tool avec une URL était silencieusement
+# skippé. Le pattern actuel n'accepte que des paires bien-formées
+# `\s*\w+\s*=\s*"<anything-except-quote>"` répétées 1+ fois, suivies de `/>`.
 _TAG_RE = re.compile(
-    r"<tool\s+([^/>]+?)\s*/>",
+    r'<tool\s+((?:\s*\w+\s*=\s*"[^"]*")+)\s*/>',
     re.IGNORECASE | re.DOTALL,
 )
 

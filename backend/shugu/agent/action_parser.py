@@ -59,9 +59,13 @@ _ALLOWED_MOODS: frozenset[str] = frozenset(get_args(Mood))
 log = logging.getLogger(__name__)
 
 # Regex du tag self-closing : <action attrs/>
-# Le corps `([^/>]+?)` capture les attributs bruts sans les / et >.
+# Régression P2 review #54 (latent ici aussi) : `[^/>]+?` rejetait `/` et `>`
+# dans les valeurs d'attributs. Pattern remplacé par un match explicite des
+# paires `key="value"` — tout caractère sauf `"` est permis dans la valeur,
+# y compris `/` et `>`. Évite des skip silencieux sur des actions valides
+# qui contiendraient un `/` (chemins de prop, URL futures) ou `>`.
 _TAG_RE = re.compile(
-    r"<action\s+([^/>]+?)\s*/>",
+    r'<action\s+((?:\s*\w+\s*=\s*"[^"]*")+)\s*/>',
     re.IGNORECASE | re.DOTALL,
 )
 

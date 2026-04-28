@@ -161,3 +161,58 @@ def test_xml_parser_satisfies_protocol() -> None:
     # méthodes — on vérifie juste que parse retourne le bon type
     result = parser.parse("")
     assert isinstance(result, tuple)
+
+
+# ---------------------------------------------------------------------------
+# T9 (review fix P2 #54) — `/` et `>` doivent être permis dans les valeurs
+# ---------------------------------------------------------------------------
+
+def test_parse_tool_with_url_in_value() -> None:
+    """Régression P2 review #54 : un tag avec une URL (qui contient `/`) doit matcher.
+
+    Avant fix : la regex `[^/>]+?` rejetait les valeurs contenant `/`,
+    donc `<tool name="say" text="https://example.com"/>` était silencieusement
+    skippé. Les say-tools avec des URLs (cas commun pour un streamer qui annonce
+    un lien) perdaient leur effet.
+
+    Après fix : la regex matche les paires `key="value"` explicitement,
+    permettant tout caractère sauf `"` dans les valeurs.
+    """
+    from shugu.agent.tool_call_parser import XmlTagToolCallParser
+
+    parser = XmlTagToolCallParser()
+    result = parser.parse(
+        '<tool name="say" text="Visite https://example.com !"/>'
+    )
+    assert len(result) == 1, (
+        f"URL avec `/` doit être acceptée, got {len(result)} tags. "
+        f"Result: {result!r}"
+    )
+    assert result[0].name == "say"
+    assert result[0].params == {"text": "Visite https://example.com !"}
+
+
+def test_parse_tool_with_greater_than_in_value() -> None:
+    """Régression P2 review #54 : `>` dans une valeur doit aussi être accepté.
+
+    Cas typique : un tool qui transporte une expression de comparaison ou
+    un emoticon (`:>`) dans son texte.
+    """
+    from shugu.agent.tool_call_parser import XmlTagToolCallParser
+
+    parser = XmlTagToolCallParser()
+    result = parser.parse('<tool name="say" text="a > b et c < d"/>')
+    assert len(result) == 1
+    assert result[0].params == {"text": "a > b et c < d"}
+
+
+def test_parse_tool_with_path_in_value() -> None:
+    """Un path système (`/tmp/foo.png`) doit être préservé."""
+    from shugu.agent.tool_call_parser import XmlTagToolCallParser
+
+    parser = XmlTagToolCallParser()
+    result = parser.parse(
+        '<tool name="show_image" path="/tmp/screenshot.png"/>'
+    )
+    assert len(result) == 1
+    assert result[0].params == {"path": "/tmp/screenshot.png"}
