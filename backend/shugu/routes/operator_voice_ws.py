@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import json
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Optional
 
 import structlog
@@ -34,6 +35,8 @@ from ..core.identity import OperatorIdentity, hash_ip
 from ..core.protocols import EventBus
 from ..memory.sense_publish import publish_sense_raw
 from ..pipeline.voice_duplex import VoiceDuplex, VoiceEvent
+from ..senses.bus import publish_sense_event
+from ..senses.types import SenseEvent
 
 router = APIRouter()
 log = structlog.get_logger(__name__)
@@ -122,14 +125,32 @@ async def operator_voice_ws(
         # await documenté côté retour adversarial H2.
         if _deps.event_bus is not None:
             operator_username_lc = identity.username.lower()
+            voice_subject = f"operator:{operator_username_lc}"
+            voice_payload = {"text": text}
+
             await publish_sense_raw(
                 event_bus=_deps.event_bus,
                 settings=_deps.settings,
-                subject=f"operator:{operator_username_lc}",
+                subject=voice_subject,
                 event_type="voice_in",
-                actor=f"operator:{operator_username_lc}",
-                payload={"text": text},
+                actor=voice_subject,
+                payload=voice_payload,
                 session_id=identity.session_id,
+            )
+
+            # L1.3 — publie aussi sur sense.voice pour l'AgentRunner.
+            # Dans la même garde event_bus is not None que publish_sense_raw :
+            # pas de bus → pas de publish (cohérent avec le design existant).
+            # Inconditionnnel sur streamer_agent_enabled : c'est l'AgentRunner
+            # qui s'inscrit OU non, pas le publisher qui gate.
+            await publish_sense_event(
+                bus=_deps.event_bus,
+                event=SenseEvent(
+                    kind="voice",
+                    subject=voice_subject,
+                    payload=voice_payload,
+                    ts=datetime.now(timezone.utc),
+                ),
             )
         try:
             await _deps.hermes_embodied.run_once(  # type: ignore[union-attr]

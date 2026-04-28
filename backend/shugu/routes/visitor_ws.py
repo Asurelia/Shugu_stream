@@ -11,6 +11,7 @@ import json
 import re
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Optional
 
 import structlog
@@ -23,6 +24,8 @@ from ..core.protocols import EventBus, ModerationLayer
 from ..director.wiring import publish_chat_trigger
 from ..memory.sense_publish import publish_sense_raw
 from ..pipeline.queue import QueuedMessage, RedisQueue, new_msg_id
+from ..senses.bus import publish_sense_event
+from ..senses.types import SenseEvent
 
 # Visitor `!action` commands: short-circuit the LLM + TTS and broadcast a
 # gesture-only performance. Each command emits an animation tag AND a fallback
@@ -148,14 +151,38 @@ async def _handle_visitor_message(
     # Choix conscient await (pas create_task) : Redis publish ~1ms en local
     # acceptable, code plus simple, pas de leaks au shutdown (cf. retour
     # adversarial H2).
+    subject = f"visitor:{identity.ip_hash}"
+    chat_payload = {"text": text, "nonce": nonce}
+
+    # Mémoire PR 2 — publish sense.raw AVANT l'enqueue. No-op si
+    # memory_enabled=False. Le subject visitor:<ip_hash> est le canonical
+    # anonymous id (lowered via hash_ip) — cohérent avec la convention
+    # subject="visitor:<ip_hash_lc>" utilisée par memory.types.MemoryItem.
+    # Choix conscient await (pas create_task) : Redis publish ~1ms en local
+    # acceptable, code plus simple, pas de leaks au shutdown (cf. retour
+    # adversarial H2).
     await publish_sense_raw(
         event_bus=_deps.event_bus,
         settings=_deps.settings,
-        subject=f"visitor:{identity.ip_hash}",
+        subject=subject,
         event_type="chat_in",
-        actor=f"visitor:{identity.ip_hash}",
-        payload={"text": text, "nonce": nonce},
+        actor=subject,
+        payload=chat_payload,
         session_id=identity.session_id,
+    )
+
+    # L1.3 — publie aussi sur sense.chat pour l'AgentRunner (streamer IA).
+    # Appelé inconditionnellement : le publisher ne doit pas connaître la
+    # feature flag agent — c'est l'AgentRunner qui s'inscrit OU non au topic.
+    # Après publish_sense_raw pour ne pas pénaliser le path mémoire si lag.
+    await publish_sense_event(
+        bus=_deps.event_bus,
+        event=SenseEvent(
+            kind="chat",
+            subject=subject,
+            payload=chat_payload,
+            ts=datetime.now(timezone.utc),
+        ),
     )
 
     msg = QueuedMessage(
