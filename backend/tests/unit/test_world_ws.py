@@ -178,3 +178,112 @@ def test_world_delta_props_forwarded(
         msg = json.loads(ws.receive_text())
         assert msg["props"] == props_payload
         assert msg["clock_ms"] == 100
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# REGRESSION P1+P2 review #56
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class _FakeWorldState:
+    """Stub WorldState — duck-typed pour le snapshot initial."""
+
+    def __init__(
+        self,
+        avatar_pose: str = "wave",
+        scene_id: str = "kitchen",
+        mood: str = "happy",
+        clock_ms: int = 12345,
+    ) -> None:
+        self.avatar_pose = avatar_pose
+        self.scene_id = scene_id
+        self.mood = mood
+        self.props = ()
+        self.clock_ms = clock_ms
+
+
+class _FakeWorldStore:
+    """Stub WorldStoreReader minimal — retourne un state figé via .read()."""
+
+    def __init__(self, state: _FakeWorldState) -> None:
+        self._state = state
+
+    def read(self) -> _FakeWorldState:
+        return self._state
+
+
+def test_initial_snapshot_sent_to_late_joiner(
+    settings,
+    event_bus: InProcessEventBus,
+    fake_redis,
+) -> None:
+    """Régression P1 review #56 : un client qui se connecte APRÈS des mutations
+    reçoit le snapshot complet du WorldState courant (full state, pas un diff).
+
+    Sans ce snapshot, le client late-joiner reste sur les defaults pour les
+    champs non-mutés depuis sa connexion → drift permanent côté UI.
+    """
+    fake_state = _FakeWorldState(
+        avatar_pose="wave", scene_id="kitchen", mood="happy", clock_ms=12345,
+    )
+    fake_store = _FakeWorldStore(fake_state)
+
+    world_ws.set_deps(world_ws.WorldWSDeps(
+        event_bus=event_bus,
+        settings=settings,
+        redis=fake_redis,
+        world_store=fake_store,
+    ))
+    a = FastAPI()
+    a.include_router(world_ws.router)
+
+    token = _issue_token(settings, "alice")
+    with TestClient(a) as c:
+        with c.websocket_connect(f"/ws/world?token={token}") as ws:
+            # Le PREMIER message reçu doit être le snapshot complet.
+            snapshot = json.loads(ws.receive_text())
+            assert snapshot["avatar_pose"] == "wave"
+            assert snapshot["scene_id"] == "kitchen"
+            assert snapshot["mood"] == "happy"
+            assert snapshot["clock_ms"] == 12345
+            assert snapshot["props"] == []
+
+
+def test_no_initial_snapshot_when_world_store_is_none(
+    client: TestClient,
+    settings,
+) -> None:
+    """Régression P1 cas dégradé : si world_store=None (streamer_agent_enabled=False),
+    aucun snapshot envoyé. La connexion reste idle propre — pas d'erreur,
+    pas de message intempestif.
+    """
+    token = _issue_token(settings, "alice")
+    # La fixture `app` configure world_store=None par défaut.
+    with client.websocket_connect(f"/ws/world?token={token}"):
+        pass  # Aucun message attendu, close propre.
+
+
+def test_binary_frame_closes_with_unsupported_data_code(
+    client: TestClient,
+    settings,
+) -> None:
+    """Régression P2 review #56 : un frame binaire envoyé par le client
+    déclenche un close propre avec le code RFC 6455 1003 ("Unsupported Data"),
+    pas un 500 dans les logs.
+
+    Important pour des sockets public-facing : un client malformé ou
+    malveillant ne doit pas pouvoir générer du log noise.
+    """
+    token = _issue_token(settings, "alice")
+    with client.websocket_connect(f"/ws/world?token={token}") as ws:
+        # Envoyer un frame binaire — receive_text() côté serveur va raise
+        # RuntimeError, attrapé par le handler qui close avec 1003.
+        ws.send_bytes(b"\x00\x01\x02malformed")
+        # Le close est attendu — TestClient lève WebSocketDisconnect côté
+        # client si on tente de receive après. On vérifie via la fermeture
+        # propre (pas d'exception non-handled qui remonterait en 500).
+        from starlette.websockets import WebSocketDisconnect as _WSD
+        with pytest.raises(_WSD) as exc_info:
+            ws.receive_text()
+        # Code RFC 6455 1003 = UNSUPPORTED_DATA.
+        assert exc_info.value.code == 1003

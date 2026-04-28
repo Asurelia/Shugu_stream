@@ -330,8 +330,13 @@ async def lifespan(app: FastAPI):
         event_bus=event_bus, settings=settings, redis=_redis,
     ))
     # World WS — Phase L4. Broadcast world.delta vers les viewers 3D.
+    # `world_store` injecté pour permettre l'envoi du snapshot initial aux
+    # late-joiners (régression P1 review #56). None tant que
+    # streamer_agent_enabled=False — wiré post-startup ci-dessous quand l'agent
+    # est activé.
     world_ws.set_deps(world_ws.WorldWSDeps(
         event_bus=event_bus, settings=settings, redis=_redis,
+        world_store=None,
     ))
     if stt is not None:
         operator_voice_ws.set_deps(operator_voice_ws.VoiceWSDeps(
@@ -411,6 +416,16 @@ async def lifespan(app: FastAPI):
             world_store=_world_store,
         )
         app.state.agent_components = _agent_components
+        # Re-wire world_ws deps avec le world_store nouvellement créé pour
+        # que les late-joiners reçoivent le snapshot initial (régression P1
+        # review #56). Avant ce point, world_ws.set_deps(world_store=None)
+        # avait été appelé avec un placeholder.
+        world_ws.set_deps(world_ws.WorldWSDeps(
+            event_bus=event_bus,
+            settings=settings,
+            redis=_redis,
+            world_store=_world_store,
+        ))
         # Démarrage de la boucle runtime (sense → tick → act).
         # start() est idempotent — sûr à appeler plusieurs fois si nécessaire.
         await _agent_components.runner.start()

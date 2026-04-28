@@ -35,7 +35,7 @@ import asyncio
 import json
 from contextlib import suppress
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Protocol
 
 import structlog
 from fastapi import APIRouter, Cookie, Query, WebSocket, WebSocketDisconnect
@@ -50,6 +50,21 @@ log = structlog.get_logger(__name__)
 
 _WORLD_DELTA_TOPIC = "world.delta"
 
+# WebSocket close code RFC 6455 — 1003 = "Unsupported Data" (frame type non supporté).
+_WS_CODE_UNSUPPORTED_DATA = 1003
+
+
+class WorldStoreReader(Protocol):
+    """Contrat minimal pour lire le WorldState courant.
+
+    Protocol structurel local — évite d'importer ``shugu.world.state_store``
+    dans la route. Toute implémentation qui expose ``.read() -> WorldState``
+    satisfait par duck typing (en prod : ``WorldStateStore``).
+    """
+
+    def read(self) -> object:  # WorldState — typé object pour éviter l'import
+        ...
+
 
 # ─── Deps wiring ─────────────────────────────────────────────────────────────
 
@@ -61,6 +76,11 @@ class WorldWSDeps:
     event_bus: EventBus
     settings: Settings
     redis: "object"  # aioredis.Redis — type flou pour éviter un import circulaire
+    # Régression P1 review #56 : optional world store pour envoyer un
+    # snapshot initial aux late-joiners. Si None (streamer_agent_enabled=False
+    # ou avant L2.5 wiring), aucun snapshot n'est envoyé — la connexion reste
+    # idle jusqu'au premier publisher (cas dégradé acceptable).
+    world_store: Optional[WorldStoreReader] = None
 
 
 _deps: Optional[WorldWSDeps] = None
@@ -117,6 +137,23 @@ async def world_delta_websocket(
     await ws.accept()
     log.info("world_ws.connect", operator=payload.sub)
 
+    # Régression P1 review #56 : envoyer un snapshot initial du WorldState
+    # AVANT de démarrer le fanout des deltas. Sans ça, un client late-joiner
+    # ne reçoit que des diffs partiels et ne peut jamais reconstruire les
+    # champs non-mutés depuis sa connexion — il reste sur les defaults
+    # client-side jusqu'à ce que chaque champ change individuellement.
+    # Le snapshot est un dict avec tous les champs WorldState — équivalent
+    # sémantique d'un "delta complet" pour le hook applyDelta côté client.
+    if deps.world_store is not None:
+        try:
+            state = deps.world_store.read()
+            snapshot = _state_to_snapshot_dict(state)
+            await ws.send_text(json.dumps(snapshot))
+        except Exception as exc:
+            # Snapshot best-effort — un crash ici ne doit pas tuer la
+            # connexion (le client recevra quand même les deltas).
+            log.warning("world_ws.snapshot_failed", error=str(exc))
+
     # Task de fanout : subscribe au bus et forward chaque event.
     forward_task = asyncio.create_task(
         _forward_loop(ws, deps.event_bus),
@@ -127,13 +164,66 @@ async def world_delta_websocket(
         # La route est push-only.  On attend la déconnexion du client.
         # receive_text() est utilisé uniquement pour détecter le disconnect.
         while True:
-            await ws.receive_text()  # ignore le contenu
+            try:
+                await ws.receive_text()  # ignore le contenu
+            except (RuntimeError, KeyError) as exc:
+                # Régression P2 review #56 : le client a envoyé un frame
+                # binaire ou un frame incompatible avec receive_text().
+                # Starlette raise selon le cas :
+                #   - KeyError('text') : frame binaire reçu (message dict
+                #     contient 'bytes' au lieu de 'text')
+                #   - RuntimeError : socket non connecté ou état incompatible
+                # On close proprement avec le code RFC 6455 1003
+                # ("Unsupported Data") plutôt que de laisser remonter un 500.
+                # Important pour les sockets public-facing — évite des logs
+                # erreur bruyants déclenchés par un client malformé ou
+                # malveillant.
+                log.warning(
+                    "world_ws.unsupported_frame",
+                    operator=payload.sub,
+                    error=f"{type(exc).__name__}: {exc}",
+                )
+                with suppress(Exception):
+                    await ws.close(
+                        code=_WS_CODE_UNSUPPORTED_DATA,
+                        reason="text frames only",
+                    )
+                break
     except WebSocketDisconnect:
         log.info("world_ws.disconnect", operator=payload.sub)
     finally:
         forward_task.cancel()
         with suppress(asyncio.CancelledError):
             await forward_task
+
+
+def _state_to_snapshot_dict(state: object) -> dict:
+    """Sérialise un WorldState en dict JSON-compatible (snapshot complet).
+
+    Format identique à ce que ``world.publisher.diff`` produit en patch —
+    un client qui reçoit ce dict via ``applyDelta`` se retrouve avec un
+    state complet identique au backend.
+
+    Le paramètre est typé ``object`` pour éviter l'import de ``WorldState``.
+    Les attributs sont lus via ``getattr`` — duck-typing pour tests faciles.
+    """
+    props = getattr(state, "props", ())
+    serialized_props = [
+        {
+            "prop_id": getattr(p, "prop_id", ""),
+            "x": getattr(p, "x", 0.0),
+            "y": getattr(p, "y", 0.0),
+            "z": getattr(p, "z", 0.0),
+        }
+        for p in props
+    ]
+    return {
+        "avatar_pose": getattr(state, "avatar_pose", "idle"),
+        "scene_id": getattr(state, "scene_id", "default"),
+        "mood": getattr(state, "mood", "neutral"),
+        "props": serialized_props,
+        "clock_ms": getattr(state, "clock_ms", 0),
+    }
 
 
 # ─── Forward loop ────────────────────────────────────────────────────────────
