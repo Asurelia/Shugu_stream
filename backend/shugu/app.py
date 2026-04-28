@@ -59,6 +59,7 @@ from .routes import (
     scene_editor_api,
     test_director_api,
     visitor_ws,
+    world_ws,
 )
 
 _redis: Optional[aioredis.Redis] = None
@@ -328,6 +329,10 @@ async def lifespan(app: FastAPI):
     editor_ws.set_deps(editor_ws.EditorWSDeps(
         event_bus=event_bus, settings=settings, redis=_redis,
     ))
+    # World WS — Phase L4. Broadcast world.delta vers les viewers 3D.
+    world_ws.set_deps(world_ws.WorldWSDeps(
+        event_bus=event_bus, settings=settings, redis=_redis,
+    ))
     if stt is not None:
         operator_voice_ws.set_deps(operator_voice_ws.VoiceWSDeps(
             settings=settings, redis=_redis, picker=picker,
@@ -571,6 +576,7 @@ def create_app() -> FastAPI:
     app.include_router(visitor_ws.router)
     app.include_router(operator_ws.router)
     app.include_router(editor_ws.router)   # /ws/editor — Phase D collab
+    app.include_router(world_ws.router)    # /ws/world — Phase L4 world.delta viewer
     # Phase E4 — route de test Director (gated par settings.test_triggers_enabled).
     # La route retourne 404 si le flag est OFF, donc on peut toujours l'inclure —
     # pas de risque de surface d'attaque en prod. L'inclusion inconditionnelle
