@@ -19,6 +19,9 @@ Frontière publique exposée :
 - `build_prompt` — constructeur de prompt LLM depuis une Perception (L2.2).
 - `AgentComponents` — conteneur frozen des composants assemblés (L2.3).
 - `build_agent_components` — factory de wiring L1+L2+L3 (L2.3).
+- `AgentRunner` — boucle runtime async : sense → tick → act (L2.4).
+- `AgentRunnerConfig` — configuration du runner (L2.4).
+- `WorldStoreLike` — Protocol local du store injecté dans le runner (L2.4).
 
 Ce module ne mute PAS L3 directement : il consomme `world.types`
 (Action variants + WorldState pour lecture) et l'application des actions
@@ -30,6 +33,7 @@ from __future__ import annotations
 from .action_parser import ActionParser, XmlTagActionParser
 from .llm_thinker import LLMThinker, build_prompt
 from .loop import AgentLoop, Thinker, WorldApply
+from .runner import AgentRunner, AgentRunnerConfig, WorldStoreLike
 from .tools import ToolRegistry
 from .types import Perception, Thought
 from .wiring import AgentComponents, build_agent_components
@@ -38,12 +42,15 @@ __all__ = [
     "ActionParser",
     "AgentComponents",
     "AgentLoop",
+    "AgentRunner",
+    "AgentRunnerConfig",
     "LLMThinker",
     "Perception",
     "Thought",
     "Thinker",
     "ToolRegistry",
     "WorldApply",
+    "WorldStoreLike",
     "XmlTagActionParser",
     "build_agent_components",
     "build_prompt",
