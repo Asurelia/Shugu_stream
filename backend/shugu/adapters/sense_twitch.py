@@ -154,7 +154,7 @@ class TwitchSenseAdapter:
             kind="chat",
             subject=f"twitch:{username_clean}",
             payload={
-                "text": text,  # text brut (non-stripped) — cohérent avec visitor_ws.py
+                "text": text,  # text brut (non-stripped) — le strip sert uniquement à la guard
                 "platform": "twitch",
                 "channel": self._config.channel,
             },
