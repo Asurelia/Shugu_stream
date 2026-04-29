@@ -9,6 +9,12 @@ from typing import Literal
 from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# Import du type StreamMode depuis le package policy.
+# config.py est un module fondation (feuille basse) — il peut importer
+# depuis policy/ (feuille haute, pas de cycle). Ne PAS importer config
+# depuis policy/ dans l'autre sens.
+from shugu.policy.modes import StreamMode
+
 # Resolve the env file path in a portable way:
 #   1. SHUGU_ENV_FILE env var override (explicit)
 #   2. ops/env/.env relative to the project root (Windows / Linux dev)
@@ -426,6 +432,22 @@ class Settings(BaseSettings):
                     "OFF par défaut — opt-in via SHUGU_STREAMER_AGENT_ENABLED=true "
                     "(ou STREAMER_AGENT_ENABLED=true). "
                     "Le démarrage effectif de la boucle (AgentRunner) est L2.4.",
+    )
+
+    # Phase 6 — Policy matrix : mode de stream courant.
+    # Défaut ``"operator_only"`` : comportement fail-safe opt-in.
+    # Un déploiement frais reste sous contrôle opérateur jusqu'à basculement
+    # explicite vers un mode moins restrictif (public_interactive, vip_private…).
+    # AliasChoices accepte STREAM_MODE (bare) et SHUGU_STREAM_MODE (préfixé)
+    # pour correspondre à la convention du projet (cf. test_config.py).
+    stream_mode: StreamMode = Field(
+        default="operator_only",
+        validation_alias=AliasChoices("STREAM_MODE", "SHUGU_STREAM_MODE"),
+        description="Mode de stream courant — contrôle la policy matrix des capabilities. "
+                    "Défaut 'operator_only' (contrôle total, fail-safe opt-in). "
+                    "Valeurs : ambient_only | public_interactive | vip_private | "
+                    "operator_only | emergency_mute. "
+                    "Env : SHUGU_STREAM_MODE (ou STREAM_MODE).",
     )
 
     @field_validator("ip_hash_salt", mode="after")
