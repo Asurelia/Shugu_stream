@@ -81,6 +81,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import time
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime
@@ -88,7 +89,7 @@ from typing import Optional, Protocol, runtime_checkable
 
 from ..core.protocols import EventBus
 from ..senses.types import SenseEvent
-from ..world.types import ActionUnion, WorldState
+from ..world.types import ActionUnion, TickAction, WorldState
 from .loop import AgentLoop
 from .types import Perception, Thought
 
@@ -237,6 +238,10 @@ class AgentRunner:
         # sans start() préalable.
         self._stopping: asyncio.Event = asyncio.Event()
         self._dropped_count: int = 0
+        # L3.4 auto-tick : timestamp monotonic du dernier run_once (en ms).
+        # None = premier appel, pas de TickAction émis (pas de baseline).
+        # Réinitialisé à None par stop() pour qu'un restart soit comme fresh.
+        self._last_tick_monotonic_ms: Optional[int] = None
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -295,6 +300,9 @@ class AgentRunner:
 
         # Vider la queue pour éviter de conserver des données obsolètes.
         self._sense_queue.clear()
+        # Réinitialise l'horloge auto-tick : un restart repart de zéro
+        # (évite un énorme delta si le runner est arrêté/redémarré).
+        self._last_tick_monotonic_ms = None
 
     # ------------------------------------------------------------------
     # Tick unique — exposé pour tests + usage manuel
@@ -314,6 +322,15 @@ class AgentRunner:
             ``tuple[Thought, WorldState]`` avec le Thought produit et le
             nouveau WorldState après application des actions, ou ``None``.
         """
+        # L3.4 auto-tick : avance clock_ms du delta réel depuis le dernier tick.
+        # Émis AVANT le check senses — l'horloge avance même sans perception
+        # (animations/loops dépendent d'une horloge logique continue).
+        now_monotonic_ms = int(time.monotonic() * 1000)
+        if self._last_tick_monotonic_ms is not None:
+            delta_ms = now_monotonic_ms - self._last_tick_monotonic_ms
+            await self._world_store.apply(TickAction(delta_ms=delta_ms))
+        self._last_tick_monotonic_ms = now_monotonic_ms
+
         # Drainer atomiquement la queue (snapshot des senses disponibles).
         senses: list[SenseEvent] = []
         while self._sense_queue:

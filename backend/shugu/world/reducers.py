@@ -17,10 +17,11 @@ l'état précédent, en ne modifiant que les champs concernés par l'action.
 apparaît à l'index 0, le suivant à l'index 1, etc. Cet ordre est déterministe
 et reproductible.
 
-**clock_ms — décision de design (L3.1)** : `clock_ms` est laissé INCHANGÉ
-par tous les reducers de cette phase. La progression de l'horloge logique
-sera gérée par une `TickAction` dédiée dans L3.x ultérieur. Séparer le tick
-de clock des actions sémantiques (pose, scène, mood, prop) permet :
+**clock_ms — décision de design** : `clock_ms` est laissé INCHANGÉ par
+les reducers sémantiques (pose, scène, mood, prop). Seule `TickAction`
+(L3.4) avance l'horloge logique — émise par `AgentRunner` avec le delta
+réel écoulé depuis le tick précédent. Séparer le tick de clock des
+actions sémantiques permet :
 - des replays sans dérive temporelle,
 - un contrôle explicite du rythme (ex : 60 fps = tick toutes les 16 ms),
 - une meilleure testabilité (pas de timestamp implicite).
@@ -46,6 +47,7 @@ from .types import (
     Prop,
     PropSpawnAction,
     SceneTransitionAction,
+    TickAction,
     WorldState,
 )
 
@@ -77,7 +79,8 @@ def apply(state: WorldState, action: ActionUnion) -> WorldState:
 
     Notes
     -----
-    clock_ms est laissé inchangé — cf. docstring module pour la justification.
+    clock_ms est avancé exclusivement par TickAction — cf. docstring module.
+    Les reducers sémantiques (pose, scène, mood, prop) le laissent inchangé.
     """
     match action:
         case AvatarPoseAction(pose=p):
@@ -93,11 +96,15 @@ def apply(state: WorldState, action: ActionUnion) -> WorldState:
             new_prop = Prop(prop_id=pid, x=x, y=y, z=z)
             return dataclasses.replace(state, props=state.props + (new_prop,))
 
+        case TickAction(delta_ms=dms):
+            safe_delta = max(0, dms)  # Clamp négatif à 0 — robustesse runtime
+            return dataclasses.replace(state, clock_ms=state.clock_ms + safe_delta)
+
         case _:
             raise TypeError(
                 f"unknown action variant: {type(action).__name__} — "
                 f"les variants autorisés sont : AvatarPoseAction, "
-                f"SceneTransitionAction, MoodSetAction, PropSpawnAction."
+                f"SceneTransitionAction, MoodSetAction, PropSpawnAction, TickAction."
             )
 
 

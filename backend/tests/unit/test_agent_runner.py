@@ -551,6 +551,152 @@ async def test_run_once_dispatches_tools_after_l3_actions() -> None:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# L3.4 — auto-tick avant chaque run_once
+# ---------------------------------------------------------------------------
+
+
+async def test_run_once_first_call_no_tick_yet() -> None:
+    """Premier run_once : pas de TickAction émis (_last_tick_monotonic_ms is None)."""
+    from shugu.world.types import TickAction
+
+    applied_actions: list = []
+
+    class RecordingStore:
+        """WorldStoreLike stub qui enregistre toutes les actions apply()."""
+
+        def read(self):
+            return _make_world()
+
+        async def apply(self, action) -> None:
+            applied_actions.append(action)
+            return self.read()
+
+    from shugu.agent.loop import AgentLoop
+    from shugu.world.reducers import apply as world_apply
+
+    bus = InProcessEventBus()
+    loop = AgentLoop(
+        thinker=CountingThinker(returned_thought=Thought(reasoning="ok", planned_actions=())),
+        world_apply=world_apply,
+    )
+    runner = AgentRunner(
+        loop=loop,
+        world_store=RecordingStore(),
+        bus=bus,
+        config=AgentRunnerConfig(tick_interval_ms=9999, sense_topics=("sense.chat",)),
+    )
+
+    # Premier run_once sans sense → None mais pas de TickAction envoyé
+    result = await runner.run_once()
+
+    assert result is None
+    tick_actions = [a for a in applied_actions if isinstance(a, TickAction)]
+    assert len(tick_actions) == 0, (
+        f"Premier run_once : aucun TickAction attendu, obtenu {tick_actions!r}"
+    )
+
+
+async def test_run_once_consecutive_calls_emit_correct_delta() -> None:
+    """run_once consécutifs : 2e appel émet TickAction(delta_ms >= 0) basé sur monotonic."""
+    from unittest.mock import patch
+
+    from shugu.world.types import TickAction
+
+    applied_actions: list = []
+
+    class RecordingStore:
+        def read(self):
+            return _make_world()
+
+        async def apply(self, action):
+            applied_actions.append(action)
+            return self.read()
+
+    from shugu.agent.loop import AgentLoop
+    from shugu.world.reducers import apply as world_apply
+
+    bus = InProcessEventBus()
+    loop = AgentLoop(
+        thinker=CountingThinker(returned_thought=Thought(reasoning="ok", planned_actions=())),
+        world_apply=world_apply,
+    )
+    runner = AgentRunner(
+        loop=loop,
+        world_store=RecordingStore(),
+        bus=bus,
+        config=AgentRunnerConfig(tick_interval_ms=9999, sense_topics=("sense.chat",)),
+    )
+
+    # Patch time.monotonic pour contrôle précis du delta
+    t0 = 1000.0
+    t1 = 1000.5  # +500ms entre 1er et 2e run_once
+
+    with patch("shugu.agent.runner.time") as mock_time:
+        mock_time.monotonic.side_effect = [t0, t1]
+
+        await runner.run_once()  # 1er : stocke t0, pas de TickAction
+        await runner.run_once()  # 2e : delta = (t1 - t0) * 1000 = 500ms
+
+    tick_actions = [a for a in applied_actions if isinstance(a, TickAction)]
+    assert len(tick_actions) == 1, (
+        f"2e run_once : exactement 1 TickAction attendu, obtenu {tick_actions!r}"
+    )
+    assert tick_actions[0].delta_ms == 500, (
+        f"delta_ms attendu=500, obtenu={tick_actions[0].delta_ms}"
+    )
+
+
+async def test_run_once_emits_tick_before_perception() -> None:
+    """TickAction est appliqué AVANT le check senses (horloge avance même sans perception)."""
+    apply_order: list = []
+
+    class OrderingStore:
+        """Enregistre l'ordre d'appel des apply() et simule un state avec clock."""
+
+        def __init__(self):
+            self._clock = 0
+
+        def read(self):
+            return _make_world()
+
+        async def apply(self, action):
+            apply_order.append(type(action).__name__)
+            return self.read()
+
+    from shugu.agent.loop import AgentLoop
+    from shugu.world.reducers import apply as world_apply
+
+    bus = InProcessEventBus()
+    loop = AgentLoop(
+        thinker=CountingThinker(returned_thought=Thought(reasoning="ok", planned_actions=())),
+        world_apply=world_apply,
+    )
+    store = OrderingStore()
+    runner = AgentRunner(
+        loop=loop,
+        world_store=store,
+        bus=bus,
+        config=AgentRunnerConfig(tick_interval_ms=9999, sense_topics=("sense.chat",)),
+    )
+
+    # 1er run_once : initialise _last_tick_monotonic_ms, pas de TickAction
+    await runner.run_once()
+
+    # 2e run_once : doit émettre TickAction AVANT tout (queue vide → return None)
+    await runner.run_once()
+
+    # TickAction doit être dans apply_order (émis avant le bail-out sur senses vides)
+    assert "TickAction" in apply_order, (
+        f"TickAction absent de l'ordre des apply: {apply_order!r}. "
+        f"L'horloge doit avancer même si pas de senses."
+    )
+    # TickAction doit être le premier de la 2e série (seul appel ici)
+    assert apply_order[0] == "TickAction", (
+        f"TickAction doit être le premier apply du 2e run_once, got {apply_order!r}"
+    )
+
+
 async def test_tool_dispatch_exception_does_not_kill_runner(
     caplog: Any,
 ) -> None:

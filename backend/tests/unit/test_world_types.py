@@ -124,3 +124,34 @@ def test_action_union_covers_all_variants() -> None:
     assert expected_actions <= set(wt.__all__), (
         f"variants manquants dans __all__: {expected_actions - set(wt.__all__)}"
     )
+
+
+# ---------------------------------------------------------------------------
+# L3.4 — TickAction
+# ---------------------------------------------------------------------------
+
+
+def test_tick_action_is_frozen() -> None:
+    """TickAction est frozen → replay-safe, hashable."""
+    from shugu.world.types import TickAction
+
+    t = TickAction(delta_ms=100)
+    with pytest.raises(FrozenInstanceError):
+        t.delta_ms = 200  # type: ignore[misc]
+
+
+def test_tick_action_to_bus_dict_includes_delta_ms() -> None:
+    """TickAction.to_bus_dict() retourne kind='tick' + delta_ms."""
+    from shugu.world.types import TickAction
+
+    t = TickAction(delta_ms=42)
+    assert t.to_bus_dict() == {"kind": "tick", "delta_ms": 42}
+
+
+def test_action_union_includes_tick_action() -> None:
+    """TickAction est exporté dans __all__ et fait partie de ActionUnion."""
+    import shugu.world.types as wt
+
+    assert "TickAction" in wt.__all__, (
+        "TickAction absent de __all__ — ajouter l'entrée dans types.py"
+    )

@@ -196,11 +196,11 @@ def test_apply_unknown_action_raises_typeerror() -> None:
 # ---------------------------------------------------------------------------
 
 def test_apply_clock_ms_unchanged_for_all_variants() -> None:
-    """clock_ms est LAISSÉ INCHANGÉ par tous les reducers de L3.1.
+    """clock_ms est LAISSÉ INCHANGÉ par tous les reducers sémantiques (L3.1).
 
-    Décision de design : la progression de l'horloge logique sera gérée par
-    une `TickAction` dédiée dans L3.x ultérieur. Séparer le tick de clock
-    des actions sémantiques (pose, scène, mood, prop) permet :
+    Décision de design : la progression de l'horloge logique est gérée par
+    TickAction (L3.4). Séparer le tick de clock des actions sémantiques
+    (pose, scène, mood, prop) permet :
     - des replays sans dérive temporelle (on peut rejouer une trace sans
       que l'horloge s'emballe),
     - un contrôle explicite du rythme (ex: 60 fps = tick toutes les 16 ms).
@@ -222,3 +222,58 @@ def test_apply_clock_ms_unchanged_for_all_variants() -> None:
             f"clock_ms a été modifié par {type(action).__name__}: "
             f"attendu {state.clock_ms}, obtenu {new_state.clock_ms}"
         )
+
+
+# ---------------------------------------------------------------------------
+# L3.4 — TickAction reducer
+# ---------------------------------------------------------------------------
+
+
+def test_apply_tick_advances_clock_ms() -> None:
+    """TickAction(delta_ms=250) augmente clock_ms de 250."""
+    from shugu.world.reducers import apply
+    from shugu.world.types import TickAction
+
+    state = _base_state()  # clock_ms=1000
+    new_state = apply(state, TickAction(delta_ms=250))
+
+    assert new_state.clock_ms == 1250
+
+
+def test_apply_tick_zero_no_change() -> None:
+    """TickAction(delta_ms=0) laisse clock_ms inchangé."""
+    from shugu.world.reducers import apply
+    from shugu.world.types import TickAction
+
+    state = _base_state()  # clock_ms=1000
+    new_state = apply(state, TickAction(delta_ms=0))
+
+    assert new_state.clock_ms == 1000
+
+
+def test_apply_tick_negative_clamped_to_zero() -> None:
+    """TickAction avec delta_ms négatif est silencieusement clampé à 0."""
+    from shugu.world.reducers import apply
+    from shugu.world.types import TickAction
+
+    state = _base_state()  # clock_ms=1000
+    new_state = apply(state, TickAction(delta_ms=-500))
+
+    assert new_state.clock_ms == 1000, (
+        f"delta négatif doit être clampé à 0, clock_ms attendu=1000, "
+        f"obtenu={new_state.clock_ms}"
+    )
+
+
+def test_apply_tick_preserves_other_fields() -> None:
+    """TickAction ne modifie que clock_ms — tous les autres champs sont inchangés."""
+    from shugu.world.reducers import apply
+    from shugu.world.types import TickAction
+
+    state = _base_state()
+    new_state = apply(state, TickAction(delta_ms=100))
+
+    assert new_state.avatar_pose == state.avatar_pose
+    assert new_state.scene_id == state.scene_id
+    assert new_state.mood == state.mood
+    assert new_state.props == state.props
