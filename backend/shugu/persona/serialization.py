@@ -11,13 +11,58 @@ Conventions :
     - Champs manquants en `from_dict` : valeurs par défaut sûres
       (running_gags → (), relationships manquant → {}, mood_arc vide → [neutre]).
 
+Régression P1 review #62 : tous les casts numériques utilisent `_safe_float`
+qui swallow ValueError/TypeError + log warning + fallback. Sans ça, un doc
+corrompu (`{"energy": "high"}` après edit manuel ou data legacy) levait
+ValueError jusqu'au caller, abortant `load_persona_state()` et tout le boot.
+Sémantique safe : doc partiellement corrompu → reset le champ touché + garde
+le reste. L'agent boot toujours.
+
 Ce module n'importe rien de `shugu.*` externe.
 """
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 
 from .state import MAX_ARC_LEN, MoodArcEntry, PersonaState, ViewerRelationship
+
+log = logging.getLogger(__name__)
+
+
+def _safe_float(value: object, default: float, *, field_name: str) -> float:
+    """Cast `value` en float avec fallback safe sur défaut + warning log.
+
+    Régression P1 review #62 : `from_dict` appelait `float(d.get("energy", 0.5))`
+    qui levait ValueError sur `{"energy": "high"}` ou similaire. Le caller
+    `load_persona_state` ne catch que les erreurs `persona_get()`, pas les
+    erreurs de désérialisation — résultat : tout le boot agent était abortable
+    par un doc persona corrompu.
+
+    Cette helper :
+    - Catch (ValueError, TypeError) — couvre str non-numérique, None, dict, list.
+    - Log un warning avec `field_name` pour audit (ne loggue PAS la valeur
+      brute pour éviter de polluer les logs avec des secrets potentiels).
+    - Retourne le `default` fourni par le caller (sémantique field-specific).
+
+    Paramètres :
+        value      : valeur brute du dict (peut être n'importe quel type).
+        default    : valeur de repli si le cast échoue.
+        field_name : nom du champ pour le warning log (ex: "energy", "trust").
+
+    Retour :
+        Float coercé en cas de succès, `default` sinon.
+    """
+    try:
+        return float(value)  # type: ignore[arg-type]
+    except (ValueError, TypeError):
+        log.warning(
+            "persona.serialization.invalid_numeric field=%s type=%s — falling back to default %r",
+            field_name,
+            type(value).__name__,
+            default,
+        )
+        return default
 
 # ── Sérialisation ────────────────────────────────────────────────────────────
 
@@ -88,7 +133,9 @@ def from_dict(d: dict) -> PersonaState:
     mood_arc = mood_arc[-MAX_ARC_LEN:]
 
     # ── energy ────────────────────────────────────────────────────────────────
-    energy = float(d.get("energy", 0.5))
+    # Régression P1 review #62 : _safe_float swallow ValueError/TypeError
+    # sur valeurs corrompues (ex: {"energy": "high"}) au lieu de propager.
+    energy = _safe_float(d.get("energy", 0.5), default=0.5, field_name="energy")
     energy = max(0.0, min(1.0, energy))
 
     # ── relationships ─────────────────────────────────────────────────────────
@@ -153,8 +200,16 @@ def _relationship_from_dict(subject: str, d: dict) -> ViewerRelationship:
     la désynchronisation si la clé du dict et le champ `subject` intérieur
     diffèrent (cas de migration).
     """
-    trust = max(0.0, min(1.0, float(d.get("trust", 0.0))))
-    familiarity = max(0.0, min(1.0, float(d.get("familiarity", 0.0))))
+    # Régression P1 review #62 : _safe_float — un viewer doc corrompu ne doit
+    # pas crasher tout le persona load. Reset au défaut 0.0 du champ touché.
+    trust = max(0.0, min(1.0, _safe_float(
+        d.get("trust", 0.0), default=0.0,
+        field_name=f"relationships[{subject}].trust",
+    )))
+    familiarity = max(0.0, min(1.0, _safe_float(
+        d.get("familiarity", 0.0), default=0.0,
+        field_name=f"relationships[{subject}].familiarity",
+    )))
     raw_gags = d.get("running_gags", [])
     if isinstance(raw_gags, (list, tuple)):
         running_gags = tuple(str(g) for g in raw_gags)

@@ -106,3 +106,109 @@ def test_from_dict_handles_missing_optional_fields() -> None:
     s_empty_arc = from_dict(d_empty_arc)
     assert len(s_empty_arc.mood_arc) >= 1
     assert s_empty_arc.mood_arc[0].state == "neutral"
+
+
+# Régression P1 review #62
+@pytest.mark.parametrize(
+    "bad_energy",
+    ["high", "0.5x", None, [], {}, "nan_but_string", ""],
+)
+def test_from_dict_invalid_energy_falls_back_to_default(
+    bad_energy: object, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Un doc corrompu avec `energy` non-numérique ne doit PAS crasher.
+
+    Régression P1 review #62 : `float("high")` levait ValueError jusqu'au
+    caller `load_persona_state`, abortant tout le boot agent. Le fix :
+    `_safe_float` swallow + warning + fallback au défaut 0.5.
+    """
+    import logging
+
+    d = {"mood_arc": [], "energy": bad_energy, "relationships": {}}
+    with caplog.at_level(logging.WARNING):
+        state = from_dict(d)
+
+    # No crash + énergie au défaut sécurisé.
+    assert state.energy == 0.5, (
+        f"energy={bad_energy!r} doit fallback à 0.5, obtenu {state.energy}"
+    )
+
+    # Warning émis avec le nom du champ pour audit (pas la valeur brute).
+    energy_warns = [
+        r for r in caplog.records
+        if "energy" in r.message and "invalid_numeric" in r.message
+    ]
+    assert len(energy_warns) >= 1, (
+        f"warning invalid_numeric attendu, logs={[r.message for r in caplog.records]}"
+    )
+
+
+@pytest.mark.parametrize(
+    "bad_value",
+    ["NaN_str", None, ["nope"], {"k": "v"}],
+)
+def test_from_dict_invalid_relationship_numerics_fall_back(
+    bad_value: object, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Trust/familiarity corrompus dans un viewer ne crashent pas le load.
+
+    Régression P1 review #62 — extension à `_relationship_from_dict`.
+    Le viewer touché perd ses metrics (reset à 0.0) mais le load continue.
+    """
+    import logging
+
+    d = {
+        "mood_arc": [],
+        "energy": 0.5,
+        "relationships": {
+            "vip:bob": {"subject": "vip:bob", "trust": bad_value, "familiarity": 0.4},
+        },
+    }
+    with caplog.at_level(logging.WARNING):
+        state = from_dict(d)
+
+    # Le viewer existe toujours, juste avec trust=0.0 (default fallback).
+    assert "vip:bob" in state.relationships
+    assert state.relationships["vip:bob"].trust == 0.0
+    # Familiarity intacte (pas corrompu).
+    assert state.relationships["vip:bob"].familiarity == 0.4
+
+    # Warning émis avec le subject path pour audit.
+    trust_warns = [
+        r for r in caplog.records
+        if "trust" in r.message and "vip:bob" in r.message
+    ]
+    assert len(trust_warns) >= 1
+
+
+def test_from_dict_corrupted_doc_loads_safely_overall() -> None:
+    """Un doc combinant plusieurs corruptions reste loadable (defense in depth).
+
+    Combine energy invalide + 1 viewer trust invalide + 1 viewer ok.
+    Vérifie que la partie saine est préservée.
+    """
+    d = {
+        "mood_arc": [],
+        "energy": "high",  # corrupted
+        "relationships": {
+            "vip:alice": {  # ok
+                "subject": "vip:alice",
+                "trust": 0.8,
+                "familiarity": 0.9,
+                "running_gags": ["chat noir"],
+            },
+            "vip:bob": {  # trust corrupted
+                "subject": "vip:bob",
+                "trust": None,
+                "familiarity": 0.5,
+            },
+        },
+    }
+    state = from_dict(d)
+
+    # Boot réussi malgré 2 corruptions.
+    assert state.energy == 0.5  # fallback
+    assert state.relationships["vip:alice"].trust == 0.8  # intact
+    assert state.relationships["vip:alice"].running_gags == ("chat noir",)
+    assert state.relationships["vip:bob"].trust == 0.0  # fallback
+    assert state.relationships["vip:bob"].familiarity == 0.5  # intact
