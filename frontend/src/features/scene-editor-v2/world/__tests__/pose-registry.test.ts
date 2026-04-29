@@ -56,3 +56,35 @@ describe("pose-registry — T3: idle pose resolves (default pose from INITIAL_ST
     expect(Object.prototype.hasOwnProperty.call(POSE_TO_VRMA_URL, "idle")).toBe(true);
   });
 });
+
+// ─── T4 (review fix P1 #60): prototype-pollution guard ───────────────────────
+
+describe("pose-registry — T4: rejects Object.prototype keys (prototype pollution guard)", () => {
+  // Ces clés sont héritées de Object.prototype et résolvent à des fonctions
+  // si on les indexe sans Object.hasOwn — bypass du `?? null` (function = truthy).
+  // L'agent émet `avatar_pose` arbitraire depuis world.delta, donc tout viewer
+  // recevant ces inputs ne doit PAS retourner une fonction comme URL VRMA.
+  const PROTOTYPE_KEYS = [
+    "toString",
+    "constructor",
+    "hasOwnProperty",
+    "valueOf",
+    "__proto__",
+    "isPrototypeOf",
+    "propertyIsEnumerable",
+  ] as const;
+
+  it.each(PROTOTYPE_KEYS)(
+    "returns null for prototype key '%s' (not own property of POSE_TO_VRMA_URL)",
+    (key) => {
+      const url = resolvePoseToVrmaUrl(key);
+      expect(url).toBeNull();
+    },
+  );
+
+  it("returns null for '__proto__' even if Object.prototype has it", () => {
+    // __proto__ est un getter spécial ; vérifier qu'il ne fuit pas.
+    const url = resolvePoseToVrmaUrl("__proto__");
+    expect(url).toBeNull();
+  });
+});

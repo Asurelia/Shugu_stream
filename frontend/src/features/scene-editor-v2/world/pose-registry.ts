@@ -50,6 +50,15 @@ export const POSE_TO_VRMA_URL: Record<string, string> = {
  * Returns null if the pose name is not registered (unknown or not yet
  * mapped). Callers should emit a warning and skip the animation in that case.
  *
+ * P1 fix review #60: must use `Object.hasOwn` to guard against prototype
+ * pollution. `avatar_pose` is an arbitrary string from world deltas — names
+ * like `"toString"`, `"constructor"`, `"__proto__"`, `"hasOwnProperty"` would
+ * resolve to inherited Object.prototype members instead of `undefined`. The
+ * `?? null` short-circuit would NOT trigger (a function reference is truthy),
+ * and the caller would `setCurrentVrmaUrl(<function>)` → invalid animation
+ * load + viewer desync. The own-property check ensures only explicitly
+ * registered keys can resolve to a URL.
+ *
  * @param pose - The abstract pose name emitted by the agent (e.g. "wave").
  * @returns The VRMA asset URL (e.g. "/assets/vrma/wave.vrma") or null.
  *
@@ -59,7 +68,13 @@ export const POSE_TO_VRMA_URL: Record<string, string> = {
  *
  * const missing = resolvePoseToVrmaUrl("unknown_pose");
  * // → null
+ *
+ * const proto = resolvePoseToVrmaUrl("toString");
+ * // → null (prototype-pollution guarded)
  */
 export function resolvePoseToVrmaUrl(pose: string): string | null {
-  return POSE_TO_VRMA_URL[pose] ?? null;
+  if (!Object.hasOwn(POSE_TO_VRMA_URL, pose)) {
+    return null;
+  }
+  return POSE_TO_VRMA_URL[pose];
 }
