@@ -51,7 +51,11 @@ USER shugu
 
 EXPOSE 8701
 
+# Régression P1 review #64 : la route FastAPI réelle est /api/health
+# (cf. backend/shugu/routes/health.py — GET /api/health). Probing /health
+# retournait 404 → container marqué unhealthy → service_healthy condition
+# jamais satisfaite → frontend (depends_on) ne démarrait jamais.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-    CMD curl -f http://localhost:8701/health || exit 1
+    CMD curl -f http://localhost:8701/api/health || exit 1
 
 CMD ["uvicorn", "shugu.app:app", "--host", "0.0.0.0", "--port", "8701"]

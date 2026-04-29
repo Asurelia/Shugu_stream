@@ -56,6 +56,10 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-shugu_dev_password}
       POSTGRES_DB: postgres        # DB de boot ; init-postgres.sh crée "shugu"
+      # Régression P1 review #64 : passé à init-postgres.sh pour CREATE ROLE
+      # shugu LOGIN PASSWORD. Le backend doit utiliser la même valeur dans
+      # son DSN (cf. service backend ci-dessous).
+      SHUGU_DB_PASSWORD: ${SHUGU_DB_PASSWORD:-shugu_dev_password}
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 5s
@@ -78,7 +82,10 @@ services:
     environment:
       # Overrides pour container-to-container (remplacent les valeurs .env).
       SHUGU_REDIS_URL: redis://redis:6379/1
-      SHUGU_POSTGRES_DSN: postgresql+asyncpg://shugu@postgres/shugu
+      # Régression P1 review #64 : DSN avec password substitué depuis .env
+      # (SHUGU_DB_PASSWORD). Doit matcher CREATE ROLE shugu PASSWORD dans
+      # init-postgres.sh — sans password, asyncpg échoue auth scram-sha-256.
+      SHUGU_POSTGRES_DSN: postgresql+asyncpg://shugu:${SHUGU_DB_PASSWORD:-shugu_dev_password}@postgres/shugu
       SHUGU_ENV: dev
       EVENT_BUS_MODE: redis
     depends_on:
@@ -88,8 +95,10 @@ services:
         condition: service_healthy
     ports:
       - "127.0.0.1:8701:8701"
+    # Régression P1 review #64 : route réelle = /api/health (pas /health).
+    # Doit matcher le path FastAPI dans backend/shugu/routes/health.py.
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8701/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8701/api/health"]
       interval: 30s
       timeout: 5s
       start_period: 20s
