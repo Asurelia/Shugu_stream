@@ -266,3 +266,70 @@ async def test_stop_is_idempotent() -> None:
     # Pas de start() préalable — stop() doit être safe dans tous les états
     await adapter.stop()
     await adapter.stop()  # deuxième appel ne doit pas crasher
+
+
+# ---------------------------------------------------------------------------
+# Régression P2 review #63 — opt-in flag enforcement
+# ---------------------------------------------------------------------------
+
+async def test_feed_chat_message_disabled_does_not_publish() -> None:
+    """Quand config.enabled=False, feed_chat_message ne publie RIEN sur le bus.
+
+    Régression P2 review #63 : sans ce guard, un script ou test qui appelait
+    feed_chat_message directement émettait des SenseEvent malgré le flag
+    SHUGU_TWITCH_ENABLED=false documenté dans Settings.
+    """
+    from shugu.adapters.sense_twitch import (
+        TwitchSenseAdapter,
+        TwitchSenseConfig,
+    )
+
+    bus = InProcessEventBus()
+    config = TwitchSenseConfig(enabled=False, channel="testchan")  # FALSE
+    adapter = TwitchSenseAdapter(bus=bus, config=config)
+
+    # Pattern monkeypatch (cf. docstring module) : capturer publish_sense_event
+    # directement, sans subscription bus. Évite le race-sleep et est plus
+    # rapide. Si le guard ne fonctionne pas, le mock est appelé → assert échoue.
+    publish_mock = AsyncMock()
+    with patch(
+        "shugu.adapters.sense_twitch.publish_sense_event",
+        publish_mock,
+    ):
+        await adapter.feed_chat_message("alice", "bonjour")
+
+    publish_mock.assert_not_called()
+
+
+async def test_start_disabled_is_noop_and_does_not_mark_started(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """start() en mode disabled log info "disabled" et ne mark pas _started."""
+    import logging
+
+    from shugu.adapters.sense_twitch import (
+        TwitchSenseAdapter,
+        TwitchSenseConfig,
+    )
+
+    bus = InProcessEventBus()
+    config = TwitchSenseConfig(enabled=False, channel="testchan")
+    adapter = TwitchSenseAdapter(bus=bus, config=config)
+
+    with caplog.at_level(logging.INFO):
+        await adapter.start()
+
+    # _started doit rester False — l'adapter peut être réactivé via une
+    # nouvelle instance avec enabled=True plus tard.
+    assert adapter._started is False, (
+        "start() en mode disabled ne doit PAS marquer _started=True"
+    )
+
+    # Log info "disabled" présent.
+    disabled_logs = [
+        r for r in caplog.records
+        if "disabled" in r.message.lower() and "twitch" in r.message.lower()
+    ]
+    assert len(disabled_logs) >= 1, (
+        f"Log 'disabled' attendu, obtenu : {[r.message for r in caplog.records]}"
+    )

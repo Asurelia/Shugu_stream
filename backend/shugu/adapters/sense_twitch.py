@@ -131,7 +131,25 @@ class TwitchSenseAdapter:
         La publication sur le bus est best-effort via `publish_sense_event`
         (qui swallow les exceptions bus et log un warning). Cette méthode
         ne re-raise jamais en cas d'erreur bus.
+
+        Régression P2 review #63 — opt-in flag enforcement
+        --------------------------------------------------
+        Si ``config.enabled is False``, retour immédiat (no-op) avec un
+        log debug. Sans ce guard, un test ou script qui appelait directement
+        ``feed_chat_message`` (sans passer par ``start()``) émettait des
+        SenseEvent malgré le flag ``SHUGU_TWITCH_ENABLED=false`` documenté.
+        Cela cassait le contrat opt-in : un déploiement croyant l'adapter
+        désactivé voyait quand même des events Twitch routés vers
+        l'agent/memory pipelines.
         """
+        if not self._config.enabled:
+            log.debug(
+                "twitch.feed_chat_message.skip_disabled username=%r — "
+                "config.enabled=False (SHUGU_TWITCH_ENABLED opt-in)",
+                username,
+            )
+            return
+
         username_clean = username.strip().lower()
         if not username_clean:
             log.warning(
@@ -178,7 +196,19 @@ class TwitchSenseAdapter:
 
         La méthode est idempotente : plusieurs appels consécutifs n'ont
         pas d'effet additionnel (le flag ``_started`` est vérifié).
+
+        Régression P2 review #63 : si ``config.enabled is False``, on log
+        info "disabled" et on ne marque PAS ``_started=True``. L'adapter
+        peut être ré-activé plus tard via une nouvelle instance.
         """
+        if not self._config.enabled:
+            log.info(
+                "twitch.start.disabled channel=%r — "
+                "SHUGU_TWITCH_ENABLED=false, no-op",
+                self._config.channel,
+            )
+            return
+
         if self._started:
             log.debug("twitch.start.already_started channel=%r", self._config.channel)
             return
