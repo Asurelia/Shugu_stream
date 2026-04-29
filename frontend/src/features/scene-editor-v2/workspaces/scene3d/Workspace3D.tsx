@@ -9,12 +9,29 @@
  *
  * Pour Phase 1 on rend juste 3 zones à la bonne place pour valider le SplitLayout
  * et donner un visuel cohérent avec le reste du shell.
+ *
+ * L4-viewer wiring (this PR):
+ * - useWorldDelta() subscribes to /ws/world WebSocket, applying each
+ *   world.delta into useWorldStateStore as long as this workspace is mounted.
+ * - useApplyWorldStateToViewer() bridges state changes from useWorldStateStore
+ *   to useSceneComposerStore (Three.js viewer controls). Currently: scene_id
+ *   is wired via setSelectedSceneId; avatar_pose and mood emit TODO console
+ *   warnings until a pose-name→URL registry and mood-lighting API exist.
+ *
+ * NOTE: the viewport renders a placeholder until Phase 2 wires the actual
+ * SceneComposerViewer. The hooks run and the store is updated correctly, but
+ * no visual Three.js feedback occurs until the viewer is mounted.
  */
 
 import { SplitLayout } from "../../shell/SplitLayout";
 import { Outliner } from "./panels/Outliner";
+import { useWorldDelta } from "../../world/useWorldDelta";
+import { useApplyWorldStateToViewer } from "../../world/useApplyWorldStateToViewer";
 
 export function Workspace3D() {
+  // Wire the L4 world-state pipeline: WS → store → viewer controls.
+  useWorldDelta();
+  useApplyWorldStateToViewer();
   return (
     <SplitLayout id="scene3d:left" direction="horizontal" defaultRatio={0.18}>
       <div className="sev2-panel sev2-panel--side">
