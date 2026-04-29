@@ -16,6 +16,27 @@ describe("useWorldStateStore — initial state", () => {
     expect(state.props).toEqual([]);
     expect(state.clock_ms).toBe(0);
   });
+
+  // Régression P2 review #58
+  it("hasReceivedSnapshot is false on initial state", () => {
+    expect(useWorldStateStore.getState().hasReceivedSnapshot).toBe(false);
+  });
+
+  it("hasReceivedSnapshot becomes true after first applyDelta", () => {
+    useWorldStateStore.getState().applyDelta({ avatar_pose: "wave" });
+    expect(useWorldStateStore.getState().hasReceivedSnapshot).toBe(true);
+  });
+
+  it("hasReceivedSnapshot becomes true after reset", () => {
+    useWorldStateStore.getState().reset({
+      avatar_pose: "bow",
+      scene_id: "kitchen",
+      mood: "happy",
+      props: [],
+      clock_ms: 100,
+    });
+    expect(useWorldStateStore.getState().hasReceivedSnapshot).toBe(true);
+  });
 });
 
 describe("useWorldStateStore — applyDelta", () => {
