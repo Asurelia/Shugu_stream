@@ -398,3 +398,44 @@ async def test_apply_publishes_even_when_caller_is_cancelled() -> None:
 
     # L'état du store est cohérent : avancé conformément à l'action
     assert store.read().avatar_pose == "wave"
+
+
+# ---------------------------------------------------------------------------
+# L3.4 — TickAction via store.apply
+# ---------------------------------------------------------------------------
+
+
+async def test_apply_tick_publishes_world_delta_with_clock_ms() -> None:
+    """store.apply(TickAction) publie un world.delta contenant clock_ms mis à jour.
+
+    Vérifie l'intégration complète store → reducer → publisher :
+    TickAction doit traverser le même pipeline que toute autre action.
+    """
+    state = _base_state(clock_ms=1000)
+    bus = _make_bus()
+    store = _make_store(state, bus)
+
+    from shugu.world.types import TickAction
+
+    received: asyncio.Queue[dict] = asyncio.Queue()
+
+    async def consume() -> None:
+        async for item in bus.subscribe("world.delta"):
+            await received.put(item)
+            return
+
+    task = asyncio.create_task(consume())
+    await asyncio.sleep(0.01)
+
+    await store.apply(TickAction(delta_ms=500))
+
+    event = await asyncio.wait_for(received.get(), timeout=1.0)
+    assert "clock_ms" in event, (
+        f"Le world.delta ne contient pas 'clock_ms' : {event!r}"
+    )
+    assert event["clock_ms"] == 1500, (
+        f"clock_ms attendu=1500, obtenu={event['clock_ms']!r}"
+    )
+
+    await asyncio.wait_for(task, timeout=1.0)
+    await bus.close()

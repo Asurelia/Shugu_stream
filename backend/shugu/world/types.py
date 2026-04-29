@@ -20,8 +20,8 @@ Choix de design :
    états successifs.
 
 5. **`clock_ms`** : horloge logique en millisecondes, monotone croissante.
-   Avancée par les reducers en fonction d'une "tick action" (futur — Phase 1
-   ne couvre pas encore l'auto-tick).
+   Avancée par `TickAction` — émis automatiquement par `AgentRunner` avant
+   chaque cycle perception/think (L3.4).
 """
 from __future__ import annotations
 
@@ -113,12 +113,32 @@ class PropSpawnAction:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class TickAction:
+    """Avance l'horloge logique du WorldState de delta_ms millisecondes.
+
+    Émis automatiquement par AgentRunner avant chaque cycle perception
+    pour maintenir clock_ms cohérent avec le temps réel écoulé. Permet
+    aux consommers downstream (animation, scheduling) de raisonner sur
+    une horloge logique commune indépendante de la wall-clock.
+
+    delta_ms doit être >= 0. Une valeur négative est silently clamped
+    à 0 par le reducer (jamais raise — robustesse runtime).
+    """
+
+    delta_ms: int
+
+    def to_bus_dict(self) -> dict:
+        return {"kind": "tick", "delta_ms": self.delta_ms}
+
+
 # Union typée — utilisée par les annotations des reducers et de l'agent.
 ActionUnion = Union[
     AvatarPoseAction,
     SceneTransitionAction,
     MoodSetAction,
     PropSpawnAction,
+    TickAction,
 ]
 
 
@@ -130,5 +150,6 @@ __all__ = [
     "Prop",
     "PropSpawnAction",
     "SceneTransitionAction",
+    "TickAction",
     "WorldState",
 ]
