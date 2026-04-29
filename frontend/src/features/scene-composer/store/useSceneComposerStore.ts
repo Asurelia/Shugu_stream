@@ -29,6 +29,13 @@
  *   - `setAfkLoops` : merge partiel config AFK
  *   - `setCurrentVrmaUrl` : pilote l'animation VRMA jouée dans le viewer
  *
+ * Extensions L4-viewer.2 :
+ *   - `currentMood` : mood courant reçu depuis le world state (null = aucun reçu)
+ *   - `setCurrentMood` : setter appelé par useApplyWorldStateToViewer
+ *   Note: `Mood` est re-déclaré localement (même Literal que world/useWorldStateStore)
+ *   pour éviter une dépendance circulaire (scene-editor-v2 → scene-composer est le
+ *   sens existant; importer dans l'autre sens créerait un cycle module).
+ *
  * Règles de cohérence E5.4 :
  *   - setPlayMode("playing") → force viewerMode="preview"
  *   - setPlayMode("stopped") → force viewerMode="edit" (round-trip symétrique)
@@ -40,6 +47,18 @@ import { create } from "zustand";
 import type { CameraPreset } from "../viewer/three-stage/createCamera";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
+
+/**
+ * Mood values — mirrors backend shugu/world/types.py Mood Literal and
+ * frontend world/useWorldStateStore.ts Mood type.
+ *
+ * Re-declared locally to avoid a module dependency cycle:
+ * scene-editor-v2/world already imports from scene-composer/store;
+ * importing in the opposite direction would create a cycle.
+ * Both declarations must stay in sync — enforced by the matching
+ * backend Literal in shugu/world/types.py.
+ */
+export type Mood = "neutral" | "happy" | "angry" | "sad" | "relaxed" | "surprised";
 
 /** Disposition des panneaux latéraux du Composer. */
 export type PanelLayout = "split-right" | "split-bottom" | "fullscreen";
@@ -148,6 +167,15 @@ export interface SceneComposerState {
    */
   currentVrmaUrl: string | null;
 
+  /**
+   * Mood courant reçu depuis le world state (L4-viewer.2).
+   *
+   * null = aucun snapshot serveur reçu encore (état pré-connexion).
+   * Le viewer Three.js consommera cette valeur pour ajuster le lighting
+   * (implémentation hors scope L4-viewer.2 — l'API est livrée ici).
+   */
+  currentMood: Mood | null;
+
   // ── Actions ──────────────────────────────────────────────────────────────
   setSelectedSceneId: (id: string | null) => void;
   setViewerMode: (mode: ViewerMode) => void;
@@ -200,6 +228,18 @@ export interface SceneComposerState {
    * null = arrêt de l'animation AFK (retour à l'animation de base ou silence).
    */
   setCurrentVrmaUrl: (url: string | null) => void;
+
+  /**
+   * Définit le mood courant reçu depuis le world state (L4-viewer.2).
+   *
+   * Appelé par useApplyWorldStateToViewer quand world.mood change.
+   * null = réinitialisation (pas de mood actif / avant premier snapshot).
+   *
+   * @example
+   * store.setCurrentMood("happy");  // → currentMood="happy"
+   * store.setCurrentMood(null);     // → currentMood=null
+   */
+  setCurrentMood: (mood: Mood | null) => void;
 }
 
 // ─── État initial ─────────────────────────────────────────────────────────────
@@ -221,6 +261,8 @@ const INITIAL_STATE = {
     idleSeconds: 30,
   } as AfkLoopsConfig,
   currentVrmaUrl: null as string | null,
+  // L4-viewer.2
+  currentMood: null as Mood | null,
 };
 
 // ─── Store ────────────────────────────────────────────────────────────────────
@@ -297,6 +339,9 @@ export const useSceneComposerStore = create<SceneComposerState>()((set) => ({
     })),
 
   setCurrentVrmaUrl: (url) => set({ currentVrmaUrl: url }),
+
+  // L4-viewer.2
+  setCurrentMood: (mood) => set({ currentMood: mood }),
 }));
 
 // ─── Selectors granulaires ────────────────────────────────────────────────────
@@ -339,6 +384,11 @@ export const selectAfkLoops = (s: SceneComposerState): AfkLoopsConfig => s.afkLo
 /** Retourne l'URL VRMA actuellement jouée (null = aucune). */
 export const selectCurrentVrmaUrl = (s: SceneComposerState): string | null =>
   s.currentVrmaUrl;
+
+// Selectors L4-viewer.2
+/** Retourne le mood courant reçu depuis le world state (null = pré-connexion). */
+export const selectCurrentMood = (s: SceneComposerState): Mood | null =>
+  s.currentMood;
 
 // ─── Dev global ───────────────────────────────────────────────────────────────
 
