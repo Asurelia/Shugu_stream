@@ -157,11 +157,11 @@ def test_build_components_uses_xml_parser_by_default() -> None:
 # T3 — build_components_empty_tool_registry_by_default
 # ---------------------------------------------------------------------------
 
-def test_build_components_empty_tool_registry_by_default() -> None:
-    """tool_registry.list_names() == [] par défaut — aucun tool pré-enregistré.
+def test_build_components_registers_default_handlers() -> None:
+    """tool_registry.list_names() == 4 tools L2.7 après build_agent_components.
 
-    Les tools sont enregistrés en L2.4 avec leurs handlers. L2.3 livre
-    uniquement le registre vide prêt à recevoir des registrations.
+    L2.7 enregistre les 4 handlers concrets au boot via register_default_handlers :
+    say, set_mood, set_pose, set_scene (triés alphabétiquement).
     """
     brain = _make_brain()
     identity = _make_identity()
@@ -177,7 +177,7 @@ def test_build_components_empty_tool_registry_by_default() -> None:
         world_store=world_store,
     )
 
-    assert result.tool_registry.list_names() == []
+    assert result.tool_registry.list_names() == ["say", "set_mood", "set_pose", "set_scene"]
 
 
 # ---------------------------------------------------------------------------

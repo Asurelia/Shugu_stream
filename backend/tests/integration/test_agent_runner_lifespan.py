@@ -330,3 +330,129 @@ async def test_e2e_publish_sense_triggers_world_delta() -> None:
         import contextlib
         with contextlib.suppress(asyncio.CancelledError):
             await collector_task
+
+
+# ---------------------------------------------------------------------------
+# T4 — e2e_say_tool_publishes_tts_request (L2.7)
+# ---------------------------------------------------------------------------
+
+
+class _BrainSayBonjour:
+    """Brain stub qui produit un tag `<tool name="say" text="bonjour"/>`.
+
+    Utilisé pour valider que le pipeline complet sense → LLM → tool_dispatch
+    → tts.request fonctionne end-to-end avec les handlers L2.7.
+    """
+
+    name: str = "stub_say_bonjour"
+
+    async def respond(
+        self,
+        *,
+        prompt: str,
+        history: list,
+        identity,
+    ) -> AsyncIterator[BrainDelta]:
+        yield BrainDelta(
+            text='Bonjour ! <tool name="say" text="bonjour"/>',
+            done=True,
+        )
+
+
+@pytest.mark.asyncio
+async def test_e2e_say_tool_publishes_tts_request() -> None:
+    """E2E L2.7 — sense.chat → LLM → say tool → tts.request publié sur le bus.
+
+    Instancie manuellement les composants (sans lifespan FastAPI) avec un brain
+    stub qui retourne `<tool name="say" text="bonjour"/>`.
+
+    Scénario :
+    1. Créer InProcessEventBus + WorldStateStore initial.
+    2. S'abonner à "tts.request" AVANT de démarrer le runner.
+    3. Construire AgentComponents avec _BrainSayBonjour.
+    4. Démarrer le runner (runner.start()).
+    5. Publier un sense.chat sur le bus.
+    6. Attendre max 2s pour recevoir un tts.request.
+    7. Vérifier que le payload contient text="bonjour".
+
+    Vérifie l'intégration complète L1+L2+L2.7 :
+    - L1 : SenseEvent reçu par AgentRunner via bus.subscribe("sense.chat").
+    - L2 : AgentLoop + LLMThinker + XmlTagToolCallParser parsent le tool call.
+    - L2.7 : handle_say() publie tts.request avec text="bonjour".
+    """
+    import contextlib
+
+    bus = InProcessEventBus()
+    initial_world = WorldState(
+        avatar_pose="idle",
+        scene_id="default",
+        mood="neutral",
+        props=(),
+        clock_ms=0,
+    )
+    world_store = WorldStateStore(initial=initial_world, bus=bus)
+
+    components = build_agent_components(
+        brain=_BrainSayBonjour(),
+        identity=VisitorIdentity(),
+        world_apply=world_apply,
+        bus=bus,
+        world_store=world_store,
+        runner_config=AgentRunnerConfig(
+            tick_interval_ms=100,
+            sense_queue_max=64,
+        ),
+    )
+
+    # S'abonner à tts.request AVANT de démarrer le runner.
+    received_tts: list[dict] = []
+    tts_received = asyncio.Event()
+
+    async def _collect_tts() -> None:
+        """Collecte les tts.request jusqu'à annulation."""
+        async for event in bus.subscribe("tts.request"):
+            received_tts.append(event)
+            tts_received.set()
+
+    collector_task = asyncio.create_task(_collect_tts(), name="tts_collector")
+    # Laisser le subscriber s'enregistrer dans le bus.
+    await asyncio.sleep(0)
+
+    await components.runner.start()
+    try:
+        # Laisser les tâches consumer du runner s'enregistrer sur le bus.
+        await asyncio.sleep(0)
+
+        # Publier un sense.chat pour déclencher un tick LLM.
+        sense = SenseEvent(
+            kind="chat",
+            subject="visitor:e2e_say_test",
+            payload={"text": "dis bonjour !"},
+            ts=datetime.now(),
+        )
+        await publish_sense_event(bus, sense)
+
+        # Attendre max 2s pour recevoir un tts.request.
+        try:
+            await asyncio.wait_for(tts_received.wait(), timeout=2.0)
+        except asyncio.TimeoutError:
+            pytest.fail(
+                "Aucun tts.request reçu en 2s après publication d'un sense.chat. "
+                f"Events TTS reçus : {received_tts!r}. "
+                "Vérifier que : 1) runner.start() lance _tick_task, "
+                "2) _BrainSayBonjour produit bien <tool name='say' text='bonjour'/>, "
+                "3) handle_say() publie tts.request sur le bus."
+            )
+
+        assert len(received_tts) > 0, "Aucun tts.request reçu."
+        bonjour_events = [e for e in received_tts if e.get("text") == "bonjour"]
+        assert len(bonjour_events) > 0, (
+            f"Aucun tts.request avec text='bonjour'. "
+            f"Events reçus : {received_tts!r}."
+        )
+
+    finally:
+        await components.runner.stop()
+        collector_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await collector_task

@@ -61,6 +61,7 @@ from ..core.identity import Identity
 from ..core.protocols import BrainAdapter, EventBus
 from ..world.types import WorldState
 from .action_parser import XmlTagActionParser
+from .handlers import register_default_handlers
 from .llm_thinker import LLMThinker
 from .loop import AgentLoop, WorldApply
 from .runner import AgentRunner, AgentRunnerConfig, WorldStoreLike
@@ -85,7 +86,8 @@ class AgentComponents:
 
     Attributs :
         loop           : AgentLoop configuré avec LLMThinker + world_apply injecté.
-        tool_registry  : ToolRegistry vide (les tools sont enregistrés en L2.4).
+        tool_registry  : ToolRegistry peuplé des 4 handlers L2.7 (say, set_pose,
+                         set_mood, set_scene) enregistrés au boot.
         initial_world  : WorldState de départ (snapshot au moment du wiring).
         world_store    : WorldStoreLike — conteneur mutable + auto-publish (L3.3).
         runner         : AgentRunner — boucle runtime sense→tick→act. Pas encore
@@ -104,7 +106,7 @@ class AgentComponents:
     """Boucle agent stateless câblée avec LLMThinker + world_apply."""
 
     tool_registry: ToolRegistry
-    """Registre des outils LLM-callable. Vide en L2.3 — peuplé en L2.4."""
+    """Registre des outils LLM-callable. Peuplé des 4 handlers L2.7 au boot."""
 
     initial_world: WorldState
     """Snapshot de départ du World au moment du wiring."""
@@ -155,7 +157,7 @@ def build_agent_components(
     est délégué au caller via ``await components.runner.start()``.
 
     Étapes d'assemblage :
-    1. Crée un ToolRegistry vide (les tools sont enregistrés en L2.4).
+    1. Crée un ToolRegistry et enregistre les 4 handlers L2.7 (register_default_handlers).
     2. Crée XmlTagActionParser (parser par défaut).
     3. Crée LLMThinker(brain, tools, parser, identity).
     4. Crée AgentLoop(thinker, world_apply) — world_apply injecté par le caller.
@@ -206,6 +208,11 @@ def build_agent_components(
         await components.runner.start()
     """
     registry = ToolRegistry()
+
+    # L2.7 — Enregistre les 4 handlers concrets au démarrage.
+    # Le registry est frais (vide) ici, donc aucun risque de double-register.
+    register_default_handlers(registry, event_bus=bus, world_store=world_store)
+
     parser = XmlTagActionParser()
     tool_call_parser = XmlTagToolCallParser()
     thinker = LLMThinker(
@@ -236,4 +243,5 @@ def build_agent_components(
     )
 
 
-__all__ = ["AgentComponents", "build_agent_components"]
+# register_default_handlers is re-exported from handlers for callers who import from wiring.
+__all__ = ["AgentComponents", "build_agent_components", "register_default_handlers"]
