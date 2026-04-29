@@ -60,9 +60,16 @@ describe("useApplyWorldStateToViewer — T2: scene_id → setSelectedSceneId", (
 // ─── T3: mood change does not call setSelectedSceneId ────────────────────────
 
 describe("useApplyWorldStateToViewer — T3: unrelated field does not trigger scene_id sync", () => {
-  it("does not call setSelectedSceneId when only mood changes", () => {
+  it("does not RE-call setSelectedSceneId when only mood changes after first snapshot", () => {
     renderHook(() => useApplyWorldStateToViewer());
 
+    // 1er delta — ouvre le gate (hasReceivedSnapshot=true) et propage le
+    // scene_id courant. C'est le comportement attendu post-fix P2 #58.
+    act(() => {
+      useWorldStateStore.getState().applyDelta({ scene_id: "kitchen" });
+    });
+
+    // À partir d'ici, on spy + on émet un delta SANS scene_id : pas de re-call.
     const setSelectedSceneId = vi.spyOn(
       useSceneComposerStore.getState(),
       "setSelectedSceneId",
@@ -72,7 +79,6 @@ describe("useApplyWorldStateToViewer — T3: unrelated field does not trigger sc
       useWorldStateStore.getState().applyDelta({ mood: "happy" });
     });
 
-    // scene_id did not change so setSelectedSceneId must NOT be called
     expect(setSelectedSceneId).not.toHaveBeenCalled();
   });
 });
@@ -108,5 +114,49 @@ describe("useApplyWorldStateToViewer — T5: unmount cleans up", () => {
         useWorldStateStore.getState().applyDelta({ mood: "sad" });
       });
     }).not.toThrow();
+  });
+});
+
+// ─── T6 (review fix P2 #58) : initial mount NE PROPAGE PAS le placeholder ─────
+
+describe("useApplyWorldStateToViewer — T6: gated until first snapshot", () => {
+  it("does NOT call setSelectedSceneId on initial mount before any server payload", () => {
+    const setSelectedSceneId = vi.spyOn(
+      useSceneComposerStore.getState(),
+      "setSelectedSceneId",
+    );
+
+    // Mount le hook — sans avoir appelé applyDelta/reset, hasReceivedSnapshot=false
+    renderHook(() => useApplyWorldStateToViewer());
+
+    // Le hook NE DOIT PAS propager le placeholder INITIAL_STATE.scene_id="default".
+    // Sinon un consumer (SceneInspectorPanel.getScene("default")) ferait un fetch
+    // raté + flicker UI avant que le vrai world.delta arrive.
+    expect(setSelectedSceneId).not.toHaveBeenCalled();
+  });
+
+  it("does NOT emit avatar_pose/mood TODO logs before first snapshot", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    renderHook(() => useApplyWorldStateToViewer());
+    const l4Warns = warnSpy.mock.calls
+      .map((c) => String(c[0]))
+      .filter((msg) => msg.includes("[L4]"));
+    expect(l4Warns).toEqual([]);
+  });
+
+  it("starts propagating after first applyDelta (gate opens)", () => {
+    const setSelectedSceneId = vi.spyOn(
+      useSceneComposerStore.getState(),
+      "setSelectedSceneId",
+    );
+
+    renderHook(() => useApplyWorldStateToViewer());
+
+    // 1er server payload — gate s'ouvre, le scene_id reçu est propagé.
+    act(() => {
+      useWorldStateStore.getState().applyDelta({ scene_id: "kitchen" });
+    });
+
+    expect(setSelectedSceneId).toHaveBeenCalledWith("kitchen");
   });
 });

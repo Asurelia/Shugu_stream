@@ -50,6 +50,17 @@ export type WorldDelta = Partial<WorldState>;
 /** Zustand store shape. */
 type WorldStore = {
   state: WorldState;
+  /**
+   * Whether the store has received at least one server payload (delta or full
+   * snapshot) from the WebSocket. Consumers (e.g. useApplyWorldStateToViewer)
+   * gate their effects on this flag so the placeholder INITIAL_STATE never
+   * leaks to downstream UI before the first authoritative snapshot lands.
+   *
+   * Régression P2 review #58 : sans ce gate, le hook propageait
+   * scene_id="default" (placeholder) sur mount, déclenchant un getScene("default")
+   * + flicker UI avant que le vrai world.delta arrive.
+   */
+  hasReceivedSnapshot: boolean;
   /** Merges a partial delta into the current state. */
   applyDelta: (delta: WorldDelta) => void;
   /** Replaces the entire state with a fresh snapshot. */
@@ -67,11 +78,15 @@ const INITIAL_STATE: WorldState = {
 
 export const useWorldStateStore = create<WorldStore>((set) => ({
   state: INITIAL_STATE,
+  hasReceivedSnapshot: false,
 
   applyDelta: (delta) =>
-    set((s) => ({ state: { ...s.state, ...delta } })),
+    set((s) => ({
+      state: { ...s.state, ...delta },
+      hasReceivedSnapshot: true,
+    })),
 
-  reset: (next) => set({ state: next }),
+  reset: (next) => set({ state: next, hasReceivedSnapshot: true }),
 }));
 
 /**
@@ -79,5 +94,8 @@ export const useWorldStateStore = create<WorldStore>((set) => ({
  * Not exported in index.ts (test-only).
  */
 export function __resetWorldStateStoreForTest(): void {
-  useWorldStateStore.setState({ state: { ...INITIAL_STATE, props: [] } });
+  useWorldStateStore.setState({
+    state: { ...INITIAL_STATE, props: [] },
+    hasReceivedSnapshot: false,
+  });
 }

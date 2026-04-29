@@ -53,26 +53,37 @@ export function useApplyWorldStateToViewer(): void {
   const avatarPose = useWorldStateStore((s) => s.state.avatar_pose);
   const mood = useWorldStateStore((s) => s.state.mood);
 
-  // ── scene_id → setSelectedSceneId (direct match) ──────────────────────────
+  // Régression P2 review #58 : gate sur le 1er snapshot serveur reçu.
+  // Sans ça, useEffect tire au premier render avec INITIAL_STATE
+  // (scene_id="default", etc.), écrasant la sélection UI courante avant que
+  // /ws/world délivre la vraie valeur. Un consumer downstream
+  // (SceneInspectorPanel.getScene(selectedSceneId)) verrait un fetch raté +
+  // flicker. Le flag est mis à true au premier applyDelta/reset du store.
+  const hasReceivedSnapshot = useWorldStateStore((s) => s.hasReceivedSnapshot);
+
+  // ── scene_id → setSelectedSceneId (direct match, gated) ───────────────────
   useEffect(() => {
+    if (!hasReceivedSnapshot) return;
     useSceneComposerStore.getState().setSelectedSceneId(sceneId);
-  }, [sceneId]);
+  }, [sceneId, hasReceivedSnapshot]);
 
   // ── avatar_pose → TODO log (no pose-name→VRMA-URL resolver yet) ───────────
   useEffect(() => {
+    if (!hasReceivedSnapshot) return;
     console.warn(
       `[L4] avatar pose change not wired yet: ${avatarPose}. ` +
         "A pose-name → VRMA asset URL registry is needed before this can " +
         "call setCurrentVrmaUrl(). Track in next PR.",
     );
-  }, [avatarPose]);
+  }, [avatarPose, hasReceivedSnapshot]);
 
   // ── mood → TODO log (no mood-lighting API in useSceneComposerStore yet) ───
   useEffect(() => {
+    if (!hasReceivedSnapshot) return;
     console.warn(
       `[L4] mood change not wired yet: ${mood}. ` +
         "A mood-lighting API on useSceneComposerStore is needed. " +
         "Track in next PR.",
     );
-  }, [mood]);
+  }, [mood, hasReceivedSnapshot]);
 }
