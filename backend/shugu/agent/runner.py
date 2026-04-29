@@ -82,15 +82,33 @@ import asyncio
 import contextlib
 import logging
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional, Protocol, runtime_checkable
 
 from ..core.protocols import EventBus
+from ..policy.decisions import check_capability
+from ..policy.matrix import DEFAULT_MATRIX, PolicyMatrix
+from ..policy.modes import StreamMode
 from ..senses.types import SenseEvent
 from ..world.types import ActionUnion, WorldState
 from .loop import AgentLoop
 from .types import Perception, Thought
+
+# Mapping tool name → Capability.
+# Les tools listés ici sont soumis à la vérification policy avant dispatch.
+# Un tool absent de ce mapping est dispatché avec un WARNING (allow par défaut).
+# Justification : un tool inconnu de la policy n'est pas forcément dangereux —
+# bloquer silencieusement des tools légitimes non référencés serait pire qu'autoriser.
+# L'opérateur est alerté par le WARNING et peut ajouter le mapping si nécessaire.
+TOOL_CAPABILITIES: dict[str, str] = {
+    # L2.7 handlers TTS / chat
+    "say": "chat_egress",
+    # L2.7 handlers WorldState
+    "set_pose": "world_mutation",
+    "set_mood": "world_mutation",
+    "set_scene": "world_mutation",
+}
 
 log = logging.getLogger(__name__)
 
@@ -160,6 +178,12 @@ class AgentRunnerConfig:
         sense_topics     : tuple des topics bus à écouter. Chaque topic reçoit
                            une tâche consumer dédiée pour paralléliser la
                            consommation (chat, voice, event, vision).
+        stream_mode      : mode de stream courant (Phase 6 policy matrix).
+                           Défaut ``"operator_only"`` — fail-safe opt-in.
+                           Lit depuis ``Settings.stream_mode`` dans app.py.
+        policy_matrix    : matrice de policy à utiliser pour le hook PreToolUse.
+                           Défaut ``DEFAULT_MATRIX`` — matrice de production.
+                           Remplaçable en test (ex: matrice vide, matrice custom).
     """
 
     tick_interval_ms: int = 500
@@ -170,6 +194,12 @@ class AgentRunnerConfig:
         "sense.event",
         "sense.vision",
     )
+    # Phase 6 — policy matrix + stream mode.
+    # frozen=True sur AgentRunnerConfig + frozen=True sur PolicyMatrix → hashable.
+    # Utiliser field(default_factory=...) pour les valeurs mutables ; ici
+    # DEFAULT_MATRIX est immutable (frozen dataclass) donc affectation directe ok.
+    stream_mode: StreamMode = "operator_only"
+    policy_matrix: PolicyMatrix = field(default_factory=lambda: DEFAULT_MATRIX)
 
 
 # ---------------------------------------------------------------------------
@@ -355,6 +385,38 @@ class AgentRunner:
         # Si tool_registry est None (backward-compat), les tool_calls sont ignorés.
         if self._tool_registry is not None and thought.tool_calls:
             for tool_call in thought.tool_calls:
+                # ── Hook PreToolUse (Phase 6 — policy gate) ──────────────
+                # Vérifier la capability requise par ce tool contre la policy
+                # matrix avant tout dispatch. Si deny → skip + WARNING.
+                # Si aucun mapping → WARNING + allow (fail-open pour tools
+                # inconnus de la policy, préférable au blocage silencieux).
+                cap_name = TOOL_CAPABILITIES.get(tool_call.name)
+                if cap_name is None:
+                    # Aucun mapping capability → autoriser + avertir l'opérateur.
+                    log.warning(
+                        "agent_runner.policy_no_capability_mapping name=%s "
+                        "mode=%s — dispatching anyway (unknown tool)",
+                        tool_call.name,
+                        self._config.stream_mode,
+                    )
+                else:
+                    # Vérifier la décision policy pour ce mode × capability.
+                    decision = check_capability(
+                        self._config.policy_matrix,
+                        self._config.stream_mode,
+                        cap_name,  # type: ignore[arg-type]
+                    )
+                    if decision == "deny":
+                        log.warning(
+                            "agent_runner.policy_deny name=%s capability=%s mode=%s — skipping dispatch",
+                            tool_call.name,
+                            cap_name,
+                            self._config.stream_mode,
+                        )
+                        continue  # Skip ce tool_call — pas de dispatch.
+                    # "allow" et "warn" : dispatch normal (warn = futur usage).
+                # ── Fin Hook PreToolUse ───────────────────────────────────
+
                 try:
                     await self._tool_registry.dispatch(tool_call.name, tool_call.params)
                 except Exception as exc:
