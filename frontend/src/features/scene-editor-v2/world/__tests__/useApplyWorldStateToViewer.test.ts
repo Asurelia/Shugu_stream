@@ -1,12 +1,10 @@
 /**
  * Tests for useApplyWorldStateToViewer hook.
  *
- * Strategy: since avatar_pose → VRMA URL conversion has no catalog mapping
- * (the viewer expects full URLs, world state holds pose names), the hook
- * emits console.warn("[L4] ...") for unresolvable mappings.
- *
- * For scene_id we use useSceneComposerStore.setSelectedSceneId — direct match.
- * For avatar_pose and mood we verify the TODO-log path (console.warn called).
+ * L4-viewer.1: scene_id → setSelectedSceneId (direct match).
+ * L4-viewer.2:
+ *   - avatar_pose → setCurrentVrmaUrl (via pose-registry; warn on unknown)
+ *   - mood → setCurrentMood
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
@@ -83,27 +81,109 @@ describe("useApplyWorldStateToViewer — T3: unrelated field does not trigger sc
   });
 });
 
-// ─── T4: avatar_pose change emits TODO warn ───────────────────────────────────
+// ─── T4 (L4-viewer.2): avatar_pose known → setCurrentVrmaUrl called ──────────
 
-describe("useApplyWorldStateToViewer — T4: avatar_pose TODO-log", () => {
-  it("emits console.warn with [L4] tag when avatar_pose changes", () => {
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+describe("useApplyWorldStateToViewer — T4: avatar_pose known → calls setCurrentVrmaUrl", () => {
+  it("calls setCurrentVrmaUrl with the VRMA URL when a known pose arrives", () => {
+    const setCurrentVrmaUrl = vi.spyOn(
+      useSceneComposerStore.getState(),
+      "setCurrentVrmaUrl",
+    );
 
     renderHook(() => useApplyWorldStateToViewer());
 
     act(() => {
+      // "wave" is in the registry → /assets/vrma/wave.vrma
       useWorldStateStore.getState().applyDelta({ avatar_pose: "wave" });
     });
 
-    const calls = warnSpy.mock.calls.map((c) => String(c[0]));
-    const hasL4Warn = calls.some((msg) => msg.includes("[L4]"));
-    expect(hasL4Warn).toBe(true);
+    expect(setCurrentVrmaUrl).toHaveBeenCalledWith("/assets/vrma/wave.vrma");
+  });
+
+  it("calls setCurrentVrmaUrl with idle_loop URL for the default 'idle' pose", () => {
+    const setCurrentVrmaUrl = vi.spyOn(
+      useSceneComposerStore.getState(),
+      "setCurrentVrmaUrl",
+    );
+
+    renderHook(() => useApplyWorldStateToViewer());
+
+    // First snapshot sets hasReceivedSnapshot=true AND triggers the avatarPose effect
+    // (INITIAL_STATE.avatar_pose = "idle"). Expect idle → idle_loop.vrma.
+    act(() => {
+      useWorldStateStore.getState().applyDelta({ avatar_pose: "idle" });
+    });
+
+    expect(setCurrentVrmaUrl).toHaveBeenCalledWith("/assets/vrma/idle_loop.vrma");
   });
 });
 
-// ─── T5: unmount does not throw (no leak) ────────────────────────────────────
+// ─── T5 (L4-viewer.2): avatar_pose unknown → warn, no setCurrentVrmaUrl ──────
 
-describe("useApplyWorldStateToViewer — T5: unmount cleans up", () => {
+describe("useApplyWorldStateToViewer — T5: avatar_pose unknown → warn, no setter call", () => {
+  it("emits [L4] console.warn and does NOT call setCurrentVrmaUrl for unknown pose", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const setCurrentVrmaUrl = vi.spyOn(
+      useSceneComposerStore.getState(),
+      "setCurrentVrmaUrl",
+    );
+
+    renderHook(() => useApplyWorldStateToViewer());
+
+    act(() => {
+      useWorldStateStore.getState().applyDelta({ avatar_pose: "unknown_pose_xyz" });
+    });
+
+    const l4Warns = warnSpy.mock.calls
+      .map((c) => String(c[0]))
+      .filter((msg) => msg.includes("[L4]"));
+    expect(l4Warns.length).toBeGreaterThan(0);
+    expect(l4Warns[0]).toContain("unknown_pose_xyz");
+    expect(setCurrentVrmaUrl).not.toHaveBeenCalled();
+  });
+});
+
+// ─── T6 (L4-viewer.2): mood change → setCurrentMood ─────────────────────────
+
+describe("useApplyWorldStateToViewer — T6: mood change → calls setCurrentMood", () => {
+  it("calls setCurrentMood when mood changes in the world store", () => {
+    const setCurrentMood = vi.spyOn(
+      useSceneComposerStore.getState(),
+      "setCurrentMood",
+    );
+
+    renderHook(() => useApplyWorldStateToViewer());
+
+    act(() => {
+      useWorldStateStore.getState().applyDelta({ mood: "happy" });
+    });
+
+    expect(setCurrentMood).toHaveBeenCalledWith("happy");
+  });
+
+  it("calls setCurrentMood for each distinct mood value", () => {
+    const setCurrentMood = vi.spyOn(
+      useSceneComposerStore.getState(),
+      "setCurrentMood",
+    );
+
+    renderHook(() => useApplyWorldStateToViewer());
+
+    act(() => {
+      useWorldStateStore.getState().applyDelta({ mood: "sad" });
+    });
+    act(() => {
+      useWorldStateStore.getState().applyDelta({ mood: "angry" });
+    });
+
+    expect(setCurrentMood).toHaveBeenCalledWith("sad");
+    expect(setCurrentMood).toHaveBeenCalledWith("angry");
+  });
+});
+
+// ─── T7: unmount does not throw (no leak) ────────────────────────────────────
+
+describe("useApplyWorldStateToViewer — T7: unmount cleans up", () => {
   it("unmounts without throwing or leaking subscriptions", () => {
     const { unmount } = renderHook(() => useApplyWorldStateToViewer());
 
@@ -117,9 +197,9 @@ describe("useApplyWorldStateToViewer — T5: unmount cleans up", () => {
   });
 });
 
-// ─── T6 (review fix P2 #58) : initial mount NE PROPAGE PAS le placeholder ─────
+// ─── T8 (review fix P2 #58): initial mount NE PROPAGE PAS le placeholder ──────
 
-describe("useApplyWorldStateToViewer — T6: gated until first snapshot", () => {
+describe("useApplyWorldStateToViewer — T8: gated until first snapshot", () => {
   it("does NOT call setSelectedSceneId on initial mount before any server payload", () => {
     const setSelectedSceneId = vi.spyOn(
       useSceneComposerStore.getState(),
@@ -130,12 +210,10 @@ describe("useApplyWorldStateToViewer — T6: gated until first snapshot", () => 
     renderHook(() => useApplyWorldStateToViewer());
 
     // Le hook NE DOIT PAS propager le placeholder INITIAL_STATE.scene_id="default".
-    // Sinon un consumer (SceneInspectorPanel.getScene("default")) ferait un fetch
-    // raté + flicker UI avant que le vrai world.delta arrive.
     expect(setSelectedSceneId).not.toHaveBeenCalled();
   });
 
-  it("does NOT emit avatar_pose/mood TODO logs before first snapshot", () => {
+  it("does NOT emit [L4] warns before first snapshot", () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     renderHook(() => useApplyWorldStateToViewer());
     const l4Warns = warnSpy.mock.calls
