@@ -434,6 +434,25 @@ class Settings(BaseSettings):
                     "Le démarrage effectif de la boucle (AgentRunner) est L2.4.",
     )
 
+    # Phase 4.0 — Twitch EventSub adapter (dev-mock + prod-ready API).
+    # ``twitch_enabled=False`` par défaut : opt-in explicite. L'adapter est
+    # instancié mais inactif tant que le flag est False (aucune connexion WS).
+    # Phase 4.1 (futur) : ajouter oauth_token + app_client_id ici.
+    twitch_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("TWITCH_ENABLED", "SHUGU_TWITCH_ENABLED"),
+        description="Active l'adapter Twitch EventSub (dev-mock Phase 4.0, WS prod Phase 4.1). "
+                    "OFF par défaut — opt-in via SHUGU_TWITCH_ENABLED=true "
+                    "(ou TWITCH_ENABLED=true).",
+    )
+    twitch_channel: str = Field(
+        default="",
+        validation_alias=AliasChoices("TWITCH_CHANNEL", "SHUGU_TWITCH_CHANNEL"),
+        description="Slug du channel Twitch à écouter (ex: 'mystream'). "
+                    "Inclus dans le payload de chaque SenseEvent pour filtrage multi-canal. "
+                    "Env : SHUGU_TWITCH_CHANNEL (ou TWITCH_CHANNEL).",
+    )
+
     # Phase 6 — Policy matrix : mode de stream courant.
     # Défaut ``"operator_only"`` : comportement fail-safe opt-in.
     # Un déploiement frais reste sous contrôle opérateur jusqu'à basculement
