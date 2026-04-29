@@ -54,6 +54,7 @@ Usage typique dans app.py lifespan (L2.5) :
 """
 from __future__ import annotations
 
+import functools
 from dataclasses import dataclass
 from typing import Optional
 
@@ -61,11 +62,13 @@ from ..core.identity import Identity
 from ..core.protocols import BrainAdapter, EventBus
 from ..world.types import WorldState
 from .action_parser import XmlTagActionParser
+from .handlers import HandlerDeps, handle_say, handle_set_mood, handle_set_pose, handle_set_scene
+from .handlers import WorldStoreLike as _HandlerWorldStoreLike
 from .llm_thinker import LLMThinker
 from .loop import AgentLoop, WorldApply
 from .runner import AgentRunner, AgentRunnerConfig, WorldStoreLike
 from .tool_call_parser import XmlTagToolCallParser
-from .tools import ToolRegistry
+from .tools import Tool, ToolRegistry
 
 
 @dataclass(frozen=True, slots=True)
@@ -138,6 +141,104 @@ _DEFAULT_INITIAL_WORLD = WorldState(
 )
 
 
+def register_default_handlers(
+    registry: ToolRegistry,
+    *,
+    event_bus: EventBus,
+    world_store: _HandlerWorldStoreLike,
+) -> None:
+    """Enregistre les 4 handlers concrets L2.7 dans le registre.
+
+    Appelé depuis `build_agent_components` au boot. Peuple le registre avec :
+    - ``say``       : publie tts.request sur le bus event.
+    - ``set_pose``  : applique AvatarPoseAction sur world_store.
+    - ``set_mood``  : applique MoodSetAction avec validation Mood Literal.
+    - ``set_scene`` : applique SceneTransitionAction sur world_store.
+
+    Chaque handler est une closure partielle qui capture `HandlerDeps` (bus +
+    world_store). `functools.partial` est utilisé pour adapter la signature
+    `handle_X(deps, params)` → `ToolHandler(params)` attendue par `ToolRegistry`.
+
+    Paramètres :
+        registry    : ToolRegistry vide dans lequel enregistrer les tools.
+        event_bus   : EventBus — bus d'events pour tts.request.
+        world_store : WorldStoreLike — store pour les actions avatar/mood/scène.
+
+    Lève :
+        ValueError si un tool est déjà enregistré (single-writer rule).
+        Cela ne devrait pas arriver au boot car le registry est frais.
+    """
+    deps = HandlerDeps(event_bus=event_bus, world_store=world_store)
+
+    registry.register(Tool(
+        name="say",
+        description=(
+            "Synthétise un texte en audio TTS et le diffuse sur le stream. "
+            "Paramètre : text (str) — le texte à prononcer."
+        ),
+        params_schema={
+            "type": "object",
+            "properties": {"text": {"type": "string", "description": "Texte à prononcer."}},
+            "required": ["text"],
+        },
+        handler=functools.partial(handle_say, deps),
+    ))
+
+    registry.register(Tool(
+        name="set_pose",
+        description=(
+            "Change la pose de l'avatar (wave, bow, idle_breath, etc.). "
+            "Paramètre : pose (str) — identifiant logique de l'animation."
+        ),
+        params_schema={
+            "type": "object",
+            "properties": {"pose": {"type": "string", "description": "Identifiant de pose avatar."}},
+            "required": ["pose"],
+        },
+        handler=functools.partial(handle_set_pose, deps),
+    ))
+
+    registry.register(Tool(
+        name="set_mood",
+        description=(
+            "Change le mood du streamer IA. "
+            "Valeurs valides : neutral, happy, angry, sad, relaxed, surprised. "
+            "Paramètre : mood (str)."
+        ),
+        params_schema={
+            "type": "object",
+            "properties": {
+                "mood": {
+                    "type": "string",
+                    "enum": ["neutral", "happy", "angry", "sad", "relaxed", "surprised"],
+                    "description": "Mood cible.",
+                }
+            },
+            "required": ["mood"],
+        },
+        handler=functools.partial(handle_set_mood, deps),
+    ))
+
+    registry.register(Tool(
+        name="set_scene",
+        description=(
+            "Déclenche une transition vers une autre scène (ex: kitchen → bedroom). "
+            "Paramètre : target_scene_id (str) — identifiant de la scène cible."
+        ),
+        params_schema={
+            "type": "object",
+            "properties": {
+                "target_scene_id": {
+                    "type": "string",
+                    "description": "Identifiant de la scène cible.",
+                }
+            },
+            "required": ["target_scene_id"],
+        },
+        handler=functools.partial(handle_set_scene, deps),
+    ))
+
+
 def build_agent_components(
     *,
     brain: BrainAdapter,
@@ -206,6 +307,11 @@ def build_agent_components(
         await components.runner.start()
     """
     registry = ToolRegistry()
+
+    # L2.7 — Enregistre les 4 handlers concrets au démarrage.
+    # Le registry est frais (vide) ici, donc aucun risque de double-register.
+    register_default_handlers(registry, event_bus=bus, world_store=world_store)
+
     parser = XmlTagActionParser()
     tool_call_parser = XmlTagToolCallParser()
     thinker = LLMThinker(
@@ -236,4 +342,4 @@ def build_agent_components(
     )
 
 
-__all__ = ["AgentComponents", "build_agent_components"]
+__all__ = ["AgentComponents", "build_agent_components", "register_default_handlers"]
