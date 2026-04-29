@@ -370,7 +370,35 @@ class AgentRunner:
         # Appliquer chaque action planifiée sur le store (auto-publish world.delta).
         # Les Actions L3 sont commitées AVANT les ToolCalls : un handler TTS peut
         # lire le world_store et voir le state déjà à jour.
+        #
+        # Régression P1 review #59 : la policy matrix gardait UNIQUEMENT les
+        # tool_calls. Mais le LLM peut produire des `<action kind="..."/>` qui
+        # mutent directement le world via les reducers L3. En mode
+        # `emergency_mute` (kill switch), ces actions passaient AU TRAVERS du
+        # garde-fou — bypass critique. Fix : check `world_mutation` capability
+        # avant CHAQUE action L3 aussi.
+        #
+        # Toutes les Action variants (AvatarPose / SceneTransition / MoodSet /
+        # PropSpawn / Tick) tombent sous la capability "world_mutation" — c'est
+        # la définition même de leur effet. TickAction inclus : émettre une
+        # avance d'horloge log = signal de vie viewer-side, c'est aussi du
+        # world mutation. Si on voulait l'exempter (le tick auto interne du
+        # runner ne devrait jamais être bloqué), on devrait le faire dans la
+        # path "auto-tick" — voir `_emit_auto_tick`. Ici on bloque les actions
+        # produites PAR LE LLM, qui sont sujettes à compromise.
         for action in thought.planned_actions:
+            decision = check_capability(
+                self._config.policy_matrix,
+                self._config.stream_mode,
+                "world_mutation",
+            )
+            if decision == "deny":
+                log.warning(
+                    "agent_runner.policy_deny_action action=%r capability=world_mutation mode=%s — skipping apply",
+                    action,
+                    self._config.stream_mode,
+                )
+                continue
             try:
                 await self._world_store.apply(action)
             except Exception as exc:

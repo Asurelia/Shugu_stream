@@ -19,7 +19,8 @@ Ce module n'importe rien de ``shugu.senses``, ``shugu.agent``, ni
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Mapping
 
 from .modes import Capability, Decision, StreamMode
 
@@ -35,8 +36,17 @@ class PolicyMatrix:
     qu'une instance partagée entre plusieurs composants (runner, tests) reste
     cohérente. Pour modifier la policy, créer une nouvelle instance.
 
+    Régression P2 review #59 : ``frozen=True`` empêche la réassignation de
+    ``self.entries`` mais PAS les mutations imbriquées (``matrix.entries[k] =
+    "allow"``). Vu que ``DEFAULT_MATRIX`` est exporté et partagé, une mutation
+    accidentelle ou test-side leakerait dans tous les consumers en process.
+    Fix : ``__post_init__`` wrap le dict reçu dans ``MappingProxyType(dict(...))``
+    — (a) shallow-copy isole de la source, (b) la proxy lève ``TypeError`` sur
+    toute tentative de mutation. Même pattern que ``Tool.params_schema`` et
+    ``SenseEvent.payload`` ailleurs dans le codebase — single source of truth.
+
     Attributs :
-        entries : dictionnaire ``{(mode, capability): decision}``.
+        entries : mapping immutable ``{(mode, capability): decision}``.
                   Toute combinaison absente retourne ``"deny"`` (fail-safe).
 
     Exemple d'usage :
@@ -47,7 +57,22 @@ class PolicyMatrix:
         decision = matrix.check("emergency_mute", "chat_egress") # "deny" (absent)
     """
 
-    entries: dict[tuple[StreamMode, Capability], Decision]
+    entries: Mapping[tuple[StreamMode, Capability], Decision]
+
+    def __post_init__(self) -> None:
+        """Force l'immutabilité réelle du dict d'entrées.
+
+        Wrap dans MappingProxyType après une shallow-copy. Sans ça,
+        ``frozen=True`` n'empêche que la réassignation de l'attribut, pas
+        ``self.entries[k] = ...``. Le ``object.__setattr__`` est nécessaire
+        car ``frozen=True`` interdit l'affectation directe.
+        """
+        # Shallow-copy puis wrap en MappingProxyType : la proxy partage les
+        # références internes mais bloque toutes les mutations via __setitem__,
+        # __delitem__, .clear(), etc. Le dict source reste mutable côté caller
+        # mais ne peut plus affecter cette matrix.
+        frozen_entries = MappingProxyType(dict(self.entries))
+        object.__setattr__(self, "entries", frozen_entries)
 
     def check(self, mode: StreamMode, capability: Capability) -> Decision:
         """Retourne la Decision pour le mode et la capability donnés.

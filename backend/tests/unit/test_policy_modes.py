@@ -196,6 +196,50 @@ def test_policy_matrix_is_frozen() -> None:
         matrix.entries = {}  # type: ignore[misc]
 
 
+# Régression P2 review #59
+def test_policy_matrix_entries_dict_is_immutable_after_construction() -> None:
+    """``matrix.entries[(mode, cap)] = ...`` doit lever TypeError.
+
+    Régression P2 review #59 : sans MappingProxyType wrap, frozen=True ne
+    bloque que la réassignation de l'attribut entries, pas les mutations
+    imbriquées. Un consumer pouvait alors muter DEFAULT_MATRIX.entries en
+    place et changer les décisions process-wide.
+    """
+    import pytest
+    matrix = PolicyMatrix(entries={
+        ("operator_only", "chat_egress"): "allow",
+    })
+
+    # (1) Mutation via la proxy interdite.
+    with pytest.raises(TypeError):
+        matrix.entries[("operator_only", "chat_egress")] = "deny"  # type: ignore[index]
+
+    # (2) Suppression via la proxy interdite.
+    with pytest.raises(TypeError):
+        del matrix.entries[("operator_only", "chat_egress")]  # type: ignore[attr-defined]
+
+
+def test_policy_matrix_isolated_from_source_dict_mutation() -> None:
+    """Muter le dict d'origine après construction ne fuit pas dans la matrix.
+
+    Si le caller détient le dict source et le mute, la matrix doit rester
+    intacte (shallow-copy au construct).
+    """
+    source = {("operator_only", "chat_egress"): "allow"}
+    matrix = PolicyMatrix(entries=source)
+
+    # Muter le dict source — la matrix ne doit PAS refléter le changement.
+    source[("operator_only", "chat_egress")] = "deny"
+    source[("emergency_mute", "chat_egress")] = "allow"
+
+    assert matrix.check("operator_only", "chat_egress") == "allow", (
+        "matrix isolée du dict source"
+    )
+    assert matrix.check("emergency_mute", "chat_egress") == "deny", (
+        "ajout source ne fuit pas dans la matrix"
+    )
+
+
 def test_stream_modes_are_valid_literals() -> None:
     """Les StreamMode Literal sont accessibles et couvrent les 5 modes attendus."""
     # Les Literal sont des types Python — on vérifie que les valeurs attendues

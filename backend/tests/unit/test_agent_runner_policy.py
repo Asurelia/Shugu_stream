@@ -287,6 +287,96 @@ async def test_runner_logs_warning_with_mode_capability_name(caplog: Any) -> Non
 # ---------------------------------------------------------------------------
 
 
+async def test_runner_blocks_planned_actions_when_world_mutation_deny(
+    caplog: Any,
+) -> None:
+    """Régression P1 review #59 — actions L3 (Thought.planned_actions) doivent
+    aussi être gardées par la policy matrix, pas que les tool_calls.
+
+    Avant fix : seul le hook avant ``tool_registry.dispatch`` était présent.
+    En mode emergency_mute, le LLM pouvait quand même émettre
+    ``<action kind="avatar.pose" pose="wave"/>`` qui était parsé en
+    AvatarPoseAction puis appliqué via ``world_store.apply()`` — bypass
+    direct de la matrice pour le path mutation principal.
+
+    Après fix : la boucle ``for action in planned_actions`` check
+    ``world_mutation`` capability avant chaque ``world_apply``. En deny,
+    apply est skip + warning policy_deny_action.
+    """
+    from shugu.world.types import AvatarPoseAction
+
+    # Un thought avec UNE action L3 (pas de tool_call). Mode emergency_mute.
+    action = AvatarPoseAction(pose="wave")
+    thought = Thought(
+        reasoning="bypass attempt",
+        planned_actions=(action,),
+        tool_calls=(),
+    )
+
+    runner, bus = _build_runner(
+        tool_registry=None,  # pas besoin de registry, on teste les actions
+        thought=thought,
+        stream_mode="emergency_mute",
+    )
+
+    # Capture l'état avant — doit rester intact si policy bloque.
+    initial_pose = runner._world_store.read().avatar_pose
+    assert initial_pose == "idle", "fixture: state initial doit être idle"
+
+    with caplog.at_level(logging.WARNING, logger="shugu.agent.runner"):
+        result = await _run_with_sense(runner, bus)
+
+    assert result is not None, "run_once ne doit pas crasher sur policy deny"
+
+    # L'action NE doit PAS avoir été appliquée — avatar_pose reste "idle".
+    final_pose = runner._world_store.read().avatar_pose
+    assert final_pose == "idle", (
+        f"AvatarPoseAction(pose='wave') ne doit PAS muter le world en "
+        f"emergency_mute. Bypass policy détecté : pose={final_pose!r}"
+    )
+
+    # Un warning policy_deny_action doit être émis
+    deny_warnings = [
+        r for r in caplog.records
+        if "policy_deny_action" in r.message
+        or ("deny" in r.message.lower() and "action" in r.message.lower())
+    ]
+    assert len(deny_warnings) >= 1, (
+        f"Aucun warning policy_deny_action émis. "
+        f"Logs : {[r.message for r in caplog.records]}"
+    )
+
+
+async def test_runner_allows_planned_actions_when_world_mutation_allow() -> None:
+    """Régression P1 review #59 — en operator_only, planned_actions passent.
+
+    Vérifie que le fix ne sur-bloque pas : si la matrix autorise
+    world_mutation pour le mode courant, l'action est appliquée normalement.
+    """
+    from shugu.world.types import AvatarPoseAction
+
+    action = AvatarPoseAction(pose="wave")
+    thought = Thought(
+        reasoning="legitimate pose",
+        planned_actions=(action,),
+        tool_calls=(),
+    )
+
+    runner, bus = _build_runner(
+        tool_registry=None,
+        thought=thought,
+        stream_mode="operator_only",  # autorise world_mutation
+    )
+
+    await _run_with_sense(runner, bus)
+
+    final_pose = runner._world_store.read().avatar_pose
+    assert final_pose == "wave", (
+        f"En operator_only, l'action doit être appliquée. "
+        f"Obtenu pose={final_pose!r}"
+    )
+
+
 async def test_unknown_tool_no_capability_check_skipped(caplog: Any) -> None:
     """T10 — un tool sans mapping capability est dispatché (allow) avec un warning.
 
