@@ -10,12 +10,18 @@ MiniMax-M2 guidance (from the official model card / tool_calling_guide):
     on replay, otherwise subsequent responses degrade. We strip them only at
     the very last moment (before TTS/display), not inside `respond()`, so
     PrepWorker stores the thinking in history untouched.
+
+Phase 5.2 — persona wiring :
+  `persona_state_provider` est un `Callable[[], PersonaState | None]` injecté
+  au constructeur (pattern dependency injection). Il est lu à chaque appel
+  `respond()` pour permettre le hot-reload de l'état persona sans restart.
+  Si non fourni (None), le system prompt est utilisé sans fragment persona.
 """
 from __future__ import annotations
 
 import json
 import re
-from typing import AsyncIterator
+from typing import TYPE_CHECKING, AsyncIterator, Callable, Optional
 
 import httpx
 
@@ -23,6 +29,11 @@ from ..config import Settings
 from ..core.errors import BrainError
 from ..core.identity import Identity
 from ..core.protocols import BrainAdapter, BrainDelta, PersonalityLoader, Turn
+from ..persona.prompt_fragment import render_fragment
+from ._persona_subject import derive_viewer_subject
+
+if TYPE_CHECKING:
+    from ..persona.state import PersonaState
 
 _THINK_RE = re.compile(r"<think>.*?</think>\s*", re.DOTALL)
 
@@ -44,10 +55,13 @@ class ShuguPersonaBrain(BrainAdapter):
         settings: Settings,
         personality_loader: PersonalityLoader,
         http: httpx.AsyncClient,
+        # Phase 5.2 — hot-reload provider; None = rétrocompat (pas de fragment)
+        persona_state_provider: Optional[Callable[[], Optional["PersonaState"]]] = None,
     ):
         self._settings = settings
         self._personality = personality_loader
         self._http = http
+        self._persona_state_provider = persona_state_provider
 
     async def respond(
         self,
@@ -57,7 +71,20 @@ class ShuguPersonaBrain(BrainAdapter):
         identity: Identity,
     ) -> AsyncIterator[BrainDelta]:
         persona = self._personality.get("shugu")
-        messages = [{"role": "system", "content": persona.system_prompt}]
+        persona_fragment = ""
+        if self._persona_state_provider is not None:
+            persona_state = self._persona_state_provider()
+            if persona_state is not None:
+                viewer_subject = derive_viewer_subject(identity)
+                persona_fragment = render_fragment(persona_state, viewer_subject)
+
+        final_system_prompt = (
+            f"{persona.system_prompt}\n\n{persona_fragment}"
+            if persona_fragment
+            else persona.system_prompt
+        )
+
+        messages = [{"role": "system", "content": final_system_prompt}]
         for turn in history[-self._settings.visitor_history_turns:]:
             messages.append({"role": turn.role, "content": turn.content})
         messages.append({"role": "user", "content": prompt})
