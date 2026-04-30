@@ -194,7 +194,33 @@ async def lifespan(app: FastAPI):
     personality_loader = MarkdownPersonalityLoader(
         Path(settings.personality_dir), poll_every_s=settings.personality_reload_poll_s,
     )
-    brain_shugu = ShuguPersonaBrain(settings, personality_loader, http)
+    # Phase 5.2 — persona wiring : chargement best-effort de PersonaState
+    # et injection d'un provider Callable dans ShuguPersonaBrain.
+    # Le provider lit app.state.persona_state à chaque call respond() (hot-reload
+    # sans restart). Conditionnel sur streamer_agent_enabled + mémoire disponible.
+    if settings.streamer_agent_enabled and _memory is not None:
+        from .persona.loader import load_persona_state as _load_persona_state
+        app.state.persona_state = await _load_persona_state(_memory)
+        log.info(
+            "persona.loaded",
+            mood=app.state.persona_state.mood_arc[-1].state
+            if app.state.persona_state.mood_arc else "unknown",
+        )
+    else:
+        app.state.persona_state = None
+        log.info(
+            "persona.disabled",
+            reason="streamer_agent_enabled=False or memory unavailable",
+        )
+
+    brain_shugu = ShuguPersonaBrain(
+        settings,
+        personality_loader,
+        http,
+        # Phase 5.2 — provider Callable : lit app.state.persona_state
+        # au moment de chaque call (hot-reload sans restart possible).
+        persona_state_provider=lambda: getattr(app.state, "persona_state", None),
+    )
     filter_brain = FilterBrain(settings, personality_loader, http)
 
     # TTS with automatic fallback. Primary configurable via TTS_PRIMARY.

@@ -360,6 +360,74 @@ class _BrainSayBonjour:
 
 
 @pytest.mark.asyncio
+async def test_e2e_persona_loaded_at_startup() -> None:
+    """T_e2e Phase 5.2 — avec streamer_agent_enabled=True + DB disponible,
+    app.state.persona_state est un PersonaState (non-None) après lifespan startup.
+
+    Stratégie :
+    - Injecte streamer_agent_enabled=True via env var.
+    - Démarre le lifespan via TestClient.
+    - Vérifie que app.state.persona_state n'est pas None.
+    - Vérifie que c'est bien un PersonaState (type check).
+    - Si le lifespan échoue (DB/Redis non dispo), skip avec message explicite.
+
+    Note : Le PersonaState peut être l'état neutre par défaut si la DB est vide —
+    load_persona_state est best-effort et retourne TOUJOURS un état valide.
+    """
+    import os
+
+    os.environ["STREAMER_AGENT_ENABLED"] = "true"
+    os.environ.setdefault("SHUGU_ENV_FILE", "/nonexistent/.env")
+    os.environ.setdefault("IP_HASH_SALT", "test-salt-32-chars-for-pytest-ok-")
+    os.environ.setdefault("SHUGU_REDIS_URL", "redis://localhost:6379/1")
+
+    try:
+        from shugu.config import get_settings
+        get_settings.cache_clear()
+
+        from starlette.testclient import TestClient
+
+        from shugu.app import create_app
+        from shugu.persona.state import PersonaState
+
+        test_app = create_app()
+
+        client = TestClient(test_app)
+        try:
+            client.__enter__()
+        except (
+            RuntimeError, OSError, ConnectionError, ImportError, ValueError,
+        ) as exc:
+            pytest.skip(
+                f"TestClient lifespan failed ({type(exc).__name__}: {exc}) — "
+                "dépendances extérieures indisponibles (Redis, DB). "
+                "Test skippé en env sans infra."
+            )
+        try:
+            # Ces assertions doivent ÉCHOUER (pas skipper) si le wiring Phase 5.2 est cassé.
+            persona_state = getattr(test_app.state, "persona_state", "MISSING")
+            assert persona_state != "MISSING", (
+                "app.state.persona_state n'est pas défini après lifespan startup. "
+                "Phase 5.2 — le wiring app.py doit assigner cet attribut."
+            )
+            assert persona_state is not None, (
+                "app.state.persona_state est None alors que streamer_agent_enabled=True. "
+                "Phase 5.2 — load_persona_state devrait toujours retourner un PersonaState "
+                "(même neutre par défaut si la DB est vide)."
+            )
+            assert isinstance(persona_state, PersonaState), (
+                f"app.state.persona_state doit être un PersonaState, "
+                f"got {type(persona_state).__name__!r}."
+            )
+        finally:
+            client.__exit__(None, None, None)
+    finally:
+        os.environ.pop("STREAMER_AGENT_ENABLED", None)
+        from shugu.config import get_settings
+        get_settings.cache_clear()
+
+
+@pytest.mark.asyncio
 async def test_e2e_say_tool_publishes_tts_request() -> None:
     """E2E L2.7 — sense.chat → LLM → say tool → tts.request publié sur le bus.
 
