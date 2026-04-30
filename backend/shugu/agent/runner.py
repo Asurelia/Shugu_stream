@@ -88,6 +88,7 @@ from datetime import datetime
 from typing import Optional, Protocol, runtime_checkable
 
 from ..core.protocols import EventBus
+from ..observability.metrics import MetricsRecorder, NullMetricsRecorder
 from ..policy.decisions import check_capability
 from ..policy.matrix import DEFAULT_MATRIX, PolicyMatrix
 from ..policy.modes import StreamMode
@@ -249,12 +250,16 @@ class AgentRunner:
         bus: EventBus,
         config: AgentRunnerConfig | None = None,
         tool_registry: ToolRegistryLike | None = None,
+        metrics_recorder: MetricsRecorder | None = None,
     ) -> None:
         self._loop = loop
         self._world_store = world_store
         self._bus = bus
         self._config = config or AgentRunnerConfig()
         self._tool_registry = tool_registry
+        # Phase 8.2 — MetricsRecorder : NullMetricsRecorder si non fourni (no-op,
+        # backward-compat). En production, app.py injecte un PrometheusMetricsRecorder.
+        self._metrics: MetricsRecorder = metrics_recorder or NullMetricsRecorder()
 
         # Queue bornée : deque(maxlen=N) drop automatiquement l'élément le plus
         # ancien quand on append au-delà de la capacité (comportement stdlib).
@@ -352,6 +357,9 @@ class AgentRunner:
             ``tuple[Thought, WorldState]`` avec le Thought produit et le
             nouveau WorldState après application des actions, ou ``None``.
         """
+        # Phase 8.2 — incrémenter le compteur de ticks à chaque run_once().
+        self._metrics.record_tick()
+
         # L3.4 auto-tick : avance clock_ms du delta réel depuis le dernier tick.
         # Émis AVANT le check senses — l'horloge avance même sans perception
         # (animations/loops dépendent d'une horloge logique continue).
@@ -415,9 +423,16 @@ class AgentRunner:
                     action,
                     self._config.stream_mode,
                 )
+                # Phase 8.2 — compteur de refus policy pour les actions L3.
+                self._metrics.record_policy_deny(
+                    mode=self._config.stream_mode,
+                    capability="world_mutation",
+                )
                 continue
             try:
                 await self._world_store.apply(action)
+                # Phase 8.2 — compteur d'actions appliquées (label = type d'action).
+                self._metrics.record_action(type(action).__name__)
             except Exception as exc:
                 log.warning(
                     "agent_runner.apply_failed action=%r error=%r",
@@ -458,12 +473,19 @@ class AgentRunner:
                             cap_name,
                             self._config.stream_mode,
                         )
+                        # Phase 8.2 — compteur de refus policy pour les tools.
+                        self._metrics.record_policy_deny(
+                            mode=self._config.stream_mode,
+                            capability=cap_name,
+                        )
                         continue  # Skip ce tool_call — pas de dispatch.
                     # "allow" et "warn" : dispatch normal (warn = futur usage).
                 # ── Fin Hook PreToolUse ───────────────────────────────────
 
                 try:
                     await self._tool_registry.dispatch(tool_call.name, tool_call.params)
+                    # Phase 8.2 — compteur de tools dispatchés.
+                    self._metrics.record_tool(tool_call.name)
                 except Exception as exc:
                     log.warning(
                         "agent_runner.tool_dispatch_failed name=%s params=%r error=%r",
@@ -567,4 +589,4 @@ class AgentRunner:
             return None
 
 
-__all__ = ["AgentRunner", "AgentRunnerConfig", "ToolRegistryLike", "WorldStoreLike"]
+__all__ = ["AgentRunner", "AgentRunnerConfig", "ToolRegistryLike", "WorldStoreLike"]  # MetricsRecorder via observability

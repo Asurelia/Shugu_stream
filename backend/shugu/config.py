@@ -453,6 +453,26 @@ class Settings(BaseSettings):
                     "Env : SHUGU_TWITCH_CHANNEL (ou TWITCH_CHANNEL).",
     )
 
+    # Phase 8.2 — Observabilité : format de log + endpoint /metrics.
+    # ``log_format="json"`` → JSON Lines Loki-compatible (défaut production).
+    # ``log_format="pretty"`` → console colorée (dev local).
+    # ``metrics_enabled=False`` par défaut — opt-in explicite pour éviter
+    # d'exposer /metrics en prod sans action délibérée de l'opérateur.
+    log_format: Literal["json", "pretty"] = Field(
+        default="json",
+        validation_alias=AliasChoices("LOG_FORMAT", "SHUGU_LOG_FORMAT"),
+        description="Format de log structlog : 'json' (Loki) ou 'pretty' (dev). "
+                    "Défaut 'json' (production). "
+                    "Env : SHUGU_LOG_FORMAT (ou LOG_FORMAT).",
+    )
+    metrics_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("METRICS_ENABLED", "SHUGU_METRICS_ENABLED"),
+        description="Active l'endpoint GET /metrics (format Prometheus texte 0.0.4). "
+                    "OFF par défaut — opt-in via SHUGU_METRICS_ENABLED=true. "
+                    "Env : SHUGU_METRICS_ENABLED (ou METRICS_ENABLED).",
+    )
+
     # Phase 6 — Policy matrix : mode de stream courant.
     # Défaut ``"operator_only"`` : comportement fail-safe opt-in.
     # Un déploiement frais reste sous contrôle opérateur jusqu'à basculement

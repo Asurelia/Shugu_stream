@@ -45,6 +45,10 @@ dependencies = [
     # 1er appel à Embedder.embed_* — tant que `memory_enabled=False`, aucune
     # pénalité au boot.
     "fastembed>=0.3,<1.0",
+    # prometheus_client — Phase 8.2 Observabilité. Métriques Prometheus exposées
+    # via GET /metrics (gated par SHUGU_METRICS_ENABLED). Compteurs AgentRunner,
+    # WorldStateStore, SensesBus — pas de daemon thread requis.
+    "prometheus_client>=0.20,<1.0",
 ]
 
 [project.optional-dependencies]
