@@ -1,0 +1,139 @@
+# docker-compose.yml — stack dev locale complète Shugu (Phase 8.1)
+#
+# Usage rapide :
+#   cp .env.example .env          # puis remplir les secrets
+#   docker compose up -d          # démarre redis + postgres + backend + frontend
+#   docker compose run --rm backend alembic upgrade head   # migrations (1 fois)
+#   docker compose --profile vip up -d   # ajoute LiveKit (optionnel)
+#
+# Note : ops/docker-compose.yml est un fichier DISTINCT — il gère uniquement
+# redis pour le launcher Windows natif (Shugu-Start.cmd). Ne pas confondre.
+
+networks:
+  shugu_network:
+    driver: bridge
+
+volumes:
+  shugu_postgres:
+  shugu_redis:
+  shugu_vrma_assets:
+
+services:
+
+  # ── Redis ──────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: shugu-redis
+    networks: [shugu_network]
+    volumes:
+      - shugu_redis:/data
+    ports:
+      - "127.0.0.1:6379:6379"
+    command: >
+      redis-server
+        --maxmemory 256mb
+        --maxmemory-policy allkeys-lru
+        --appendonly yes
+        --appendfsync everysec
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  # ── Postgres + pgvector ────────────────────────────────────────────────
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: shugu-postgres
+    networks: [shugu_network]
+    volumes:
+      - shugu_postgres:/var/lib/postgresql/data
+      - ./ops/scripts/init-postgres.sh:/docker-entrypoint-initdb.d/10-init.sh:ro
+    ports:
+      - "127.0.0.1:5432:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-shugu_dev_password}
+      POSTGRES_DB: postgres        # DB de boot ; init-postgres.sh crée "shugu"
+      # Régression P1 review #64 : passé à init-postgres.sh pour CREATE ROLE
+      # shugu LOGIN PASSWORD. Le backend doit utiliser la même valeur dans
+      # son DSN (cf. service backend ci-dessous).
+      SHUGU_DB_PASSWORD: ${SHUGU_DB_PASSWORD:-shugu_dev_password}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  # ── Backend FastAPI ────────────────────────────────────────────────────
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: shugu-backend
+    networks: [shugu_network]
+    volumes:
+      - shugu_vrma_assets:/app/assets
+    env_file:
+      - path: .env
+        required: false          # graceful si .env absent (CI, syntax check)
+    environment:
+      # Overrides pour container-to-container (remplacent les valeurs .env).
+      SHUGU_REDIS_URL: redis://redis:6379/1
+      # Régression P1 review #64 : DSN avec password substitué depuis .env
+      # (SHUGU_DB_PASSWORD). Doit matcher CREATE ROLE shugu PASSWORD dans
+      # init-postgres.sh — sans password, asyncpg échoue auth scram-sha-256.
+      SHUGU_POSTGRES_DSN: postgresql+asyncpg://shugu:${SHUGU_DB_PASSWORD:-shugu_dev_password}@postgres/shugu
+      SHUGU_ENV: dev
+      EVENT_BUS_MODE: redis
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8701:8701"
+    # Régression P1 review #64 : route réelle = /api/health (pas /health).
+    # Doit matcher le path FastAPI dans backend/shugu/routes/health.py.
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8701/api/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+    restart: unless-stopped
+
+  # ── Frontend Next.js ────────────────────────────────────────────────────
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    container_name: shugu-frontend
+    networks: [shugu_network]
+    environment:
+      SHUGU_BACKEND_URL: http://backend:8701
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:3005:3005"
+    restart: unless-stopped
+
+  # ── LiveKit (optionnel — profile vip) ─────────────────────────────────
+  livekit:
+    image: livekit/livekit-server:latest
+    container_name: shugu-livekit
+    profiles: [vip]
+    networks: [shugu_network]
+    ports:
+      - "127.0.0.1:7880:7880"   # HTTP API
+      - "127.0.0.1:7881:7881"   # RTC/TCP
+      - "7882:7882/udp"         # RTC/UDP (doit être joignable depuis clients)
+    environment:
+      LIVEKIT_KEYS: "${LIVEKIT_API_KEY:-devkey}:${LIVEKIT_API_SECRET:-devsecret}"
+    command: >
+      --dev
+      --bind 0.0.0.0
+    restart: unless-stopped

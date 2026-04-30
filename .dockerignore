@@ -1,0 +1,40 @@
+# ── VCS ────────────────────────────────────────────────────────────────────
+.git
+.gitignore
+.gitattributes
+
+# ── Python env / build artifacts ───────────────────────────────────────────
+backend/.venv
+backend/__pycache__
+backend/**/__pycache__
+backend/**/*.pyc
+backend/**/*.pyo
+backend/.pytest_cache
+backend/.ruff_cache
+backend/dist
+backend/*.egg-info
+backend/**/*.egg-info
+
+# ── Node build artifacts ────────────────────────────────────────────────────
+frontend/node_modules
+frontend/.next
+frontend/out
+
+# ── Local runtime state ─────────────────────────────────────────────────────
+.shugustream
+ops/logs
+ops/env/.env
+
+# ── Large binary assets (embedded VRM, audio samples) ───────────────────────
+assets
+preview
+
+# ── Dev tools ───────────────────────────────────────────────────────────────
+tools
+docs
+*.md
+*.cmd
+
+# ── OS junk ─────────────────────────────────────────────────────────────────
+Thumbs.db
+.DS_Store
