@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
@@ -13,6 +12,8 @@ import structlog
 from fastapi import FastAPI
 
 from .adapters.brain_filter import FilterBrain
+
+# Phase 8.2 — observability foundation (Prometheus metrics + structlog JSON)
 from .adapters.brain_hermes_tools import HermesEmbodiedBrain
 from .adapters.brain_shugu import ShuguPersonaBrain
 from .adapters.moderation_basic import BasicModeration
@@ -34,6 +35,8 @@ from .core.viewer_count import ViewerCounter
 from .db.session import session_scope
 from .director.background import DirectorBackground
 from .memory import MemoryAgent
+from .observability.log_config import configure_logging
+from .observability.metrics import PrometheusMetricsRecorder
 from .pipeline.ambient import AmbientConfig, AmbientDaemon
 from .pipeline.body_router import BodyRouter, BodyRouterDeps
 from .pipeline.extraction_worker import ExtractionWorker
@@ -109,30 +112,43 @@ def get_memory() -> MemoryAgent:
     return _memory
 
 
-def _setup_logging() -> None:
-    structlog.configure(
-        processors=[
-            structlog.contextvars.merge_contextvars,
-            structlog.processors.add_log_level,
-            structlog.processors.TimeStamper(fmt="iso", utc=True),
-            structlog.processors.JSONRenderer(),
-        ],
-        wrapper_class=structlog.make_filtering_bound_logger(logging.INFO),
-        cache_logger_on_first_use=True,
-    )
+def _setup_logging(log_format: str = "json") -> None:
+    """Configure structlog selon le format défini dans Settings.log_format.
+
+    Phase 8.2 : délègue à observability.log_config pour centraliser la config.
+    """
+    configure_logging(log_format)  # type: ignore[arg-type]
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    _setup_logging()
+    settings = get_settings()
+    _setup_logging(settings.log_format)
     log = structlog.get_logger("lifespan")
 
     global _redis, _quota, _rate_limiter, _metrics, _email_sender, _memory
-    settings = get_settings()
     http = httpx.AsyncClient()
     _redis = aioredis.from_url(settings.shugu_redis_url, decode_responses=False)
     _rate_limiter = SlidingRateLimiter()
     _metrics = Metrics()
+
+    # ── Phase 8.2 — observability ──────────────────────────────────────────
+    # Instanciation du recorder Prometheus dès le boot (avant les workers)
+    # pour que les counters soient disponibles même avant que l'agent démarre.
+    # Si metrics_enabled=False, le recorder existe mais /metrics n'est pas monté —
+    # les counters s'accumulent silencieusement sans être exposés.
+    #
+    # IMPORTANT : on passe CollectorRegistry() explicitement pour rester isolé
+    # du registre global prometheus_client (évite les collisions avec les
+    # métriques du process uvicorn). L'endpoint /metrics appelle
+    # app.state.prom_recorder.generate_latest() — le même registre.
+    _prom_recorder = PrometheusMetricsRecorder(registry=None)  # crée un registre isolé frais
+    app.state.prom_recorder = _prom_recorder  # exposé à l'endpoint /metrics
+    log.info(
+        "observability.prometheus_recorder_ready",
+        metrics_enabled=settings.metrics_enabled,
+    )
+    # ── Fin Phase 8.2 ─────────────────────────────────────────────────────
 
     # Email (Resend) — NullSender si pas de clé, ResendSender sinon. Ça permet
     # de développer/tester les flows auth sans avoir un domaine vérifié.
@@ -433,13 +449,17 @@ async def lifespan(app: FastAPI):
             props=(),
             clock_ms=0,
         )
-        _world_store = _WorldStateStore(_initial_world, event_bus)
+        # Phase 8.2 — injecter le recorder Prometheus dans WorldStateStore et runner.
+        _world_store = _WorldStateStore(
+            _initial_world, event_bus, metrics_recorder=_prom_recorder
+        )
         _agent_components = build_agent_components(
             brain=brain_shugu,
             identity=OperatorIdentity(username="streamer"),
             world_apply=_world_apply,
             bus=event_bus,
             world_store=_world_store,
+            metrics_recorder=_prom_recorder,
         )
         app.state.agent_components = _agent_components
         # Re-wire world_ws deps avec le world_store nouvellement créé pour
@@ -629,6 +649,31 @@ def create_app() -> FastAPI:
     settings = get_settings()
     if settings.voice_duplex_enabled:
         app.include_router(operator_voice_ws.router)
+
+    # ── Phase 8.2 — observability ──────────────────────────────────────────
+    # Endpoint GET /metrics exposant les métriques Prometheus (texte 0.0.4).
+    # Gated par settings.metrics_enabled (défaut False — opt-in explicite).
+    # Content-Type conforme à la spécification Prometheus text format 0.0.4.
+    #
+    # app.state.prom_recorder est défini dans le lifespan (ci-dessus), donc
+    # disponible dès le premier requête. generate_latest() lit le registre
+    # isolé du recorder — celui qui reçoit réellement les incréments runtime.
+    # (Contrairement à prometheus_client.generate_latest() sans arg qui lirait
+    # le registre global vide — blocker P1 review.)
+    if settings.metrics_enabled:
+        from fastapi import Request, Response
+        from prometheus_client import CONTENT_TYPE_LATEST
+
+        @app.get("/metrics", include_in_schema=False)
+        async def metrics_endpoint(request: Request) -> Response:
+            """Expose les métriques Prometheus (Phase 8.2 observability)."""
+            recorder: PrometheusMetricsRecorder = request.app.state.prom_recorder
+            return Response(
+                content=recorder.generate_latest(),
+                media_type=CONTENT_TYPE_LATEST,
+            )
+    # ── Fin Phase 8.2 ─────────────────────────────────────────────────────
+
     return app
 
 

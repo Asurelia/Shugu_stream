@@ -77,6 +77,7 @@ import asyncio
 import logging
 
 from ..core.protocols import EventBus
+from ..observability.metrics import MetricsRecorder, NullMetricsRecorder
 from .publisher import publish_world_delta
 from .reducers import apply as _apply_reducer
 from .types import ActionUnion, WorldState
@@ -102,13 +103,20 @@ class WorldStateStore:
         Injectée explicitement — pas de dépendance globale.
     """
 
-    def __init__(self, initial: WorldState, bus: EventBus) -> None:
+    def __init__(
+        self,
+        initial: WorldState,
+        bus: EventBus,
+        metrics_recorder: MetricsRecorder | None = None,
+    ) -> None:
         # Référence atomique en CPython (frozen WorldState — immutable).
         # Pas de lock nécessaire pour la lecture (cf. docstring module).
         self._state: WorldState = initial
         self._bus: EventBus = bus
         # Lock asyncio : sérialise les writes (read→reduce→write→publish).
         self._write_lock: asyncio.Lock = asyncio.Lock()
+        # Phase 8.2 — MetricsRecorder : NullMetricsRecorder si non fourni.
+        self._metrics: MetricsRecorder = metrics_recorder or NullMetricsRecorder()
 
     def read(self) -> WorldState:
         """Retourne le snapshot courant du monde.
@@ -167,6 +175,8 @@ class WorldStateStore:
             await asyncio.shield(
                 publish_world_delta(self._bus, prev, new_state)
             )
+            # Phase 8.2 — incrémenter world_delta_published_total après chaque publish.
+            self._metrics.record_world_delta()
             return new_state
 
     async def replace(self, state: WorldState) -> WorldState:

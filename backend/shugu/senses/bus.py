@@ -38,12 +38,19 @@ from __future__ import annotations
 import logging
 
 from ..core.protocols import EventBus
+from ..observability.metrics import MetricsRecorder, NullMetricsRecorder
 from .types import SenseEvent
 
 log = logging.getLogger(__name__)
 
+_NULL_RECORDER = NullMetricsRecorder()
 
-async def publish_sense_event(bus: EventBus, event: SenseEvent) -> None:
+
+async def publish_sense_event(
+    bus: EventBus,
+    event: SenseEvent,
+    recorder: MetricsRecorder = _NULL_RECORDER,
+) -> None:
     """Publie un `SenseEvent` normalisé sur le topic `sense.<kind>` du bus.
 
     Le topic est calculé par `event.topic` (propriété `sense.<kind>` définie
@@ -73,6 +80,8 @@ async def publish_sense_event(bus: EventBus, event: SenseEvent) -> None:
     """
     try:
         await bus.publish(event.topic, event.to_bus_dict())
+        # Phase 8.2 — incrémenter le compteur de senses reçus (label=kind).
+        recorder.record_sense_event(event.kind)
     except Exception as exc:
         log.warning(
             "senses.bus.publish_failed kind=%s subject=%s error=%s",

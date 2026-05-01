@@ -59,6 +59,7 @@ from typing import Optional
 
 from ..core.identity import Identity
 from ..core.protocols import BrainAdapter, EventBus
+from ..observability.metrics import MetricsRecorder
 from ..world.types import WorldState
 from .action_parser import XmlTagActionParser
 from .handlers import register_default_handlers
@@ -149,6 +150,7 @@ def build_agent_components(
     world_store: WorldStoreLike,
     runner_config: Optional[AgentRunnerConfig] = None,
     initial_world: WorldState | None = None,
+    metrics_recorder: MetricsRecorder | None = None,
 ) -> AgentComponents:
     """Assemble les composants L2+L2.5 (AgentLoop + Runner + Store).
 
@@ -232,6 +234,7 @@ def build_agent_components(
         bus=bus,
         config=runner_config,
         tool_registry=registry,
+        metrics_recorder=metrics_recorder,
     )
     world = initial_world if initial_world is not None else _DEFAULT_INITIAL_WORLD
     return AgentComponents(
