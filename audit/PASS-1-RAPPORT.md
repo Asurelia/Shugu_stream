@@ -14,9 +14,9 @@
 | Backend Python — types (mypy) | ⚠️ À corriger | 64 erreurs | Moyen |
 | Backend Python — sécurité (bandit) | ✅ Propre | 35 (Low) | Low |
 | Backend Python — deps (pip-audit) | ✅ Propre | 1 (pip self) | — |
-| Frontend — lint (eslint via next) | ⚠️ Outil non installé | — | — |
-| Frontend — types (tsc) | ⚠️ Outil non installé | — | — |
-| Frontend — deps (npm audit) | 🔴 **À traiter** | **25 vulns** | **Critical x2** |
+| Frontend — lint (eslint via next) | ⚠️ À corriger | **25 issues** | Error |
+| Frontend — types (tsc) | 🔴 **À corriger** | **17 erreurs** | Type errors |
+| Frontend — deps (npm audit) | 🟡 Partiel | 10 vulns (de 25) | 1 critical (Next.js — backlog) |
 | Sémantique (semgrep) | 🔴 **À traiter** | 3 XSS templates | High |
 
 **Verdict Pass 1** : Le code Python est très propre (kudos aux AIs sur le style/sécurité). Le **vrai problème est côté frontend deps** (Next.js + écosystème) avec 2 CVE critiques + 8 high. Les erreurs mypy ne sont pas des bugs runtime mais signalent du code "Any-driven" qui pourrait masquer des bugs futurs.
@@ -25,24 +25,22 @@
 
 ## 🔴 P0 — Critique (à fixer immédiatement)
 
-### P0.1 — Vulnérabilités frontend critical
-- **next.js** : 2 CVE critiques
-  - `GHSA-c59h-r6p8-q9wc` : missing cache-control header → CDN peut cacher réponse vide
-  - `GHSA-g77x-44xx-532m` : DoS via image optimization
-- **form-data** : `GHSA-fjxv-7rqg-78g4` — unsafe random pour boundary multipart
-- **Fix proposé** : `cd frontend && npm audit fix --force` puis rebuild + tests
+### P0.1 — Vulnérabilités frontend (RÉSOLU PARTIELLEMENT 2026-05-01)
 
-### P0.2 — Vulnérabilités frontend high (8)
-- `axios` — CSRF
-- `braces` — uncontrolled resource consumption
-- `cross-spawn` — ReDoS
-- `dompurify` — prototype pollution (sécurité XSS critique vu qu'on l'utilise pour sanitize)
-- `flatted` — DoS via parse
-- `minimatch` — ReDoS
-- `picomatch` — method injection
-- `semver` — ReDoS
+`npm audit fix` (sans `--force`) a éliminé **15 vulns sur 25** :
+- ✅ Toutes les **8 high** corrigées (axios, braces, cross-spawn, dompurify direct, flatted, minimatch, picomatch, semver)
+- ✅ 1 critical corrigée (form-data)
+- ✅ 6 moderate corrigées (word-wrap, yaml, etc.)
 
-**Fix proposé** : même `npm audit fix --force`. Vérifier ensuite que rien ne casse au build.
+**Reste 10 vulns nécessitant `--force` (breaking changes Next.js/Vitest)** :
+- `next` (1 critical) — Next.js 13 → 16 breaking change. **Migration séparée requise** (3-5 jours).
+- `dompurify` (moderate, transitif via @charcoal-ui)
+- `vite`, `vite-node`, `vitest`, `esbuild`, `postcss` (moderate) — vitest 1 → 4
+- `qs` (moderate, transitif via elevenlabs) — elevenlabs 0.x → 1.59
+- `@charcoal-ui/icons` (moderate) — peer-dep
+- `elevenlabs` (low)
+
+**Décision** : ces 10 vulns sont **acceptées en backlog** (P2 — Migration Next.js 13 → 16 + Vitest 1 → 4 séparée). La surface d'attaque est limitée car Next.js sert le build statique en production.
 
 ---
 
@@ -87,11 +85,38 @@ Catégories détectées :
 
 `shugu/auth/jwt_tokens.py:44,57` etc. Faux positifs probables (chaînes "access"/"refresh" qui sont des type tokens, pas des secrets), à confirmer.
 
-### P1.5 — Outils frontend manquants (eslint/tsc)
+### P1.5 — TypeScript — 17 erreurs tsc
 
-Le frontend n'a pas installé `next` localement (`npm install` jamais exécuté ou .bin perdu). Impossible d'auditer eslint et types tsc.
+Composants mal typés ou utilisés avec mauvais props :
 
-**Fix** : `cd frontend && npm install` puis re-run lint + tsc avant Pass 2.
+- **11 occurrences `Property 'title' does not exist on type 'IntrinsicAttributes'`** dans :
+  - `src/pages/[username]/admin/users.tsx:130`
+  - `src/pages/account/login.tsx:47`, `profile.tsx:41,55`, `register.tsx:51`, `verify-email.tsx:40`
+  - `src/pages/vip/room.tsx:85,99,119,142`
+  → Un composant (probablement `SectionCard` ou wrapper) reçoit `title=` mais sa signature ne le déclare pas. Soit ajouter le prop, soit retirer les usages.
+
+- **`LiveKitRoom cannot be used as JSX component`** (`src/pages/vip/room.tsx:143`) — mismatch entre version React types et version `@livekit/components-react`. Probable `npm install` à mettre à jour ou `@types/react` aligned.
+
+- **`Property 'options' does not exist on GlassTabsProps`** (`users.tsx:154`) — composant utilisé avec un prop non déclaré.
+
+- **3 `top-level await` not allowed** dans `panels.test.tsx:99,172,207` — `tsconfig.json` doit cibler `module: 'es2022'+` et `target: 'es2017'+`.
+
+- **`Expected 1-2 arguments, but got 0`** (`transform-controls.test.ts:83`) — appel de fonction avec args manquants.
+
+- **`Unused '@ts-expect-error' directive`** (`vitest.setup.ts:21`) — soit l'erreur est partie, soit la directive est mal placée.
+
+→ Voir `audit/05-tsc.txt` pour la liste complète.
+
+### P1.6 — ESLint — 25 issues
+
+Distribution :
+- **7 erreurs `Definition for rule '@typescript-eslint/no-explicit-any' was not found`** → bug de configuration eslint (le plugin n'est pas chargé). Fix config plutôt que les fichiers.
+- **7 `react/no-unescaped-entities`** dans pages/account/* → apostrophes brutes dans JSX. Trivial : remplacer par `&apos;` ou `{"'"}`.
+- **2 `@next/next/no-img-element`** dans `DesktopWindow.tsx`, `VirtualDesktop.tsx` → utiliser `next/image`.
+- **2 `react-hooks/exhaustive-deps`** dans `useSceneRig.ts:295`, `index.tsx:436` → **vrais bugs potentiels** : effects avec deps manquantes, peuvent ne pas re-run quand attendu.
+- **1 `jsx-a11y/role-supports-aria-props`** dans `ScenesListPanel.tsx:198` → `role="button"` + `aria-selected` non standard.
+
+→ Voir `audit/04-eslint.txt` pour la liste complète.
 
 ---
 
