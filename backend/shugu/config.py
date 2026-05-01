@@ -6,7 +6,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import AliasChoices, Field, field_validator
+from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Import du type StreamMode depuis le package policy.
@@ -516,6 +516,38 @@ class Settings(BaseSettings):
                 "tout autre schéma (javascript:, data:, vbscript:) serait un vecteur XSS."
             )
         return v
+
+    @model_validator(mode="after")
+    def _validate_jwt_secrets(self) -> "Settings":
+        """Refuse les secrets JWT vides en production.
+
+        Audit Pass 2 P1.A : sans cette garde, un déploiement avec env vars
+        manquantes émettrait des JWT signés avec la chaîne vide — n'importe
+        qui pourrait forger un token operator ou user. Fail-fast au démarrage
+        évite de découvrir le bug en prod via un compromise.
+
+        Note : ce validator est au niveau model (mode="after") plutôt que
+        field-level, parce que le field `env` est défini APRÈS
+        `shugu_jwt_secret` et `user_jwt_secret` ; un field_validator sur ces
+        secrets ne verrait pas encore `env` dans `info.data`.
+        """
+        non_prod = ("test", "dev", "development", "ci")
+        if self.env in non_prod:
+            return self
+
+        if not self.shugu_jwt_secret.strip():
+            raise ValueError(
+                "SHUGU_JWT_SECRET obligatoire en production (sécurité auth operator). "
+                "Génère un secret aléatoire 32+ chars : "
+                "python -c 'import secrets; print(secrets.token_urlsafe(32))'"
+            )
+        if not self.user_jwt_secret.strip():
+            raise ValueError(
+                "SHUGU_USER_JWT_SECRET obligatoire en production (sécurité auth user). "
+                "Génère un secret aléatoire 32+ chars : "
+                "python -c 'import secrets; print(secrets.token_urlsafe(32))'"
+            )
+        return self
 
     @field_validator("ip_hash_salt", mode="after")
     @classmethod

@@ -621,6 +621,15 @@ async def lifespan(app: FastAPI):
 
 def create_app() -> FastAPI:
     app = FastAPI(title="Shugu", version="0.2.0", lifespan=lifespan)
+
+    # Audit Pass 2 P1.D — Security headers middleware (CSP, X-Frame-Options,
+    # X-Content-Type-Options, Referrer-Policy, Permissions-Policy, HSTS prod).
+    # Ajouté en premier pour que toutes les réponses (y compris erreurs 4xx/5xx)
+    # bénéficient des headers défensifs.
+    from .middleware import SecurityHeadersMiddleware
+    _settings_for_mw = get_settings()
+    app.add_middleware(SecurityHeadersMiddleware, env=_settings_for_mw.env)
+
     app.include_router(health.router)
     app.include_router(auth.router)
     app.include_router(account.router)       # /account/* — self-service user auth (v4 Phase 1)

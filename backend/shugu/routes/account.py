@@ -33,6 +33,7 @@ from ..auth.dependencies import (
     USER_REFRESH_COOKIE,
     require_member,
 )
+from ..auth.rate_limit import enforce_rate_limit
 from ..config import Settings, get_settings
 from ..core.errors import AuthError
 from ..core.identity import MemberIdentity, VIPIdentity, hash_ip
@@ -327,7 +328,29 @@ async def login(
     response: Response,
     settings: Settings = Depends(get_settings),
 ):
-    """Login par username OU email + password. Pose les cookies user."""
+    """Login par username OU email + password. Pose les cookies user.
+
+    Audit Pass 2 P1.B : rate-limit anti-brute-force AVANT bcrypt.
+    Compte user = scope plus restreint qu'operator mais toujours
+    exploitable pour énumération + takeover de comptes VIP (qui ouvrent
+    un canal LiveKit privé avec Shugu). 10 tentatives/15min/IP.
+    """
+    # Rate-limit ANT verify password (bcrypt rounds=12 = 5 essais/s/socket).
+    ip = request.client.host if request.client else "unknown"
+    ip_h = hash_ip(ip, settings.ip_hash_salt) if settings.ip_hash_salt else ip
+    try:
+        from ..app import get_redis
+        redis = get_redis()
+    except Exception:
+        redis = None  # Redis optionnel en test
+    await enforce_rate_limit(
+        redis,
+        key=f"shugu:ratelimit:account_login:{ip_h}",
+        limit=10,
+        window_s=900,
+        log_on_burst=5,
+    )
+
     key = body.username_or_email.strip().lower()
     async with session_scope() as db:
         if "@" in key:

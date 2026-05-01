@@ -39,11 +39,17 @@ def _isolate_env_file(monkeypatch: pytest.MonkeyPatch) -> None:
     for env_var in ("IP_HASH_SALT", "SHUGU_IP_HASH_SALT", "ENV", "SHUGU_ENV"):
         monkeypatch.delenv(env_var, raising=False)
 
-    # Désactive le chargement du .env file pour ce module.
+    # Désactive le chargement du .env file pour ce module + injecte des
+    # JWT secrets dummy par défaut. Les tests qui veulent vérifier le validator
+    # JWT eux-mêmes doivent override explicitement (passer "" ou la vraie valeur).
     original_init = Settings.__init__
 
     def patched_init(self, **kwargs):
         kwargs.setdefault("_env_file", None)
+        # JWT secrets dummy par défaut — sinon le model_validator
+        # _validate_jwt_secrets refuse env=production sans secrets.
+        kwargs.setdefault("shugu_jwt_secret", "test-secret-jwt-operator-dummy-32")
+        kwargs.setdefault("user_jwt_secret", "test-secret-jwt-user-dummy-32-ok")
         original_init(self, **kwargs)
 
     monkeypatch.setattr(Settings, "__init__", patched_init)
@@ -254,3 +260,68 @@ class TestPublicSiteUrl:
     def test_public_site_url_accepts_http_https(self, url: str) -> None:
         s = Settings(env="dev", ip_hash_salt="x", public_site_url=url)
         assert s.public_site_url == url
+
+
+class TestJwtSecretsFailFast:
+    """Audit Pass 2 P1.A — refus des JWT secrets vides en production.
+
+    Sans cette garde, un déploiement avec env vars manquantes émettrait des
+    JWT signés avec la chaîne vide — n'importe qui peut forger un token.
+    """
+
+    def test_shugu_jwt_secret_empty_in_production_raises(self) -> None:
+        with pytest.raises(ValidationError) as exc_info:
+            Settings(
+                env="production",
+                ip_hash_salt="valid_salt_32_chars_minimum_okayyy",
+                shugu_jwt_secret="",
+                user_jwt_secret="valid",
+            )
+        assert "SHUGU_JWT_SECRET" in str(exc_info.value)
+
+    def test_user_jwt_secret_empty_in_production_raises(self) -> None:
+        with pytest.raises(ValidationError) as exc_info:
+            Settings(
+                env="production",
+                ip_hash_salt="valid_salt_32_chars_minimum_okayyy",
+                shugu_jwt_secret="valid",
+                user_jwt_secret="",
+            )
+        assert "SHUGU_USER_JWT_SECRET" in str(exc_info.value)
+
+    @pytest.mark.parametrize("env", ["test", "dev", "development", "ci"])
+    def test_empty_secrets_allowed_in_non_prod(self, env: str) -> None:
+        """En dev/test/ci, les secrets vides sont OK (les tests utilisent
+        `_env_file=None` + dummy values via la fixture autouse, mais on
+        vérifie ici la sémantique du validator lui-même)."""
+        s = Settings(
+            env=env,
+            ip_hash_salt="x",
+            shugu_jwt_secret="",
+            user_jwt_secret="",
+        )
+        assert s.shugu_jwt_secret == ""
+        assert s.user_jwt_secret == ""
+
+    def test_whitespace_only_secret_raises_in_production(self) -> None:
+        """Un secret = "   " ne doit PAS passer (pourrait masquer un bug
+        d'env var avec espace)."""
+        with pytest.raises(ValidationError) as exc_info:
+            Settings(
+                env="production",
+                ip_hash_salt="valid_salt_32_chars_minimum_okayyy",
+                shugu_jwt_secret="   ",
+                user_jwt_secret="valid",
+            )
+        assert "SHUGU_JWT_SECRET" in str(exc_info.value)
+
+    def test_valid_secrets_accepted_in_production(self) -> None:
+        import secrets as _sec
+        s = Settings(
+            env="production",
+            ip_hash_salt="valid_salt_32_chars_minimum_okayyy",
+            shugu_jwt_secret=_sec.token_urlsafe(32),
+            user_jwt_secret=_sec.token_urlsafe(32),
+        )
+        assert s.shugu_jwt_secret  # non-empty
+        assert s.user_jwt_secret
