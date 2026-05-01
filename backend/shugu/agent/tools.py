@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import Awaitable, Callable, Mapping
 
 log = logging.getLogger(__name__)
@@ -66,6 +67,16 @@ class Tool:
     description: str
     params_schema: Mapping[str, object] = field(default_factory=dict)
     handler: ToolHandler | None = None
+
+    def __post_init__(self) -> None:
+        # Bug P3 : sans wrap, un caller peut muter `tool.params_schema[...]` ou
+        # le dict d'origine après register() → drift entre le schema affiché au
+        # LLM et celui que le runtime exécute. MappingProxyType + copie
+        # superficielle bloquent les deux scénarios.
+        if not isinstance(self.params_schema, MappingProxyType):
+            object.__setattr__(
+                self, "params_schema", MappingProxyType(dict(self.params_schema))
+            )
 
 
 class ToolRegistry:

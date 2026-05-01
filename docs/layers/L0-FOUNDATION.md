@@ -101,8 +101,15 @@ Pas de Pydantic en L0 : les types sont des dataclasses stdlib avec
 
 - **Replay déterministe** : un événement perçu en T=0 doit être identique
   s'il est rejoué.
-- **Hashable** : `frozen=True` rend les instances hashables → utilisables
-  comme clés de cache de déduplication côté agent.
+- **Mutabilité bloquée** : `frozen=True` empêche la réassignation des champs.
+  Pour les champs `Mapping` (payload, params_schema), on ajoute un
+  `__post_init__` qui wrap dans `types.MappingProxyType(dict(...))` pour (a)
+  bloquer `obj.field[k] = ...` et (b) isoler des mutations sur le dict
+  d'origine. Copie superficielle uniquement — convention "scalars only" pour
+  les payloads de senses, pas de deep-freeze coûteux Phase 1.
+- **Pas hashable** : conséquence du `Mapping` field (même via MappingProxy).
+  Pas un problème : la déduplication côté memory se fait par `(subject, ts)`,
+  pas par hash de l'event.
 - **Pas de validation runtime lourde** : Phase L0 n'a pas besoin de
   validation au boundary externe (pas d'API HTTP qui ingère des DTOs L0).
   Si un L1.x ajoute un endpoint qui reçoit du JSON, on adapte.
