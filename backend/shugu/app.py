@@ -137,7 +137,13 @@ async def lifespan(app: FastAPI):
     # pour que les counters soient disponibles même avant que l'agent démarre.
     # Si metrics_enabled=False, le recorder existe mais /metrics n'est pas monté —
     # les counters s'accumulent silencieusement sans être exposés.
-    _prom_recorder = PrometheusMetricsRecorder()
+    #
+    # IMPORTANT : on passe CollectorRegistry() explicitement pour rester isolé
+    # du registre global prometheus_client (évite les collisions avec les
+    # métriques du process uvicorn). L'endpoint /metrics appelle
+    # app.state.prom_recorder.generate_latest() — le même registre.
+    _prom_recorder = PrometheusMetricsRecorder(registry=None)  # crée un registre isolé frais
+    app.state.prom_recorder = _prom_recorder  # exposé à l'endpoint /metrics
     log.info(
         "observability.prometheus_recorder_ready",
         metrics_enabled=settings.metrics_enabled,
@@ -622,15 +628,22 @@ def create_app() -> FastAPI:
     # Endpoint GET /metrics exposant les métriques Prometheus (texte 0.0.4).
     # Gated par settings.metrics_enabled (défaut False — opt-in explicite).
     # Content-Type conforme à la spécification Prometheus text format 0.0.4.
+    #
+    # app.state.prom_recorder est défini dans le lifespan (ci-dessus), donc
+    # disponible dès le premier requête. generate_latest() lit le registre
+    # isolé du recorder — celui qui reçoit réellement les incréments runtime.
+    # (Contrairement à prometheus_client.generate_latest() sans arg qui lirait
+    # le registre global vide — blocker P1 review.)
     if settings.metrics_enabled:
-        from fastapi import Response
-        from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+        from fastapi import Request, Response
+        from prometheus_client import CONTENT_TYPE_LATEST
 
         @app.get("/metrics", include_in_schema=False)
-        async def metrics_endpoint() -> Response:
+        async def metrics_endpoint(request: Request) -> Response:
             """Expose les métriques Prometheus (Phase 8.2 observability)."""
+            recorder: PrometheusMetricsRecorder = request.app.state.prom_recorder
             return Response(
-                content=generate_latest(),
+                content=recorder.generate_latest(),
                 media_type=CONTENT_TYPE_LATEST,
             )
     # ── Fin Phase 8.2 ─────────────────────────────────────────────────────
