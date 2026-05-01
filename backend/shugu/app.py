@@ -271,7 +271,7 @@ async def lifespan(app: FastAPI):
                           secondary_voice=settings.edge_tts_voice,
                           metrics=_prom_recorder)
 
-    moderation = BasicModeration(settings, _redis)
+    moderation = BasicModeration(settings, _redis, metrics=_prom_recorder)
     queue = RedisQueue(_redis, pending_cap=settings.queue_pending_cap)
 
     prep_worker = PrepWorker(
@@ -352,6 +352,7 @@ async def lifespan(app: FastAPI):
     ))
     hermes_embodied = HermesEmbodiedBrain(
         settings, http, personality_loader, body_router,
+        metrics=_prom_recorder,
     )
     stt = FasterWhisperSTT(STTSettings(
         model_name=settings.stt_model,
@@ -556,6 +557,7 @@ async def lifespan(app: FastAPI):
             debouncer=director_debouncer,
             tick_cache=director_tick_cache,
             memory_agent=director_memory_agent,
+            metrics=_prom_recorder,
         )
         # Phase E4 — Seed assets_available dans le state store au boot.
         # Les workers OutfitWorker / VfxWorker / AnimWorker / SceneWorker

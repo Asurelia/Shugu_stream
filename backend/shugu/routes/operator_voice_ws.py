@@ -175,12 +175,27 @@ async def operator_voice_ws(
         # L1.3 — sense.raw (legacy) + sense.voice (AgentRunner). Logique
         # déléguée au helper module-level pour rester testable.
         await _handle_voice_transcript(_deps, identity, text)
+        # Audit Pass 2 P1.B5 — distingue BrainError (LLM down/quota) du reste
+        # pour notifier l'opérateur qu'Hermes a un souci backend, pas qu'il
+        # ignore. Le client UI peut afficher "le cerveau est en panne, retry"
+        # plutôt qu'un silence apparent.
+        from ..core.errors import BrainError
         try:
             await _deps.hermes_embodied.run_once(  # type: ignore[union-attr]
                 text, identity=identity, priority_tier=0,
             )
+        except BrainError as exc:
+            log.warning("voice.hermes_brain_error", error=str(exc))
+            await send_event(VoiceEvent(
+                "error",
+                {"reason": "brain_failed", "detail": str(exc)},
+            ))
         except Exception as exc:
             log.exception("voice.hermes_error", error=str(exc))
+            await send_event(VoiceEvent(
+                "error",
+                {"reason": "hermes_unexpected", "detail": str(exc)},
+            ))
 
     duplex = VoiceDuplex(
         stt=_deps.stt,           # type: ignore[arg-type]
