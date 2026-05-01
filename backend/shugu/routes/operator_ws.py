@@ -201,8 +201,54 @@ async def _handle_operator_message(
     if target == "hermes":
         # Embodied path: Hermes drives Shugu's body directly via tool_calls.
         if _deps.settings.hermes_embodied and _deps.hermes_embodied is not None:
+            # Audit Pass 2 review (Sprint 5 follow-up) : `run_once` raise
+            # désormais BrainError sur LLM failure (P1.B5). Lancée via
+            # `_spawn_bg` (asyncio.create_task fire-and-forget), une exception
+            # non gérée crash silencieusement la task et l'opérateur ne reçoit
+            # que l'ACK initial. On wrap dans une coro locale qui catch +
+            # envoie un event `hermes_task.failed` au client pour qu'il puisse
+            # afficher "Hermes en panne" plutôt qu'attendre indéfiniment.
+            from ..core.errors import BrainError as _BrainError
+
+            async def _run_with_failure_event() -> None:
+                try:
+                    await _deps.hermes_embodied.run_once(  # type: ignore[union-attr]
+                        text, identity=identity, priority_tier=0,
+                    )
+                except _BrainError as exc:
+                    log.warning(
+                        "operator.hermes_embodied_brain_error",
+                        username=identity.username, error=str(exc),
+                    )
+                    try:
+                        await ws.send_text(json.dumps({
+                            "type": "hermes_task.failed",
+                            "nonce": nonce,
+                            "reason": "brain_failed",
+                            "detail": str(exc),
+                        }))
+                    except Exception as send_exc:
+                        log.debug(
+                            "operator.hermes_failure_event_send_failed",
+                            error=str(send_exc),
+                        )
+                except Exception as exc:
+                    log.exception(
+                        "operator.hermes_embodied_unexpected_error",
+                        username=identity.username, error=str(exc),
+                    )
+                    try:
+                        await ws.send_text(json.dumps({
+                            "type": "hermes_task.failed",
+                            "nonce": nonce,
+                            "reason": "hermes_unexpected",
+                            "detail": str(exc),
+                        }))
+                    except Exception:
+                        pass
+
             _spawn_bg(
-                _deps.hermes_embodied.run_once(text, identity=identity, priority_tier=0),
+                _run_with_failure_event(),
                 name=f"hermes_embodied:{identity.username}",
             )
             await ws.send_text(json.dumps({

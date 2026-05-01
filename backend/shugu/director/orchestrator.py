@@ -57,6 +57,7 @@ from .brain_provider import DirectorBrain
 
 if TYPE_CHECKING:
     from ..core.protocols import MemoryService
+    from ..observability.metrics import MetricsRecorder
 from .canned_responses import CANNED_ELIGIBLE_KINDS, CannedResponse, pick_canned
 from .debouncer import DEBOUNCEABLE_KINDS, TriggerDebouncer
 from .prompt import build_prompt
@@ -154,6 +155,8 @@ class Orchestrator:
         tick_cache: Optional[TickCache] = None,
         debouncer: Optional[TriggerDebouncer] = None,
         memory_agent: Optional["MemoryService"] = None,
+        *,
+        metrics: "MetricsRecorder | None" = None,
     ) -> None:
         self._store = state_store
         self._workers = workers
@@ -163,6 +166,11 @@ class Orchestrator:
         # Phase E4 H2 — MemoryService pour recall VIP/chat avant build_prompt.
         # Si None (memory_enabled=False ou agent absent), skip silencieux.
         self._memory_agent: Optional["MemoryService"] = memory_agent
+        # Audit Pass 2 P1.C6 — métrique memory_recall_failed_total.
+        if metrics is None:
+            from ..observability.metrics import get_null_recorder
+            metrics = get_null_recorder()
+        self._metrics = metrics
 
         self._last_tick_at: float = 0.0   # monotonic timestamp du dernier tick
         self._tick_lock: asyncio.Lock = asyncio.Lock()
@@ -329,9 +337,16 @@ class Orchestrator:
                     )
                     memory_facts = [item.text for item in recalled if item.text]
                 except Exception as exc:
+                    # Audit Pass 2 P1.C6 — métrique memory_recall_failed_total.
+                    # Sans cette métrique, un memory agent en panne (deadlock
+                    # pgvector, embedder OOM) reste invisible : le director
+                    # continue avec mémoire vide, qualité dégradée silencieuse.
                     log.warning(
                         "director.orchestrator_memory_recall_failed",
                         extra={"sender": sender, "error": repr(exc)},
+                    )
+                    self._metrics.record_memory_recall_failed(
+                        error_kind=type(exc).__name__,
                     )
 
         # 6. LLM call (en dernier recours).

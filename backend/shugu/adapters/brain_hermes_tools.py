@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import re
+from typing import TYPE_CHECKING
 
 import httpx
 import structlog
@@ -30,6 +31,9 @@ from ..core.body_control import openai_tools_schema, parse_call_async
 from ..core.errors import BrainError
 from ..core.identity import OperatorIdentity
 from ..core.protocols import PersonalityLoader
+
+if TYPE_CHECKING:
+    from ..observability.metrics import MetricsRecorder
 from ..core.registry import get_registry
 from ..pipeline.body_router import BodyRouter
 from .brain_shugu import strip_think
@@ -74,6 +78,8 @@ class HermesEmbodiedBrain:
         http: httpx.AsyncClient,
         personality_loader: PersonalityLoader,
         body_router: BodyRouter,
+        *,
+        metrics: "MetricsRecorder | None" = None,
     ):
         self._settings = settings
         self._http = http
@@ -81,6 +87,11 @@ class HermesEmbodiedBrain:
         self._body_router = body_router
         # Per-operator conversation history (MiniMax likes <think> preserved).
         self._history_per_op: dict[str, list[dict]] = {}
+        # Audit Pass 2 P1.C2 — métrique persona_fallback_total.
+        if metrics is None:
+            from ..observability.metrics import get_null_recorder
+            metrics = get_null_recorder()
+        self._metrics = metrics
 
     async def run_once(
         self,
@@ -91,10 +102,16 @@ class HermesEmbodiedBrain:
     ) -> str:
         """Run the tool-use loop. Returns the final assistant text (may be '')."""
         # Load the public persona prompt (fall back to shugu.md if absent).
+        # Audit Pass 2 P1.C2 — métrique persona_fallback_total{from,to} sur
+        # ce fallback. Sans la métrique, un déploiement avec persona manquante
+        # n'est visible que dans les logs (warning passe inaperçu).
         try:
             persona = self._personality.get("hermes_public")
-        except Exception:  # pragma: no cover — fresh install without the file
+        except (KeyError, FileNotFoundError):  # narrow per audit B6 spirit
             log.warning("hermes.persona_fallback_to_shugu")
+            self._metrics.record_persona_fallback(
+                from_persona="hermes_public", to_persona="shugu",
+            )
             persona = self._personality.get("shugu")
 
         history_key = f"op:{identity.username}"
@@ -104,11 +121,19 @@ class HermesEmbodiedBrain:
         final_content = ""
         for hop in range(self.MAX_HOPS):
             messages = self._build_messages(persona.system_prompt, history)
+            # Audit Pass 2 P1.B5 : avant ce raise, on retournait "" silencieusement
+            # → caller (operator_voice_ws run_once) ne savait pas distinguer
+            # "Hermes répond rien" (silence légitime) vs "clé OpenAI expirée
+            # / quota épuisé / réseau cassé". L'opérateur retentait en boucle
+            # sans feedback. Maintenant on remonte BrainError avec le contexte
+            # (hop number) et le caller peut générer un TTS d'erreur explicite.
             try:
                 assistant_msg = await self._call_llm(messages)
             except BrainError as exc:
-                log.warning("hermes.llm_failed", error=str(exc))
-                return ""
+                log.warning("hermes.llm_failed", error=str(exc), hop=hop)
+                raise BrainError(
+                    f"hermes_tools failed at hop {hop}: {exc}"
+                ) from exc
 
             # Store whatever came back in history (thinking preserved verbatim).
             history.append(assistant_msg)
@@ -192,11 +217,28 @@ class HermesEmbodiedBrain:
         identity: OperatorIdentity,
         priority_tier: int,
     ) -> dict:
+        # Audit Pass 2 P1.B6 : avant ce narrow, `except Exception` capturait
+        # TOUT — incluant les bugs runtime du registry (ImportError sur lazy
+        # load, KeyError sur registry corrompu, RuntimeError loop closed).
+        # Le LLM voyait un faux "rejected: ..." et croyait avoir mal formulé
+        # ses args, polluant son contexte avec une fausse leçon. Maintenant
+        # on narrow aux vraies validations (ValueError unknown tool, Pydantic
+        # ValidationError args) et on re-raise les bugs runtime.
+        from pydantic import ValidationError
         try:
             call = await parse_call_async(name, args, registry=get_registry())
-        except Exception as exc:
+        except (ValueError, ValidationError) as exc:
             log.warning("hermes.tool_rejected", name=name, args=args, error=str(exc))
             return {"ok": False, "error": f"rejected: {exc}"}
+        except Exception as exc:
+            # Bug runtime du registry (pas un rejected) — re-raise pour que
+            # operator_voice_ws.run_once attrape via except Exception et log
+            # l'incident plutôt que polluer le contexte LLM.
+            log.exception(
+                "hermes.tool_dispatch_runtime_error",
+                name=name, args=args, error=str(exc),
+            )
+            raise
         return await self._body_router.dispatch(call, identity=identity, priority_tier=priority_tier)
 
     @staticmethod

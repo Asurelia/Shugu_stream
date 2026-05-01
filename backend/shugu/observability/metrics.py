@@ -32,6 +32,7 @@ Compteurs exposés
 - ``event_bus_drop_total``                      (Counter, label=topic) — Sprint 4 P1.C4
 - ``persona_fallback_total``                    (Counter, labels=from,to) — Sprint 4 P1.C2
 - ``memory_recall_failed_total``                (Counter, label=error_kind) — Sprint 4 P1.C6
+- ``moderation_ban_check_failed_total``         (Counter, label=error_kind) — Sprint 5 P1.B7
 """
 from __future__ import annotations
 
@@ -117,6 +118,16 @@ class MetricsRecorder(Protocol):
         """
         ...
 
+    def record_moderation_ban_check_failed(self, error_kind: str) -> None:
+        """Incrémente moderation_ban_check_failed_total{error_kind} — Sprint 5 P1.B7.
+
+        Posé quand le ban check Postgres crash dans BasicModeration.
+        Politique fail-open : on accepte le visiteur (service > sécu) MAIS on
+        veut visibilité sur ces incidents (Postgres down = bans plus enforced).
+        Sans métrique, un trou de moderation reste invisible côté admin.
+        """
+        ...
+
 
 # ---------------------------------------------------------------------------
 # NullMetricsRecorder — no-op, backward-compat par défaut
@@ -159,6 +170,9 @@ class NullMetricsRecorder:
         pass
 
     def record_memory_recall_failed(self, error_kind: str) -> None:
+        pass
+
+    def record_moderation_ban_check_failed(self, error_kind: str) -> None:
         pass
 
 
@@ -260,6 +274,13 @@ class PrometheusMetricsRecorder:
             ["error_kind"],
             registry=self.registry,
         )
+        # Sprint 5 P1.B7 — observabilité fail-open de BasicModeration ban check.
+        self._moderation_ban_check_failed = Counter(
+            "moderation_ban_check_failed_total",
+            "Nombre d'échecs ban check Postgres (politique fail-open) (audit B7).",
+            ["error_kind"],
+            registry=self.registry,
+        )
 
     def record_tick(self) -> None:
         """Incrémente agent_runner_ticks_total."""
@@ -304,6 +325,10 @@ class PrometheusMetricsRecorder:
     def record_memory_recall_failed(self, error_kind: str) -> None:
         """Incrémente memory_recall_failed_total{error_kind}."""
         self._memory_recall_failed.labels(error_kind=error_kind).inc()
+
+    def record_moderation_ban_check_failed(self, error_kind: str) -> None:
+        """Incrémente moderation_ban_check_failed_total{error_kind}."""
+        self._moderation_ban_check_failed.labels(error_kind=error_kind).inc()
 
     def generate_latest(self) -> bytes:
         """Sérialise les métriques au format texte Prometheus 0.0.4 (bytes).
