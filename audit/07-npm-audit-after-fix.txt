@@ -1,0 +1,13 @@
+Total: 10 | critical: 1 | high: 0 | moderate: 8 | low: 1
+
+Remaining vulns (need --force / breaking changes):
+  - @charcoal-ui/icons (moderate)
+  - dompurify (moderate)
+  - elevenlabs (low)
+  - esbuild (moderate)
+  - next (critical)
+  - postcss (moderate)
+  - qs (moderate)
+  - vite (moderate)
+  - vite-node (moderate)
+  - vitest (moderate)

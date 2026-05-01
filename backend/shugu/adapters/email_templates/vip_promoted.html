@@ -27,6 +27,7 @@
         </p>
         {% endif %}
         <p style="text-align:center;margin:32px 0">
+          {# nosemgrep: generic.html-templates.security.var-in-href.var-in-href — site_url validé http(s) only via Settings._validate_public_site_url #}
           <a href="{{ site_url }}/vip/room" style="display:inline-block;padding:14px 28px;background:linear-gradient(135deg,#ffd98c,#ff9e5e);color:#3a1d0c;text-decoration:none;border-radius:999px;font-weight:600;font-size:15px">
             Rejoindre le salon VIP
           </a>
@@ -35,6 +36,7 @@
     </tr>
     <tr>
       <td style="padding:24px 32px;border-top:1px solid rgba(255,217,140,0.15);font-size:12px;opacity:0.45;text-align:center">
+        {# nosemgrep: generic.html-templates.security.var-in-href.var-in-href — site_url validé http(s) only via Settings._validate_public_site_url #}
         <a href="{{ site_url }}" style="color:#ffd98c;text-decoration:none">{{ site_url }}</a>
       </td>
     </tr>

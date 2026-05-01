@@ -1,0 +1,30 @@
+src/features/scene-composer/__tests__/panels.test.tsx(99,29): error TS1378: Top-level 'await' expressions are only allowed when the 'module' option is set to 'es2022', 'esnext', 'system', 'node16', or 'nodenext', and the 'target' option is set to 'es2017' or higher.
+src/features/scene-composer/__tests__/panels.test.tsx(172,33): error TS1378: Top-level 'await' expressions are only allowed when the 'module' option is set to 'es2022', 'esnext', 'system', 'node16', or 'nodenext', and the 'target' option is set to 'es2017' or higher.
+src/features/scene-composer/__tests__/panels.test.tsx(207,33): error TS1378: Top-level 'await' expressions are only allowed when the 'module' option is set to 'es2022', 'esnext', 'system', 'node16', or 'nodenext', and the 'target' option is set to 'es2017' or higher.
+src/features/scene-composer/viewer/three-stage/__tests__/transform-controls.test.ts(83,17): error TS2554: Expected 1-2 arguments, but got 0.
+src/pages/[username]/admin/users.tsx(130,13): error TS2322: Type '{ title: string; }' is not assignable to type 'IntrinsicAttributes'.
+  Property 'title' does not exist on type 'IntrinsicAttributes'.
+src/pages/[username]/admin/users.tsx(154,17): error TS2322: Type '{ value: RoleFilter; onChange: (v: string) => void; options: { value: string; label: string; }[]; }' is not assignable to type 'IntrinsicAttributes & GlassTabsProps'.
+  Property 'options' does not exist on type 'IntrinsicAttributes & GlassTabsProps'.
+src/pages/account/login.tsx(47,13): error TS2322: Type '{ title: string; }' is not assignable to type 'IntrinsicAttributes'.
+  Property 'title' does not exist on type 'IntrinsicAttributes'.
+src/pages/account/profile.tsx(41,15): error TS2322: Type '{ title: string; }' is not assignable to type 'IntrinsicAttributes'.
+  Property 'title' does not exist on type 'IntrinsicAttributes'.
+src/pages/account/profile.tsx(55,13): error TS2322: Type '{ title: string; }' is not assignable to type 'IntrinsicAttributes'.
+  Property 'title' does not exist on type 'IntrinsicAttributes'.
+src/pages/account/register.tsx(51,13): error TS2322: Type '{ title: string; }' is not assignable to type 'IntrinsicAttributes'.
+  Property 'title' does not exist on type 'IntrinsicAttributes'.
+src/pages/account/verify-email.tsx(40,13): error TS2322: Type '{ title: string; }' is not assignable to type 'IntrinsicAttributes'.
+  Property 'title' does not exist on type 'IntrinsicAttributes'.
+src/pages/vip/room.tsx(85,15): error TS2322: Type '{ title: string; }' is not assignable to type 'IntrinsicAttributes'.
+  Property 'title' does not exist on type 'IntrinsicAttributes'.
+src/pages/vip/room.tsx(99,15): error TS2322: Type '{ title: string; }' is not assignable to type 'IntrinsicAttributes'.
+  Property 'title' does not exist on type 'IntrinsicAttributes'.
+src/pages/vip/room.tsx(119,15): error TS2322: Type '{ title: string; }' is not assignable to type 'IntrinsicAttributes'.
+  Property 'title' does not exist on type 'IntrinsicAttributes'.
+src/pages/vip/room.tsx(142,13): error TS2322: Type '{ title: string; }' is not assignable to type 'IntrinsicAttributes'.
+  Property 'title' does not exist on type 'IntrinsicAttributes'.
+src/pages/vip/room.tsx(143,8): error TS2786: 'LiveKitRoom' cannot be used as a JSX component.
+  Its return type 'ReactNode' is not a valid JSX element.
+    Type 'undefined' is not assignable to type 'Element | null'.
+vitest.setup.ts(21,3): error TS2578: Unused '@ts-expect-error' directive.

@@ -46,15 +46,15 @@ from typing import Protocol, get_args
 from ..world.types import (
     ActionUnion,
     AvatarPoseAction,
-    Mood,
     MoodSetAction,
     PropSpawnAction,
     SceneTransitionAction,
+    WorldMood,
 )
 
-# Set des moods autorisés, dérivé du Literal Mood — single source of truth.
-# Si on étend Mood dans world/types.py, ce set est mis à jour automatiquement.
-_ALLOWED_MOODS: frozenset[str] = frozenset(get_args(Mood))
+# Set des moods autorisés, dérivé du Literal WorldMood — single source of truth.
+# Si on étend WorldMood dans world/types.py, ce set est mis à jour automatiquement.
+_ALLOWED_MOODS: frozenset[str] = frozenset(get_args(WorldMood))
 
 log = logging.getLogger(__name__)
 

@@ -154,8 +154,16 @@ async def operator_voice_ws(
         async with send_lock:
             try:
                 await ws.send_text(json.dumps({"type": f"voice.{ev.type}", **ev.payload}))
-            except Exception:
-                pass
+            except Exception as exc:
+                # Audit Pass 2 silent-failure A1 : ne pas masquer silencieusement
+                # un échec d'envoi WS — sans log, debug impossible si l'opérateur
+                # rate des minutes d'events voice.state.change. log.debug suffit
+                # (close/disconnect normaux sont fréquents, pas du warning).
+                log.debug(
+                    "operator_voice_ws.send_failed",
+                    event_type=ev.type,
+                    error=str(exc),
+                )
 
     async def on_transcript(text: str) -> None:
         """Forward operator turn to HermesEmbodiedBrain. The brain emits

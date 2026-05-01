@@ -36,16 +36,23 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Protocol
 
 from ..core.protocols import EventBus
-from ..world.types import AvatarPoseAction, Mood, MoodSetAction, SceneTransitionAction
+from ..world.types import (
+    ActionUnion,
+    AvatarPoseAction,
+    MoodSetAction,
+    SceneTransitionAction,
+    WorldMood,
+    WorldState,
+)
 
 if TYPE_CHECKING:
     from .tools import ToolRegistry
 
 log = logging.getLogger(__name__)
 
-# Valeurs autorisées pour Mood — dérivées du Literal via typing.get_args.
+# Valeurs autorisées pour WorldMood — dérivées du Literal via typing.get_args.
 # Cela évite de dupliquer la liste et garantit la cohérence en cas d'extension.
-_VALID_MOODS: frozenset[str] = frozenset(typing.get_args(Mood))
+_VALID_MOODS: frozenset[str] = frozenset(typing.get_args(WorldMood))
 
 
 # ---------------------------------------------------------------------------
@@ -63,9 +70,14 @@ class WorldStoreLike(Protocol):
 
     Méthodes requises :
         apply(action) : applique une ActionUnion, retourne le nouvel état (async).
+
+    Note (audit Pass 2 type-design) : la signature précédente
+    `apply(self, action: object) -> object` désactivait le typage des actions.
+    Maintenant on exige ActionUnion en entrée et WorldState en sortie — un handler
+    qui passerait un dict ou un MoodSetAction renommé sera détecté par mypy.
     """
 
-    async def apply(self, action: object) -> object:
+    async def apply(self, action: ActionUnion) -> WorldState:
         """Applique une action et retourne le nouvel état WorldState."""
         ...
 
@@ -181,8 +193,8 @@ async def handle_set_mood(deps: HandlerDeps, params: dict) -> None:
         )
         return
 
-    # mypy : typing.cast pour satisfaire le type Mood (Literal).
-    await deps.world_store.apply(MoodSetAction(mood=typing.cast(Mood, mood_str)))
+    # mypy : typing.cast pour satisfaire le type WorldMood (Literal).
+    await deps.world_store.apply(MoodSetAction(mood=typing.cast(WorldMood, mood_str)))
 
 
 async def handle_set_scene(deps: HandlerDeps, params: dict) -> None:

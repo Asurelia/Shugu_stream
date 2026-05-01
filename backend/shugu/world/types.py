@@ -28,8 +28,19 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal, Union
 
-# Mood Literal — étendre = PR explicite + handler reducer + handler frontend.
-Mood = Literal["neutral", "happy", "angry", "sad", "relaxed", "surprised"]
+# WorldMood Literal — étendre = PR explicite + handler reducer + handler frontend.
+#
+# Audit Pass 2 type-design P0.T1 : ce Literal s'appelait `Mood` mais entrait en
+# collision homonyme avec `core.body_control.Mood` (vocabulaires disjoints :
+# "happy/angry/sad" ici vs "cheerful/focused/sleepy" là-bas). Un import dans le
+# mauvais module typecheck mais crashait au runtime via _VALID_MOODS dans
+# `agent/handlers.py`. Renommé `WorldMood` pour éliminer la confusion.
+WorldMood = Literal["neutral", "happy", "angry", "sad", "relaxed", "surprised"]
+
+# Alias rétro-compat : le nom `Mood` reste exporté côté `world.types` pour ne
+# pas casser les imports existants. Tous les NOUVEAUX call sites doivent
+# utiliser `WorldMood` explicitement (mypy + clarté).
+Mood = WorldMood
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,7 +66,7 @@ class WorldState:
     """
     avatar_pose: str
     scene_id: str
-    mood: Mood
+    mood: WorldMood
     props: tuple[Prop, ...]
     clock_ms: int
 
@@ -89,7 +100,7 @@ class SceneTransitionAction:
 @dataclass(frozen=True, slots=True)
 class MoodSetAction:
     """Force un mood (peut être déclenché par L2 selon perception)."""
-    mood: Mood
+    mood: WorldMood
 
     def to_bus_dict(self) -> dict:
         return {"kind": "mood.set", "mood": self.mood}
@@ -145,11 +156,12 @@ ActionUnion = Union[
 __all__ = [
     "ActionUnion",
     "AvatarPoseAction",
-    "Mood",
+    "Mood",  # alias rétro-compat — préférer `WorldMood`
     "MoodSetAction",
     "Prop",
     "PropSpawnAction",
     "SceneTransitionAction",
     "TickAction",
+    "WorldMood",
     "WorldState",
 ]

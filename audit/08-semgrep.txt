@@ -1,0 +1,50 @@
+└─────────────────┘
+                                                            
+    backend\shugu\adapters\email_templates\verify_email.html
+    ❯❱ generic.html-templates.security.var-in-href.var-in-href
+          ❰❰ Blocking ❱❱
+          Detected a template variable used in an anchor tag with the 'href' attribute. This allows a       
+          malicious actor to input the 'javascript:' URI and is subject to cross- site scripting (XSS)      
+          attacks. If using Flask, use 'url_for()' to safely generate a URL. If using Django, use the 'url' 
+          filter to safely generate a URL. If using Mustache, use a URL encoding library, or prepend a slash
+          '/' to the variable for relative links (`href="/{{link}}"`). You may also consider setting the    
+          Content Security Policy (CSP) header.                                                             
+          Details: https://sg.run/x1kP                                                                      
+                                                                                                            
+           18┆ <a href="{{ verify_url }}" style="display:inline-block;padding:14px 28px;background:linear-
+               gradient(135deg,#e5b5ff,#c388ff);color:#1a0d2a;text-decoration:none;border-                
+               radius:999px;font-weight:600;font-size:15px">                                              
+            ⋮┆----------------------------------------
+           33┆ <a href="{{ site_url }}" style="color:#e5b5ff;text-decoration:none">{{ site_url }}</a> —
+               Shugu, VTuber IA                                                                        
+                                                            
+    backend\shugu\adapters\email_templates\vip_promoted.html
+    ❯❱ generic.html-templates.security.var-in-href.var-in-href
+          ❰❰ Blocking ❱❱
+          Detected a template variable used in an anchor tag with the 'href' attribute. This allows a       
+          malicious actor to input the 'javascript:' URI and is subject to cross- site scripting (XSS)      
+          attacks. If using Flask, use 'url_for()' to safely generate a URL. If using Django, use the 'url' 
+          filter to safely generate a URL. If using Mustache, use a URL encoding library, or prepend a slash
+          '/' to the variable for relative links (`href="/{{link}}"`). You may also consider setting the    
+          Content Security Policy (CSP) header.                                                             
+          Details: https://sg.run/x1kP                                                                      
+                                                                                                            
+           38┆ <a href="{{ site_url }}" style="color:#ffd98c;text-decoration:none">{{ site_url }}</a>
+                                                           
+    backend\shugu\adapters\email_templates\vip_revoked.html
+    ❯❱ generic.html-templates.security.var-in-href.var-in-href
+          ❰❰ Blocking ❱❱
+          Detected a template variable used in an anchor tag with the 'href' attribute. This allows a       
+          malicious actor to input the 'javascript:' URI and is subject to cross- site scripting (XSS)      
+          attacks. If using Flask, use 'url_for()' to safely generate a URL. If using Django, use the 'url' 
+          filter to safely generate a URL. If using Mustache, use a URL encoding library, or prepend a slash
+          '/' to the variable for relative links (`href="/{{link}}"`). You may also consider setting the    
+          Content Security Policy (CSP) header.                                                             
+          Details: https://sg.run/x1kP                                                                      
+                                                                                                            
+           21┆ <a href="{{ site_url }}" style="display:inline-block;padding:14px 28px;background:linear-
+               gradient(135deg,#e5b5ff,#c388ff);color:#1a0d2a;text-decoration:none;border-              
+               radius:999px;font-weight:600;font-size:15px">                                            
+            ⋮┆----------------------------------------
+           29┆ <a href="{{ site_url }}" style="color:#e5b5ff;text-decoration:none">{{ site_url }}</a>
+

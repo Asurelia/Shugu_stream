@@ -68,8 +68,17 @@ EMOTES: frozenset[str] = frozenset({
 
 # ─── Call schemas ────────────────────────────────────────────────────────────
 
-Emotion = Literal["neutral", "happy", "sad", "angry", "relaxed"]
-Mood = Literal["cheerful", "focused", "sleepy", "playful", "bored"]
+# Audit Pass 2 type-design P0.T2 : `Emotion` était dupliqué ici (avec ordre
+# différent de protocols.py). Single source of truth maintenant côté
+# core.protocols — réimport ci-dessous pour garder l'API publique.
+from .protocols import Emotion  # noqa: E402
+
+# Audit Pass 2 type-design P0.T1 : `Mood` ici est DIFFÉRENT du `Mood` de
+# `world/types.py` (vocabulaires disjoints — bombe runtime quand on importait
+# depuis le mauvais module). Renommé en `BodyMood` pour clarifier qu'il
+# représente l'état comportemental de Shugu (ambient mood machine), pas son
+# expression faciale exposée via WorldState.mood.
+BodyMood = Literal["cheerful", "focused", "sleepy", "playful", "bored"]
 
 
 class BodySayCall(BaseModel):
@@ -137,7 +146,7 @@ class BodyExpressionCall(BaseModel):
 class BodyMoodCall(BaseModel):
     """Nudge the ambient Mood state machine. Persists across future idle picks."""
     name: Literal["body.mood"] = "body.mood"
-    mood: Mood
+    mood: BodyMood
 
 
 class BodyEmoteCall(BaseModel):

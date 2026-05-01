@@ -1,0 +1,30 @@
+semver  6.0.0 - 6.3.0 || 7.0.0 - 7.5.1
+Severity: high
+semver vulnerable to Regular Expression Denial of Service - https://github.com/advisories/GHSA-c2qf-rxjj-qqgw
+semver vulnerable to Regular Expression Denial of Service - https://github.com/advisories/GHSA-c2qf-rxjj-qqgw
+fix available via `npm audit fix`
+node_modules/eslint-plugin-import/node_modules/semver
+node_modules/eslint-plugin-jsx-a11y/node_modules/semver
+node_modules/eslint-plugin-react/node_modules/semver
+node_modules/semver
+
+
+word-wrap  <1.2.4
+Severity: moderate
+word-wrap vulnerable to Regular Expression Denial of Service - https://github.com/advisories/GHSA-j8xg-fqg3-53r7
+fix available via `npm audit fix`
+node_modules/word-wrap
+
+yaml  1.0.0 - 1.10.2
+Severity: moderate
+yaml is vulnerable to Stack Overflow via deeply nested YAML collections - https://github.com/advisories/GHSA-48c2-rrv3-qjmp
+fix available via `npm audit fix`
+node_modules/yaml
+
+25 vulnerabilities (1 low, 14 moderate, 8 high, 2 critical)
+
+To address issues that do not require attention, run:
+  npm audit fix
+
+To address all issues (including breaking changes), run:
+  npm audit fix --force

@@ -19,10 +19,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import desc, func, select
 
+from ..auth import user_tokens
 from ..auth.dependencies import require_operator
 from ..config import Settings, get_settings
 from ..core.identity import OperatorIdentity
-from ..db.models import UserAccount
+from ..db.models import UserAccount, UserSession
 from ..db.session import session_scope
 
 router = APIRouter(prefix="/api/admin/users", tags=["admin-users"])
@@ -155,9 +156,19 @@ async def set_vip(
     operator: OperatorIdentity = Depends(require_operator),
     settings: Settings = Depends(get_settings),
 ):
-    """Accorde ou révoque le VIP. Envoie l'email de notification."""
-    from ..app import get_email_sender
+    """Accorde ou révoque le VIP. Envoie l'email de notification.
+
+    Audit Pass 2 security P0.A6 : sur ``revoke``, on requête toutes les
+    sessions actives (UserSession non-revoked) du user et on les révoque
+    immédiatement via ``user_tokens.revoke()`` (Redis SET du jti). Sans ça,
+    l'access JWT du user (TTL 1h) restait valide jusqu'à expiration et le
+    user pouvait continuer à appeler ``/api/livekit/token`` pour ouvrir
+    des rooms VIP. Avec la révocation, ``user_tokens.verify`` rejette le
+    token au prochain appel — canal LiveKit coupé immédiatement.
+    """
+    from ..app import get_email_sender, get_redis
     now = datetime.now(tz=timezone.utc)
+    revoked_jtis: list[str] = []
 
     async with session_scope() as db:
         account = (await db.execute(
@@ -181,6 +192,26 @@ async def set_vip(
             template = "vip_revoked"
             subject = "Ton statut VIP a pris fin — Shugu"
 
+            # Récupère les jtis actifs (non révoqués, pas encore expirés) pour
+            # invalidation Redis en aval.
+            active_sessions = (await db.execute(
+                select(UserSession.jti).where(
+                    UserSession.user_id == user_id,
+                    UserSession.revoked_at.is_(None),
+                    UserSession.expires_at > now,
+                )
+            )).scalars().all()
+            revoked_jtis = list(active_sessions)
+
+            # Marque les sessions révoquées en DB (snapshot persistant — le
+            # refresh côté account.refresh() pourra constater).
+            for jti in revoked_jtis:
+                await db.execute(
+                    UserSession.__table__.update()
+                    .where(UserSession.jti == jti)
+                    .values(revoked_at=now)
+                )
+
         snapshot = {
             "user_id": account.id,
             "username": account.username,
@@ -189,6 +220,31 @@ async def set_vip(
             "vip_until": account.vip_until,
             "is_active": account.is_active,
         }
+
+    # Hors transaction : push les jtis dans Redis revocation set (best-effort).
+    # Le TTL est settings.user_refresh_ttl_s pour couvrir toute durée de vie
+    # restante du refresh token (le set est nettoyé automatiquement après).
+    if revoked_jtis and body.action == "revoke":
+        redis = None
+        try:
+            redis = get_redis()
+        except Exception:
+            log.warning("admin.vip_revoke_no_redis", user_id=user_id)
+        if redis is not None:
+            for jti in revoked_jtis:
+                try:
+                    await user_tokens.revoke(
+                        jti, ttl_s=settings.user_refresh_ttl_s, redis=redis
+                    )
+                except Exception as exc:
+                    log.warning(
+                        "admin.vip_revoke_jti_failed",
+                        user_id=user_id, jti=jti, error=str(exc),
+                    )
+            log.info(
+                "admin.vip_revoked_sessions",
+                user_id=user_id, count=len(revoked_jtis),
+            )
 
     # Envoi email hors transaction (idempotent, best-effort)
     try:

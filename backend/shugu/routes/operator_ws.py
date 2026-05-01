@@ -121,10 +121,17 @@ async def operator_ws(
 
 
 async def _stream_stage(ws: WebSocket) -> None:
+    """Push every `stage` topic event to operator socket.
+
+    Audit Pass 2 perf P0.P2 — sérialisation cachée par event id partagée
+    entre operators + visitors (cf. _ws_serializer.py).
+    """
+    from ._ws_serializer import SerializedCache, serialize_cached
     assert _deps is not None
+    cache: SerializedCache = {}
     try:
         async for event in _deps.event_bus.subscribe("stage"):
-            await ws.send_text(json.dumps(event))
+            await ws.send_text(serialize_cached(event, cache))
     except Exception:
         pass
 

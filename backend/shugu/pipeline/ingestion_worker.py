@@ -144,8 +144,13 @@ class IngestionWorker:
             self._task.cancel()
             try:
                 await self._task
-            except (asyncio.CancelledError, Exception):
+            except asyncio.CancelledError:
+                # Cancellation attendue lors d'un stop() normal — pas un bug.
                 pass
+            except Exception as exc:
+                # Audit Pass 2 silent-failure A2 : un crash de finalisation
+                # autre que CancelledError doit remonter dans les logs.
+                log.warning("ingestion_worker.stop_failed", error=str(exc), exc_info=True)
         self._task = None
 
 
