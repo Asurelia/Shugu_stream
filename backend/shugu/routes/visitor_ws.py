@@ -103,11 +103,19 @@ async def visitor_ws(ws: WebSocket) -> None:
 
 
 async def _stream_stage(ws: WebSocket) -> None:
-    """Push every `stage` topic event to this visitor's socket."""
+    """Push every `stage` topic event to this visitor's socket.
+
+    Audit Pass 2 perf P0.P2 : sérialisation cachée par `id(event)` — chaque
+    event publié sur le bus est partagé entre tous les viewers, on ne le
+    sérialise qu'une fois (le premier viewer paie, les autres reçoivent la
+    chaîne cachée). Réduit le CPU sérialisation × N viewers à × 1.
+    """
+    from ._ws_serializer import SerializedCache, serialize_cached
     assert _deps is not None
+    cache: SerializedCache = {}
     try:
         async for event in _deps.event_bus.subscribe("stage"):
-            await ws.send_text(json.dumps(event))
+            await ws.send_text(serialize_cached(event, cache))
     except Exception:
         # WS likely closed; let the main handler finalize.
         pass

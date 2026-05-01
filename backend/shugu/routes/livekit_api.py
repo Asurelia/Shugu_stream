@@ -43,9 +43,44 @@ async def mint_vip_token(
     identity: VIPIdentity = Depends(require_vip),
     settings: Settings = Depends(get_settings),
 ):
-    """Génère un token VIP et dispatch l'agent Shugu sur la room."""
+    """Génère un token VIP et dispatch l'agent Shugu sur la room.
+
+    Audit Pass 2 security P0.A6 : ne pas faire confiance à la claim
+    `vip_active=True` du JWT. Re-vérifie en DB que l'account est encore VIP
+    actif au moment du mint. La claim peut être stale (TTL access = 1h) si
+    l'opérateur a révoqué le VIP entre l'émission du token et l'appel ici.
+    """
     if not (settings.livekit_url and settings.livekit_api_key and settings.livekit_api_secret):
         raise HTTPException(status_code=503, detail="LiveKit not configured on this server")
+
+    # Re-vérification DB du statut VIP — la claim JWT peut être obsolète.
+    from datetime import datetime, timezone
+
+    from sqlalchemy import select
+
+    from ..db.models import UserAccount
+    from ..db.session import session_scope
+    from ..routes.account import _is_vip_active
+
+    async with session_scope() as db:
+        account = (await db.execute(
+            select(UserAccount).where(UserAccount.id == identity.user_id)
+        )).scalars().first()
+        if account is None or not account.is_active:
+            log.warning(
+                "livekit.token_refused_account_invalid",
+                user_id=identity.user_id, username=identity.username,
+            )
+            raise HTTPException(status_code=403, detail="account inactive")
+        if not _is_vip_active(account, datetime.now(tz=timezone.utc)):
+            log.warning(
+                "livekit.token_refused_vip_revoked",
+                user_id=identity.user_id, username=identity.username,
+            )
+            raise HTTPException(
+                status_code=403,
+                detail="VIP access revoked or expired",
+            )
 
     room_name = f"vip-{identity.username}-{int(time.time())}"
 

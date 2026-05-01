@@ -39,9 +39,9 @@ from ..core.protocols import EventBus
 from ..world.types import (
     ActionUnion,
     AvatarPoseAction,
-    Mood,
     MoodSetAction,
     SceneTransitionAction,
+    WorldMood,
     WorldState,
 )
 
@@ -50,9 +50,9 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-# Valeurs autorisées pour Mood — dérivées du Literal via typing.get_args.
+# Valeurs autorisées pour WorldMood — dérivées du Literal via typing.get_args.
 # Cela évite de dupliquer la liste et garantit la cohérence en cas d'extension.
-_VALID_MOODS: frozenset[str] = frozenset(typing.get_args(Mood))
+_VALID_MOODS: frozenset[str] = frozenset(typing.get_args(WorldMood))
 
 
 # ---------------------------------------------------------------------------
@@ -193,8 +193,8 @@ async def handle_set_mood(deps: HandlerDeps, params: dict) -> None:
         )
         return
 
-    # mypy : typing.cast pour satisfaire le type Mood (Literal).
-    await deps.world_store.apply(MoodSetAction(mood=typing.cast(Mood, mood_str)))
+    # mypy : typing.cast pour satisfaire le type WorldMood (Literal).
+    await deps.world_store.apply(MoodSetAction(mood=typing.cast(WorldMood, mood_str)))
 
 
 async def handle_set_scene(deps: HandlerDeps, params: dict) -> None:

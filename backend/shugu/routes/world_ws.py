@@ -234,13 +234,18 @@ async def _forward_loop(ws: WebSocket, event_bus: EventBus) -> None:
 
     Swallow les erreurs d'envoi (socket déjà fermé côté client) pour ne pas
     polluer les logs en fermeture normale.
+
+    Audit Pass 2 perf P0.P2 — sérialisation cachée par event id (chaque
+    delta partagé entre tous les viewers world).
     """
+    from ._ws_serializer import SerializedCache, serialize_cached
+    cache: SerializedCache = {}
     try:
         async for event in event_bus.subscribe(_WORLD_DELTA_TOPIC):
             if not isinstance(event, dict):
                 continue
             try:
-                await ws.send_text(json.dumps(event))
+                await ws.send_text(serialize_cached(event, cache))
             except Exception as exc:
                 log.debug("world_ws.send_failed", error=str(exc))
                 return
