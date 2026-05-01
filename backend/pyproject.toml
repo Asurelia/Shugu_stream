@@ -49,6 +49,10 @@ dependencies = [
     # via GET /metrics (gated par SHUGU_METRICS_ENABLED). Compteurs AgentRunner,
     # WorldStateStore, SensesBus — pas de daemon thread requis.
     "prometheus_client>=0.20,<1.0",
+    # cachetools — Audit Pass 2 P1.E. TTLCache + LRUCache pour borner les
+    # leaks process (visitor_ws._last_command_ts, workers._history_per_session).
+    # Sans bound, ces dicts grossissaient sur la durée du stream → OOM lent.
+    "cachetools>=5.3,<6.0",
 ]
 
 [project.optional-dependencies]
