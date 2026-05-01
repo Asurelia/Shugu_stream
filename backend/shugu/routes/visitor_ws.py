@@ -43,7 +43,17 @@ _COMMAND_MAP: dict[str, dict[str, str]] = {
 }
 _COMMAND_COOLDOWN_S = 30.0
 _COMMAND_SILENT_MS = 1500   # keeps picker idle briefly so chat messages don't stomp the gesture
-_last_command_ts: dict[str, float] = {}
+
+# Audit Pass 2 P1.E — `_last_command_ts` était `dict[str, float]` non borné,
+# une entrée par ip_hash unique (~10k-100k entries sur 6 mois de stream).
+# TTLCache borne à la fois la taille (maxsize=10000 IPs) et la durée de vie
+# (ttl=120s > cooldown 30s, donc le throttle reste correct). Une IP qui ne
+# revient pas après 2 min est expulsée — son cooldown reset, comportement
+# souhaité (l'attaquant ne gagne rien à attendre, le user légitime n'est plus
+# pénalisé d'une session précédente).
+from cachetools import TTLCache  # noqa: E402
+
+_last_command_ts: TTLCache[str, float] = TTLCache(maxsize=10000, ttl=120)
 
 
 router = APIRouter()

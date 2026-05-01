@@ -276,9 +276,21 @@ async def deactivate(
     user_id: str,
     body: DeactivateBody,
     operator: OperatorIdentity = Depends(require_operator),
+    settings: Settings = Depends(get_settings),
 ):
-    """Désactive le compte (is_active=false). Pas d'envoi email pour l'instant."""
+    """Désactive le compte (is_active=false) + révoque tous les JWT actifs.
+
+    Audit Pass 2 P1.C : sans la révocation des sessions actives, un compte
+    désactivé garde son access JWT valide jusqu'à expiration (1h). Pendant
+    cette fenêtre, le user désactivé peut continuer à appeler les routes
+    protégées par require_member/require_vip. Avec révocation, la
+    déconnexion est immédiate.
+    """
+    from ..app import get_redis
+    from ..auth import user_tokens
     now = datetime.now(tz=timezone.utc)
+    revoked_jtis: list[str] = []
+
     async with session_scope() as db:
         account = (await db.execute(
             select(UserAccount).where(UserAccount.id == user_id)
@@ -286,6 +298,25 @@ async def deactivate(
         if account is None:
             raise HTTPException(status_code=404, detail="user not found")
         account.is_active = False
+
+        # Récupère les jtis actifs pour invalidation Redis en aval.
+        active_sessions = (await db.execute(
+            select(UserSession.jti).where(
+                UserSession.user_id == user_id,
+                UserSession.revoked_at.is_(None),
+                UserSession.expires_at > now,
+            )
+        )).scalars().all()
+        revoked_jtis = list(active_sessions)
+
+        # Marque les sessions révoquées en DB.
+        for jti in revoked_jtis:
+            await db.execute(
+                UserSession.__table__.update()
+                .where(UserSession.jti == jti)
+                .values(revoked_at=now)
+            )
+
         snapshot = {
             "user_id": account.id,
             "username": account.username,
@@ -294,6 +325,30 @@ async def deactivate(
             "vip_until": account.vip_until,
             "is_active": account.is_active,
         }
+
+    # Hors transaction : push les jtis dans Redis revocation set (best-effort).
+    if revoked_jtis:
+        redis = None
+        try:
+            redis = get_redis()
+        except Exception:
+            log.warning("admin.deactivate_no_redis", user_id=user_id)
+        if redis is not None:
+            for jti in revoked_jtis:
+                try:
+                    await user_tokens.revoke(
+                        jti, ttl_s=settings.user_refresh_ttl_s, redis=redis
+                    )
+                except Exception as exc:
+                    log.warning(
+                        "admin.deactivate_jti_failed",
+                        user_id=user_id, jti=jti, error=str(exc),
+                    )
+            log.info(
+                "admin.deactivate_revoked_sessions",
+                user_id=user_id, count=len(revoked_jtis),
+            )
+
     log.info("admin.user_deactivated",
              user_id=user_id, reason=body.reason, by=operator.username)
     return ActionResponse(**snapshot)

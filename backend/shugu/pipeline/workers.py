@@ -68,7 +68,15 @@ class PrepWorker:
         self._tts = tts
         self._moderation = moderation
         self._running = False
-        self._history_per_session: dict[str, list[Turn]] = {}
+        # Audit Pass 2 P1.E — `_history_per_session` était `dict[str, list[Turn]]`
+        # non borné. Chaque connexion visitor crée un ULID session_id distinct,
+        # donc reconnexion = nouvelle entrée. Sur stream 24/7 avec 100 viewers
+        # × churn 5 min, ~28k entrées/jour s'accumulaient.
+        # LRUCache(maxsize=2000) garde les 2000 sessions les plus récentes ;
+        # au-delà, les vieilles sont expulsées et l'historique LLM commence
+        # à zéro (acceptable — un visiteur silencieux 30+ min perd peu).
+        from cachetools import LRUCache
+        self._history_per_session: LRUCache[str, list[Turn]] = LRUCache(maxsize=2000)
 
     async def run(self) -> None:
         self._running = True
