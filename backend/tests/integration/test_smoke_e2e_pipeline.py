@@ -123,7 +123,16 @@ def settings_ws(monkeypatch):
 
 @pytest.fixture
 def wave_client(settings_ws) -> Iterator[tuple[TestClient, InProcessEventBus, WorldStateStore]]:
-    """TestClient sur mini-app avec _BrainAvatarWave."""
+    """TestClient sur mini-app avec _BrainAvatarWave.
+
+    ⚠️ RÈGLE — NE PAS appeler ``client.__enter__()`` côté test
+    (régression P1 review #65 — Starlette TestClient.__enter__ n'est PAS
+    re-entrant : un 2e appel démarre un nouveau lifespan/portal et écrase
+    l'exit stack stocké, leakant les tasks runner et duplicant
+    publishers/subscribers cross-test). Le ``with TestClient(app) as
+    client:`` ci-dessous gère TOUT le lifecycle — lifespan startup +
+    shutdown. Le test consomme directement ``client`` sans ré-entrer.
+    """
     app, bus, store = _make_mini_app(_BrainAvatarWave())
     try:
         with TestClient(app) as client:
@@ -134,7 +143,11 @@ def wave_client(settings_ws) -> Iterator[tuple[TestClient, InProcessEventBus, Wo
 
 @pytest.fixture
 def say_client(settings_ws) -> Iterator[tuple[TestClient, InProcessEventBus]]:
-    """TestClient sur mini-app avec _BrainSayBonjour."""
+    """TestClient sur mini-app avec _BrainSayBonjour.
+
+    ⚠️ RÈGLE — NE PAS appeler ``client.__enter__()`` côté test
+    (cf. docstring de ``wave_client``).
+    """
     app, bus, _store = _make_mini_app(_BrainSayBonjour())
     try:
         with TestClient(app) as client:
