@@ -86,13 +86,10 @@ class VIPIdentity:
         _require_nonempty("VIPIdentity.user_id", self.user_id)
         _require_nonempty("VIPIdentity.username", self.username)
         _require_nonempty("VIPIdentity.jti", self.jti)
-        # vip_since est obligatoire pour distinguer un VIP réel d'un Member
-        # promu transitoirement par erreur.
-        if self.vip_since is None:
-            raise ValueError(
-                "VIPIdentity.vip_since must be set — un VIP sans date d'activation "
-                "ne peut pas exister."
-            )
+        # Note : vip_since/vip_until ne sont PAS dans le JWT (cf. docstring
+        # user_tokens.py — éviter de bloater le token). `_resolve_user` les
+        # laisse None et on les relit en DB côté routes qui en ont besoin
+        # (ex: profile.py affiche la date d'expiration). Pas de garde ici.
 
 
 @dataclass(frozen=True, slots=True)
