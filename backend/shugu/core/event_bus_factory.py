@@ -17,7 +17,7 @@ unique = Picker, payload = chunks audio MP3 en bytes). Ce garde-fou est
 """
 from __future__ import annotations
 
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 import redis.asyncio as aioredis
 import structlog
@@ -26,6 +26,9 @@ from ..config import Settings
 from .event_bus import InProcessEventBus
 from .event_bus_redis import RedisEventBus
 from .protocols import EventBus
+
+if TYPE_CHECKING:
+    from ..observability.metrics import MetricsRecorder
 
 log = structlog.get_logger(__name__)
 
@@ -64,6 +67,7 @@ async def make_event_bus(
     redis: aioredis.Redis,
     *,
     broadcast_topics: Optional[set[str]] = None,
+    metrics: "MetricsRecorder | None" = None,
 ) -> EventBus:
     """Retourne le bus configuré et prêt à l'emploi (boucle reader démarrée).
 
@@ -74,6 +78,11 @@ async def make_event_bus(
     Le paramètre `broadcast_topics` override le défaut — utile pour les tests
     ou pour brancher des topics additionnels dans les phases ultérieures (ex:
     `sense.twitch`, `sense.obs`).
+
+    Audit Pass 2 P1.C4 (review CodeRabbit) : le paramètre `metrics` est forwardé
+    à `InProcessEventBus` pour que `event_bus_drop_total` soit incrémenté en prod.
+    Sans cet argument, l'app.py construisait via cette factory un bus avec un
+    NullRecorder (no-op), et les drops slow-consumer restaient invisibles.
     """
     mode = settings.event_bus_mode
     if mode == "redis":
@@ -93,4 +102,4 @@ async def make_event_bus(
     # mode == "inproc" (ou toute valeur inconnue — on tombe sur le fallback
     # safe : un bus in-process, même sémantique que pré-Phase 1).
     log.info("event_bus.mode_inproc")
-    return InProcessEventBus()
+    return InProcessEventBus(metrics=metrics)

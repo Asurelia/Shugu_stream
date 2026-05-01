@@ -23,6 +23,8 @@ from typing import Optional
 
 import structlog
 
+from ..core.errors import STTError
+
 log = structlog.get_logger(__name__)
 
 
@@ -126,6 +128,11 @@ class FasterWhisperSTT:
         try:
             text = await asyncio.to_thread(_run)
         except Exception as exc:
+            # Audit Pass 2 P1.B1 : avant ce raise, on retournait `""` qui était
+            # indistinguable d'un audio silencieux légitime. L'opérateur croyait
+            # que son micro déconnait. Maintenant on remonte STTError et le
+            # caller (voice_duplex / livekit_adapter) peut envoyer un VoiceEvent
+            # d'erreur explicite au client.
             log.exception("stt.transcribe_error", error=str(exc))
-            return ""
+            raise STTError(f"transcribe failed: {exc}") from exc
         return text

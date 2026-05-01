@@ -166,7 +166,12 @@ async def lifespan(app: FastAPI):
     # Event bus — factory selon `settings.event_bus_mode` (Phase 1 brique 1.1).
     # En mode "redis", le reader pub/sub est démarré avant le return, garantissant
     # que les premiers publish() sur les topics broadcast ne sont pas perdus.
-    event_bus = await make_event_bus(settings, _redis)
+    #
+    # Audit Pass 2 P1.C4 (review) : on injecte _prom_recorder pour que
+    # `event_bus_drop_total` soit incrémenté sur drop-oldest en mode inproc.
+    # Sans cet argument, l'InProcessEventBus utilisait NullRecorder et les
+    # drops slow-consumer restaient invisibles dans /metrics.
+    event_bus = await make_event_bus(settings, _redis, metrics=_prom_recorder)
     # Asset Registry (Phase POC) — remplace les whitelists hardcoded de
     # body_control. Lazy reload 5s, invalidation broadcast via event_bus.
     init_registry(event_bus=event_bus, ttl_s=5.0)
@@ -242,21 +247,29 @@ async def lifespan(app: FastAPI):
     # TTS with automatic fallback. Primary configurable via TTS_PRIMARY.
     # Quota tracker wired to MiniMax so a depleted daily budget triggers
     # fallback to Edge-TTS instead of silently killing the stream.
+    #
+    # Audit Pass 2 P1.C1 (review CodeRabbit) : on injecte _prom_recorder
+    # explicitement pour que `tts_fallback_total` soit incrémenté en prod.
+    # Sans cet argument, FallbackTTS basculait sur NullRecorder (no-op) et
+    # le compteur restait à 0 dans /metrics même quand la primary claque.
     _minimax_tts = MiniMaxTTS(settings, http, quota=quota)
     _eleven = ElevenLabsTTS(settings, http)
     _edge = EdgeTTS()
     if settings.tts_primary == "edge":
         tts = FallbackTTS(_edge, _minimax_tts,
                           primary_voice=settings.edge_tts_voice,
-                          secondary_voice=settings.minimax_voice_id)
+                          secondary_voice=settings.minimax_voice_id,
+                          metrics=_prom_recorder)
     elif settings.tts_primary == "elevenlabs":
         tts = FallbackTTS(_eleven, _edge,
                           primary_voice=settings.shugu_voice_id,
-                          secondary_voice=settings.edge_tts_voice)
+                          secondary_voice=settings.edge_tts_voice,
+                          metrics=_prom_recorder)
     else:  # minimax (default) — Edge as fallback
         tts = FallbackTTS(_minimax_tts, _edge,
                           primary_voice=settings.minimax_voice_id,
-                          secondary_voice=settings.edge_tts_voice)
+                          secondary_voice=settings.edge_tts_voice,
+                          metrics=_prom_recorder)
 
     moderation = BasicModeration(settings, _redis)
     queue = RedisQueue(_redis, pending_cap=settings.queue_pending_cap)

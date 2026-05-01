@@ -37,6 +37,7 @@ from livekit.agents.stt import (
     STTCapabilities,
 )
 
+from ..core.errors import STTError
 from .stt_streaming import FasterWhisperSTT
 
 log = structlog.get_logger(__name__)
@@ -81,15 +82,23 @@ class ShuguWhisperSTT(stt.STT):
 
         lang_in = language if isinstance(language, str) and language else self._language
 
-        text = ""
+        # Audit Pass 2 P1.B2 : avant ce raise, un crash Whisper (STTError)
+        # générait silencieusement un FINAL_TRANSCRIPT vide — LiveKit le
+        # considérait comme un transcript valide. Maintenant on raise pour
+        # que LiveKit puisse remonter l'erreur en haut de la stack vocale
+        # (le worker VIP est censé gérer les exceptions STT côté agents).
         try:
             text = await self._whisper.transcribe_pcm16(
                 pcm,
                 sample_rate=sample_rate,
                 language=lang_in,
             )
+        except STTError:
+            log.warning("stt_lk.transcribe_failed_propagating")
+            raise
         except Exception as exc:
-            log.warning("stt_lk.transcribe_failed", error=str(exc))
+            log.exception("stt_lk.unexpected_error", error=str(exc))
+            raise STTError(f"livekit stt unexpected: {exc}") from exc
 
         return SpeechEvent(
             type=SpeechEventType.FINAL_TRANSCRIPT,

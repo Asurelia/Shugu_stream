@@ -279,9 +279,25 @@ class HermesStateReader:
                 return {"jobs": data["jobs"][:40], "count": len(data["jobs"])}
             if isinstance(data, list):
                 return {"jobs": data[:40], "count": len(data)}
-        except (OSError, json.JSONDecodeError):
-            pass
-        return {"jobs": [], "count": 0}
+            # Audit Pass 2 P1.B3 : data n'est ni dict ni list → fichier
+            # corrompu sémantiquement. Avant, on tombait silencieusement sur
+            # "0 cron jobs" comme si tout était normal. Maintenant on log
+            # + on retourne un payload qui distingue parse-error vs liste vide.
+            log.warning(
+                "hermes_state.cron_unexpected_shape",
+                cron_file=str(cron_file),
+                got_type=type(data).__name__,
+            )
+            return {"jobs": [], "count": 0, "error": "unexpected shape"}
+        except (OSError, json.JSONDecodeError) as exc:
+            # Idem : l'admin qui voit "0 cron jobs" doit savoir si c'est un
+            # parse error ou une vraie liste vide.
+            log.warning(
+                "hermes_state.cron_parse_failed",
+                cron_file=str(cron_file),
+                error=str(exc),
+            )
+            return {"jobs": [], "count": 0, "error": "parse failed"}
 
 
 # ─── File helpers ───────────────────────────────────────────────────────────

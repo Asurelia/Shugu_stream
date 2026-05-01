@@ -148,8 +148,17 @@ async def logout(response: Response,
             payload = await jwt_tokens.verify(token, settings=settings, redis=redis, expected_type=ttype)
             remaining = max(payload.exp - int(time.time()), 60)
             await jwt_tokens.revoke(payload.jti, ttl_s=remaining, redis=redis)
-        except AuthError:
-            pass
+        except AuthError as exc:
+            # Audit Pass 2 P1.B9 : avant ce log.info, on swallow silently —
+            # impossible de différencier "token déjà expiré" (cas légitime)
+            # vs "Redis down" ou "bug rotation secret" (incident). Maintenant
+            # on trace la raison ; la suppression cookie reste OK quoi qu'il
+            # arrive (l'utilisateur veut juste partir).
+            log.info(
+                "auth.logout_skip_revoke",
+                token_type=ttype,
+                reason=str(exc),
+            )
     _clear_cookies(response)
     return {"ok": True}
 

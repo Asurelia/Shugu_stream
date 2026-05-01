@@ -15,22 +15,47 @@ chunk; any failure before that triggers the secondary's full synthesis.
 from __future__ import annotations
 
 import contextlib
-from typing import AsyncIterator
+from typing import TYPE_CHECKING, AsyncIterator
 
 import structlog
 
 from ..core.errors import TTSError
 from ..core.protocols import TTSAdapter, TTSChunk, TTSResult
 
+if TYPE_CHECKING:
+    from ..observability.metrics import MetricsRecorder
+
 log = structlog.get_logger(__name__)
 
 
+# Helpers pour identifier le provider TTS dans les métriques.
+# Utilise __class__.__name__ via _provider_name() — pas de coupling fort.
+def _provider_name(adapter: TTSAdapter) -> str:
+    """Retourne le nom du provider TTS (ex: 'MiniMaxTTS', 'EdgeTTS')."""
+    return adapter.__class__.__name__
+
+
 class FallbackTTS:
-    def __init__(self, primary: TTSAdapter, secondary: TTSAdapter, *, primary_voice: str, secondary_voice: str):
+    def __init__(
+        self,
+        primary: TTSAdapter,
+        secondary: TTSAdapter,
+        *,
+        primary_voice: str,
+        secondary_voice: str,
+        metrics: "MetricsRecorder | None" = None,
+    ):
         self._primary = primary
         self._secondary = secondary
         self._primary_voice = primary_voice
         self._secondary_voice = secondary_voice
+        # Audit Pass 2 P1.C1 — observabilité fallback. Sans cette métrique,
+        # une primary qui claque souvent (MiniMax quota, ElevenLabs down)
+        # est invisible : l'opérateur entend Edge-TTS sans savoir pourquoi.
+        if metrics is None:
+            from ..observability.metrics import get_null_recorder
+            metrics = get_null_recorder()
+        self._metrics = metrics
 
     @property
     def primary_voice(self) -> str:
@@ -51,6 +76,10 @@ class FallbackTTS:
             return await self._primary.synthesize(text, voice_id=voice_id or self._primary_voice)
         except TTSError as exc:
             log.warning("tts.primary_failed_fallback", error=str(exc))
+            self._metrics.record_tts_fallback(
+                from_provider=_provider_name(self._primary),
+                to_provider=_provider_name(self._secondary),
+            )
             return await self._secondary.synthesize(text, voice_id=self._secondary_voice)
 
     async def synthesize_stream(
@@ -82,6 +111,10 @@ class FallbackTTS:
                     log.error("tts.primary_stream_mid_failure", error=str(exc))
                     raise
                 log.warning("tts.primary_stream_failed_fallback", error=str(exc))
+                self._metrics.record_tts_fallback(
+                    from_provider=_provider_name(self._primary),
+                    to_provider=_provider_name(self._secondary),
+                )
         else:
             # Primary has no streaming — wrap its blob as a single final chunk.
             # This was previously missing; without it, when primary=ElevenLabs
@@ -93,6 +126,10 @@ class FallbackTTS:
                 return
             except TTSError as exc:
                 log.warning("tts.primary_blob_failed_fallback", error=str(exc))
+                self._metrics.record_tts_fallback(
+                    from_provider=_provider_name(self._primary),
+                    to_provider=_provider_name(self._secondary),
+                )
 
         async for chunk in self._fallback_stream(text):
             yield chunk
