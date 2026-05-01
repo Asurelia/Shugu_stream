@@ -53,6 +53,10 @@ class TestSTTChainImportsSTTError:
         assert stt_streaming.STTError is STTError
 
     def test_stt_livekit_adapter_imports_stterror(self) -> None:
+        # `livekit.agents` est une dep optionnelle (worker VIP uniquement,
+        # pas installé sur la CI minimale). Skip propre si absent.
+        pytest = __import__("pytest")
+        pytest.importorskip("livekit.agents")
         from shugu.adapters import stt_livekit_adapter
         assert hasattr(stt_livekit_adapter, "STTError")
         assert stt_livekit_adapter.STTError is STTError
