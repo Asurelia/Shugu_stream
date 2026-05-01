@@ -1,10 +1,52 @@
-"""Tests de configuration Settings."""
+"""Tests de configuration Settings.
+
+NOTE — isolation des tests vs `.env` : Pydantic Settings charge
+`ops/env/.env` au démarrage (configuré dans `Settings.model_config`).
+Sans isolation, les valeurs du `.env` du dev local écrasent les kwargs
+explicites passés aux constructeurs de test (ex: `Settings(ip_hash_salt="")`
+récupère la vraie valeur du fichier au lieu de la chaîne vide voulue).
+
+La fixture `_isolate_env_file` (autouse, scope=class) injecte
+`_env_file=None` dans tous les `Settings(...)` du module via monkeypatch
+sur `Settings.__init__` — désactive le chargement .env pour ces tests.
+"""
 from __future__ import annotations
 
 import pytest
 from pydantic import ValidationError
 
 from shugu.config import Settings
+
+
+@pytest.fixture(autouse=True)
+def _isolate_env_file(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Isole les tests Settings du `.env` ET des env vars setées dans conftest.
+
+    Deux sources de pollution dans la suite :
+
+    1. **`.env` chargé par Pydantic Settings** : `model_config.env_file` pointe
+       vers `ops/env/.env`. Sans override, les valeurs du fichier écrasent les
+       kwargs explicites du test. Fix : `_env_file=None` à la construction.
+
+    2. **`conftest.py` set `IP_HASH_SALT="test-salt-32-chars-for-pytest-ok-"`**
+       (et SHUGU_ENV_FILE) au module load — ça permet à la majorité des tests
+       d'instancier Settings sans configurer un salt, mais pour les tests qui
+       VEULENT vérifier le validator avec salt vide, ces env vars dominent les
+       kwargs (Pydantic v2 + validation_alias). Fix : `monkeypatch.delenv` les
+       env vars liées à la config testée — n'affecte que ce module.
+    """
+    # Désactive les env vars qui matchent les validation_alias des fields testés.
+    for env_var in ("IP_HASH_SALT", "SHUGU_IP_HASH_SALT", "ENV", "SHUGU_ENV"):
+        monkeypatch.delenv(env_var, raising=False)
+
+    # Désactive le chargement du .env file pour ce module.
+    original_init = Settings.__init__
+
+    def patched_init(self, **kwargs):
+        kwargs.setdefault("_env_file", None)
+        original_init(self, **kwargs)
+
+    monkeypatch.setattr(Settings, "__init__", patched_init)
 
 
 class TestIpHashSalt:
@@ -171,3 +213,44 @@ class TestEnvAliases:
         monkeypatch.setenv("SHUGU_VIP_USERNAMES", '["alice","bob"]')
         s = Settings(env="dev", ip_hash_salt="x")
         assert s.vip_usernames == ["alice", "bob"]
+
+
+class TestPublicSiteUrl:
+    """Validation defense-in-depth contre injection XSS via public_site_url.
+
+    public_site_url est interpolée dans `<a href="{{ site_url }}">` des templates
+    emails. Un attaquant qui contrôle l'env (config compromise) pourrait y mettre
+    `javascript:alert(1)` — XSS chez les clients mail rendant JS. La validation
+    fail-fast au démarrage rejette tout schéma autre que http(s).
+    """
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "javascript:alert(1)",
+            "data:text/html,<script>alert(1)</script>",
+            "vbscript:msgbox('xss')",
+            "file:///etc/passwd",
+            "//evil.com",
+            "evil.com",  # pas de schéma du tout
+            "",
+        ],
+    )
+    def test_public_site_url_rejects_dangerous_schemes(self, url: str) -> None:
+        with pytest.raises(ValidationError) as exc_info:
+            Settings(env="dev", ip_hash_salt="x", public_site_url=url)
+
+        errors = exc_info.value.errors()
+        assert any("public_site_url" in str(e) for e in errors)
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://shugu.spoukie.uk",
+            "http://localhost:3005",
+            "https://example.com/path?q=1",
+        ],
+    )
+    def test_public_site_url_accepts_http_https(self, url: str) -> None:
+        s = Settings(env="dev", ip_hash_salt="x", public_site_url=url)
+        assert s.public_site_url == url

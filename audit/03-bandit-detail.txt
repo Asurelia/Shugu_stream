@@ -1,0 +1,17 @@
+Total: 35 findings
+
+[B101] assert_used - LOW/HIGH - 20 occurrences
+  - shugu\app.py:78 - Use of assert detected. The enclosed code will be removed when compiling to opti
+  - shugu\app.py:84 - Use of assert detected. The enclosed code will be removed when compiling to opti
+
+[B311] blacklist - LOW/HIGH - 6 occurrences
+  - shugu\adapters\vip_bridge_client.py:135 - Standard pseudo-random generators are not suitable for security/cryptographic pu
+  - shugu\director\canned_responses.py:151 - Standard pseudo-random generators are not suitable for security/cryptographic pu
+
+[B110] try_except_pass - LOW/HIGH - 5 occurrences
+  - shugu\adapters\tts_minimax.py:237 - Try, Except, Pass detected.
+  - shugu\pipeline\picker.py:190 - Try, Except, Pass detected.
+
+[B105] hardcoded_password_string - LOW/MEDIUM - 4 occurrences
+  - shugu\auth\jwt_tokens.py:44 - Possible hardcoded password: 'access'
+  - shugu\auth\jwt_tokens.py:57 - Possible hardcoded password: 'refresh'
