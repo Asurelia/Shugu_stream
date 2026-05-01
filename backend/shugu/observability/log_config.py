@@ -24,7 +24,6 @@ Usage en tests
 from __future__ import annotations
 
 import logging
-import sys
 from typing import Literal
 
 import structlog
@@ -63,10 +62,15 @@ def configure_logging(log_format: LogFormat = "json") -> None:
             structlog.dev.ConsoleRenderer(colors=True),
         ]
 
+    # PrintLoggerFactory() sans `file=` : PrintLogger résout sys.stdout
+    # dynamiquement à chaque écriture. Capturer `file=sys.stdout` ici fait
+    # crasher les tests pytest qui swappent sys.stdout par un buffer fermé
+    # entre tests → `ValueError: I/O operation on closed file` (observé
+    # dans test_smoke_e2e_pipeline avec un log post-test).
     structlog.configure(
         processors=processors,
         wrapper_class=structlog.make_filtering_bound_logger(logging.INFO),
-        logger_factory=structlog.PrintLoggerFactory(file=sys.stdout),
+        logger_factory=structlog.PrintLoggerFactory(),
         cache_logger_on_first_use=False,
     )
 
