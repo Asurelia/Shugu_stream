@@ -32,7 +32,6 @@ from fastapi.testclient import TestClient
 
 from shugu.config import Settings
 
-
 TEST_PASSWORD = "operator-test-pass-12345"
 
 
@@ -214,23 +213,45 @@ class TestRefresh:
         self, client: TestClient
     ) -> None:
         """Le replay d'un refresh révoqué (typique d'un attaquant qui a volé
-        un cookie expiré) doit échouer."""
-        # Login
+        un cookie avant rotation) doit échouer.
+
+        Scénario rejoué :
+          1. login → cookie refresh #1 (jti A)
+          2. refresh → cookie refresh #2 (jti B), jti A révoqué Redis
+          3. attaquant tente refresh avec jti A volé → doit échouer 401
+             "token revoked" (et NON pas 200).
+
+        Cette régression critique est ce qui distingue une rotation
+        atomique d'une rotation passive : sans révocation du jti A,
+        un cookie volé reste valide jusqu'à expiration TTL refresh (7d).
+        """
+        # 1. Login pour obtenir le premier refresh (jti A)
         client.post(
             "/auth/login",
             json={"username": "spoukie", "password": TEST_PASSWORD},
         )
+        old_refresh = client.cookies.get("shugu_refresh")
+        assert old_refresh is not None, "login should set refresh cookie"
 
-        # Premier refresh (révoque l'ancien jti, émet un nouveau)
-        client.post("/auth/refresh")
+        # 2. Premier refresh : le client reçoit jti B en cookie, et jti A
+        #    est ajouté au revocation set Redis.
+        first_refresh = client.post("/auth/refresh")
+        assert first_refresh.status_code == 200
+        new_refresh = client.cookies.get("shugu_refresh")
+        assert new_refresh != old_refresh, "rotation must change the cookie"
 
-        # Tentative de refresh avec... le COOKIE rotaté est dans client.cookies,
-        # mais on simule un attaquant qui a stocké l'ancien refresh hors-cookie.
-        # Ici, le 2e refresh utilise le nouveau cookie → doit fonctionner.
-        # (Tester le replay avec le vieux nécessite manipulation cookies — skip
-        # pour cette suite, couvert par test unit jwt_tokens.test_revoked_jti_raises.)
-        second_refresh = client.post("/auth/refresh")
-        assert second_refresh.status_code == 200
+        # 3. Replay : on remet manuellement le vieux refresh dans le cookie
+        #    et on retente. L'attaquant a stocké ce token hors-cookie avant
+        #    la rotation (vol XSS, leak log, etc.).
+        client.cookies.set("shugu_refresh", old_refresh, path="/auth/")
+        replay = client.post("/auth/refresh")
+
+        # Doit échouer — jti A est dans le revocation set.
+        assert replay.status_code == 401, (
+            f"Expected 401 on revoked refresh replay, got {replay.status_code}. "
+            "Sans cette protection, un cookie volé reste exploitable 7 jours."
+        )
+        assert "revoked" in replay.json()["detail"].lower()
 
     def test_refresh_no_cookie_returns_401(self, client: TestClient) -> None:
         """Pas de refresh cookie → 401."""

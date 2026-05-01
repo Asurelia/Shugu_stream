@@ -18,8 +18,6 @@ silencieux pourrait ouvrir un bypass sans régression visible.
 from __future__ import annotations
 
 import time
-from typing import Any
-from unittest.mock import patch
 
 import jwt as pyjwt
 import pytest
