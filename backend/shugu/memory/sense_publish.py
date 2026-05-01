@@ -26,6 +26,7 @@ from typing import Optional
 
 from ..config import Settings
 from ..core.protocols import EventBus
+from ..core.types import SessionId, Subject
 from .episodes import EventType
 
 log = logging.getLogger(__name__)
@@ -37,11 +38,11 @@ async def publish_sense_raw(
     *,
     event_bus: EventBus,
     settings: Settings,
-    subject: str,
+    subject: Subject,
     event_type: EventType,
     actor: str,
     payload: dict,
-    session_id: Optional[str] = None,
+    session_id: Optional[SessionId] = None,
     performance_id: Optional[str] = None,
 ) -> None:
     """Publie un event `sense.raw` sur le bus pour ingestion mémoire.

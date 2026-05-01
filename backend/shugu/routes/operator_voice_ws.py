@@ -33,6 +33,7 @@ from ..config import Settings
 from ..core.errors import AuthError
 from ..core.identity import OperatorIdentity, hash_ip
 from ..core.protocols import EventBus
+from ..core.types import make_operator_subject
 from ..memory.sense_publish import publish_sense_raw
 from ..pipeline.voice_duplex import VoiceDuplex, VoiceEvent
 from ..senses.bus import publish_sense_event
@@ -91,8 +92,7 @@ async def _handle_voice_transcript(
     """
     if deps.event_bus is None:
         return
-    operator_username_lc = identity.username.lower()
-    voice_subject = f"operator:{operator_username_lc}"
+    voice_subject = make_operator_subject(identity.username)
     voice_payload = {"text": text}
 
     # Mémoire PR 2 — sense.raw (legacy memory path, conservé intact).

@@ -23,6 +23,7 @@ from ..config import Settings
 from ..core.errors import AuthError
 from ..core.identity import OperatorIdentity, hash_ip
 from ..core.protocols import EventBus, ModerationLayer
+from ..core.types import make_operator_subject
 from ..director.wiring import publish_chat_trigger
 from ..memory.sense_publish import publish_sense_raw
 from ..pipeline.queue import QueuedMessage, RedisQueue, new_msg_id
@@ -167,11 +168,11 @@ async def _handle_operator_message(
 
     # Mémoire PR 2 — publish sense.raw pour l'opérateur, indépendamment du
     # target (shugu ou hermes). L'input texte est un sens, peu importe son
-    # routing aval. Subject normalisé en lowercase (cohérent avec wiring.py
-    # publish_chat_trigger qui lowercase aussi le sender). No-op si
-    # memory_enabled=False. Choix await (cf. retour adversarial H2).
-    operator_username_lc = identity.username.lower()
-    op_subject = f"operator:{operator_username_lc}"
+    # routing aval. Subject normalisé en lowercase via make_operator_subject
+    # (cohérent avec wiring.py publish_chat_trigger qui lowercase aussi le
+    # sender). No-op si memory_enabled=False. Choix await (cf. retour
+    # adversarial H2).
+    op_subject = make_operator_subject(identity.username)
     op_payload = {"text": text, "target": target, "nonce": nonce}
 
     await publish_sense_raw(

@@ -26,6 +26,7 @@ from fastapi import APIRouter, Header, HTTPException, status
 
 from ..config import Settings
 from ..core.protocols import EventBus
+from ..core.types import make_vip_subject
 from ..core.vip_bridge import VipEventIn, VipToolCall, VipToolResult
 from ..memory.sense_publish import publish_sense_raw
 from ..pipeline.queue import QueuedMessage, RedisQueue, new_msg_id
@@ -107,7 +108,7 @@ async def post_event(
     # No-op si memory_enabled=False.
     user_lc = (event.user or "").strip().lower()
     if user_lc:
-        vip_subject = f"vip:{user_lc}"
+        vip_subject = make_vip_subject(user_lc)
         vip_payload = {"kind": event.kind, "room": event.room, "data": payload.get("payload", {})}
 
         await publish_sense_raw(
@@ -159,12 +160,14 @@ async def post_tool(
         session_id = str(call.args.get("session_id", "vip"))
         # Sender VIP — passé par le vip_agent dans args.sender (LiveKit identity).
         # Subject = vip:<sender_lc> ; fallback vip:<session_id> si sender absent.
+        # `sender_lc or session_id` garantit non-vide pour make_vip_subject
+        # (lève sinon — invariant : on ne publie jamais de subject vide).
         sender_lc = str(call.args.get("sender", "")).strip().lower() or session_id
 
         # Mémoire PR 2 — publish sense.raw event_type=chat_in (un VIP qui chatte
         # via le bridge LiveKit). Avant l'enqueue, comme visitor_ws / operator_ws.
         # No-op si memory_enabled=False.
-        vip_chat_subject = f"vip:{sender_lc}"
+        vip_chat_subject = make_vip_subject(sender_lc)
         vip_chat_payload = {"text": text, "via": "internal_vip.chat_post"}
 
         await publish_sense_raw(

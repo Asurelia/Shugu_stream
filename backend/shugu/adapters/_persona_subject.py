@@ -9,9 +9,10 @@ from __future__ import annotations
 from typing import Optional
 
 from ..core.identity import Identity, MemberIdentity, VIPIdentity, VisitorIdentity
+from ..core.types import Subject
 
 
-def derive_viewer_subject(identity: Identity) -> Optional[str]:
+def derive_viewer_subject(identity: Identity) -> Optional[Subject]:
     """Map an Identity to its persona viewer_subject key.
 
     Correspondance (Phase 5.2 decision) :
@@ -23,12 +24,22 @@ def derive_viewer_subject(identity: Identity) -> Optional[str]:
     Usage :
         subject = derive_viewer_subject(VIPIdentity(username="alice"))
         # → "vip:alice"
+
+    Sprint 6 NewType : retourne `Subject` typé. ATTENTION — on
+    n'utilise PAS `make_vip_subject` / `make_member_subject` ici parce
+    qu'ils lowercase l'username, alors que cette fonction historique a
+    toujours préservé la casse de `identity.username`. Le persona store
+    `relationships` est keyed par cette string brute ; lowercaser
+    casserait le lookup pour les states sérialisés sur disque qui
+    contiennent du mixed case. Les call-sites qui veulent le subject
+    canonical (account routes, internal_vip) doivent passer par les
+    helpers explicitement.
     """
     if isinstance(identity, VIPIdentity):
-        return f"vip:{identity.username}" if identity.username else None
+        return Subject(f"vip:{identity.username}") if identity.username else None
     if isinstance(identity, MemberIdentity):
-        return f"member:{identity.username}" if identity.username else None
+        return Subject(f"member:{identity.username}") if identity.username else None
     if isinstance(identity, VisitorIdentity):
-        return f"visitor:{identity.ip_hash}" if identity.ip_hash else None
+        return Subject(f"visitor:{identity.ip_hash}") if identity.ip_hash else None
     # OperatorIdentity → pas de relation viewer persona
     return None
