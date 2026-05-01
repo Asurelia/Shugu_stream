@@ -187,8 +187,18 @@ class Picker:
                         "performance_id": perf_id,
                         "reason": "cancelled",
                     })
-                except Exception:
-                    pass
+                except Exception as pub_exc:
+                    # Audit Pass 2 P1.B11 : avant ce log.error, le truncate
+                    # publish failure était silencieusement swallowed →
+                    # frontend reste bloqué sur speaking=true à jamais. Sans
+                    # ce log, debug post-incident impossible (pourquoi tel
+                    # client est stuck ?). On log mais on ne re-raise pas
+                    # car le `raise` final remonte la CancelledError originelle.
+                    log.error(
+                        "picker.cancel_truncate_publish_failed",
+                        perf_id=perf_id,
+                        error=str(pub_exc),
+                    )
             raise
         except Exception as exc:
             # Any other failure path (asyncio.TimeoutError from a TTS WS,

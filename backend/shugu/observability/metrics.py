@@ -28,6 +28,10 @@ Compteurs exposés
 - ``agent_runner_policy_denials_total``         (Counter, labels=mode,capability)
 - ``world_delta_published_total``               (Counter, sans label)
 - ``sense_events_received_total``               (Counter, label=kind)
+- ``tts_fallback_total``                        (Counter, labels=from,to) — Sprint 4 P1.C1
+- ``event_bus_drop_total``                      (Counter, label=topic) — Sprint 4 P1.C4
+- ``persona_fallback_total``                    (Counter, labels=from,to) — Sprint 4 P1.C2
+- ``memory_recall_failed_total``                (Counter, label=error_kind) — Sprint 4 P1.C6
 """
 from __future__ import annotations
 
@@ -77,6 +81,42 @@ class MetricsRecorder(Protocol):
         """Incrémente sense_events_received_total{kind=kind}."""
         ...
 
+    def record_tts_fallback(self, from_provider: str, to_provider: str) -> None:
+        """Incrémente tts_fallback_total{from,to} — Sprint 4 P1.C1.
+
+        Posé quand le primary TTS (ex: ElevenLabs) crash et le secondary
+        (Edge-TTS) prend le relais. Permet d'alerter si la primary claque
+        souvent.
+        """
+        ...
+
+    def record_event_bus_drop(self, topic: str) -> None:
+        """Incrémente event_bus_drop_total{topic} — Sprint 4 P1.C4.
+
+        Posé sur drop-oldest dans InProcessEventBus.publish quand un
+        subscriber est lent (queue saturée). Permet de détecter les slow
+        consumers en prod.
+        """
+        ...
+
+    def record_persona_fallback(self, from_persona: str, to_persona: str) -> None:
+        """Incrémente persona_fallback_total{from,to} — Sprint 4 P1.C2.
+
+        Posé quand `personality.get('hermes_public')` échoue et tombe sur
+        le fallback `shugu`. Détecte les déploiements sans le fichier persona.
+        """
+        ...
+
+    def record_memory_recall_failed(self, error_kind: str) -> None:
+        """Incrémente memory_recall_failed_total{error_kind} — Sprint 4 P1.C6.
+
+        Posé quand director/orchestrator.recall() crash. Sans cette métrique,
+        un memory agent en panne (deadlock pgvector, embedder OOM) reste
+        invisible — le director continue avec mémoire vide, qualité dégradée
+        silencieusement.
+        """
+        ...
+
 
 # ---------------------------------------------------------------------------
 # NullMetricsRecorder — no-op, backward-compat par défaut
@@ -107,6 +147,18 @@ class NullMetricsRecorder:
         pass
 
     def record_sense_event(self, kind: str) -> None:
+        pass
+
+    def record_tts_fallback(self, from_provider: str, to_provider: str) -> None:
+        pass
+
+    def record_event_bus_drop(self, topic: str) -> None:
+        pass
+
+    def record_persona_fallback(self, from_persona: str, to_persona: str) -> None:
+        pass
+
+    def record_memory_recall_failed(self, error_kind: str) -> None:
         pass
 
 
@@ -183,6 +235,31 @@ class PrometheusMetricsRecorder:
             ["kind"],
             registry=self.registry,
         )
+        # Sprint 4 P1.C1/C4/C2/C6 — observabilité fallbacks Cat C.
+        self._tts_fallback = Counter(
+            "tts_fallback_total",
+            "Nombre de bascules TTS primary → secondary (audit C1).",
+            ["from_provider", "to_provider"],
+            registry=self.registry,
+        )
+        self._event_bus_drop = Counter(
+            "event_bus_drop_total",
+            "Nombre d'events droppés par drop-oldest sur queue pleine (audit C4).",
+            ["topic"],
+            registry=self.registry,
+        )
+        self._persona_fallback = Counter(
+            "persona_fallback_total",
+            "Nombre de fallbacks persona (ex: hermes_public → shugu) (audit C2).",
+            ["from_persona", "to_persona"],
+            registry=self.registry,
+        )
+        self._memory_recall_failed = Counter(
+            "memory_recall_failed_total",
+            "Nombre d'échecs MemoryAgent.recall (deadlock pgvector, OOM, etc.) (audit C6).",
+            ["error_kind"],
+            registry=self.registry,
+        )
 
     def record_tick(self) -> None:
         """Incrémente agent_runner_ticks_total."""
@@ -207,6 +284,26 @@ class PrometheusMetricsRecorder:
     def record_sense_event(self, kind: str) -> None:
         """Incrémente sense_events_received_total{kind=kind}."""
         self._sense_events.labels(kind=kind).inc()
+
+    def record_tts_fallback(self, from_provider: str, to_provider: str) -> None:
+        """Incrémente tts_fallback_total{from,to}."""
+        self._tts_fallback.labels(
+            from_provider=from_provider, to_provider=to_provider,
+        ).inc()
+
+    def record_event_bus_drop(self, topic: str) -> None:
+        """Incrémente event_bus_drop_total{topic}."""
+        self._event_bus_drop.labels(topic=topic).inc()
+
+    def record_persona_fallback(self, from_persona: str, to_persona: str) -> None:
+        """Incrémente persona_fallback_total{from,to}."""
+        self._persona_fallback.labels(
+            from_persona=from_persona, to_persona=to_persona,
+        ).inc()
+
+    def record_memory_recall_failed(self, error_kind: str) -> None:
+        """Incrémente memory_recall_failed_total{error_kind}."""
+        self._memory_recall_failed.labels(error_kind=error_kind).inc()
 
     def generate_latest(self) -> bytes:
         """Sérialise les métriques au format texte Prometheus 0.0.4 (bytes).

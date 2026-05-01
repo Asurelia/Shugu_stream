@@ -44,6 +44,7 @@ from typing import Awaitable, Callable, Optional
 import structlog
 
 from ..adapters.stt_streaming import VAD_FRAME_BYTES, FasterWhisperSTT
+from ..core.errors import STTError
 
 log = structlog.get_logger(__name__)
 
@@ -217,11 +218,31 @@ class VoiceDuplex:
             text = (await self._stt.transcribe_pcm16(pcm)).strip()
         except asyncio.CancelledError:
             raise
-        except Exception as exc:
+        except STTError as exc:
+            # Audit Pass 2 P1.B8 : crash STT (CUDA OOM, modèle corrompu, etc.)
+            # → on PRÉVIENT EXPLICITEMENT le client au lieu de retourner un
+            # silence apparent. L'opérateur voit "STT en panne" plutôt qu'un
+            # micro qui semble cassé, et peut prendre une action (retry,
+            # check infra) au lieu de retenter en boucle.
             log.warning("voice.stt_failed", error=str(exc))
-            text = ""
+            await self._send(VoiceEvent(
+                "error", {"reason": "stt_failed", "detail": str(exc)},
+            ))
+            await self._set_state_async(VoiceState.IDLE)
+            return
+        except Exception as exc:
+            # Catch-all (subprocess die, autre bug non-STT) — on doit aussi
+            # remonter au client (le pipeline est cassé pour ce turn).
+            log.exception("voice.stt_unexpected_error", error=str(exc))
+            await self._send(VoiceEvent(
+                "error", {"reason": "stt_unexpected", "detail": str(exc)},
+            ))
+            await self._set_state_async(VoiceState.IDLE)
+            return
 
         if not text:
+            # Silence audio légitime — pas un bug. log.info pour traçabilité,
+            # le client voit l'état IDLE sans message d'erreur.
             log.info("voice.empty_transcript")
             await self._set_state_async(VoiceState.IDLE)
             return

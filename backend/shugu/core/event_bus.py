@@ -3,7 +3,10 @@ from __future__ import annotations
 
 import asyncio
 from collections import defaultdict
-from typing import AsyncIterator
+from typing import TYPE_CHECKING, AsyncIterator
+
+if TYPE_CHECKING:
+    from ..observability.metrics import MetricsRecorder
 
 
 class InProcessEventBus:
@@ -13,10 +16,22 @@ class InProcessEventBus:
     implements the same two-method contract (publish + subscribe).
     """
 
-    def __init__(self, max_queue: int = 256):
+    def __init__(
+        self,
+        max_queue: int = 256,
+        *,
+        metrics: "MetricsRecorder | None" = None,
+    ):
         self._subs: dict[str, list[asyncio.Queue]] = defaultdict(list)
         self._lock = asyncio.Lock()
         self._max_queue = max_queue
+        # Audit Pass 2 P1.C4 — observabilité drop-oldest. Si non fourni,
+        # on lazy-import le NullMetricsRecorder pour zéro overhead quand
+        # metrics_enabled=False.
+        if metrics is None:
+            from ..observability.metrics import get_null_recorder
+            metrics = get_null_recorder()
+        self._metrics = metrics
 
     async def publish(self, topic: str, event: dict) -> None:
         # Copy under lock to avoid "mutated during iteration" if subscribers churn.
@@ -27,6 +42,10 @@ class InProcessEventBus:
                 q.put_nowait(event)
             except asyncio.QueueFull:
                 # Slow consumer: drop oldest to keep bus live.
+                # Audit Pass 2 P1.C4 — compteur Prometheus pour détecter
+                # les slow consumers en prod (sans cette métrique, un client
+                # qui perd 50% des events est invisible).
+                self._metrics.record_event_bus_drop(topic)
                 try:
                     q.get_nowait()
                     q.put_nowait(event)

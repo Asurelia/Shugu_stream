@@ -463,8 +463,13 @@ async def logout(
             )
             remaining = max(payload.exp - int(time.time()), 60)
             await user_tokens.revoke(payload.jti, ttl_s=remaining, redis=redis)
-        except AuthError:
-            pass
+        except AuthError as exc:
+            # Audit Pass 2 P1.B9 : trace explicite (pas swallow silent).
+            log.info(
+                "account.logout_skip_revoke",
+                token_type=ttype,
+                reason=str(exc),
+            )
     _clear_user_cookies(response)
     return OkResponse(detail="logged out")
 
