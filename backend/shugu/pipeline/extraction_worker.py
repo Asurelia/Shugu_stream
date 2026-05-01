@@ -188,8 +188,15 @@ class ExtractionWorker:
             self._task.cancel()
             try:
                 await self._task
-            except (asyncio.CancelledError, Exception):
+            except asyncio.CancelledError:
+                # Cancellation attendue lors d'un stop() normal — pas un bug.
                 pass
+            except Exception as exc:
+                # Audit Pass 2 silent-failure A2 : un crash de finalisation
+                # autre que CancelledError doit remonter dans les logs (pas
+                # de re-raise pour ne pas casser le shutdown global, mais on
+                # trace).
+                log.exception("extraction_worker.stop_failed: %s", exc)
         self._task = None
 
 

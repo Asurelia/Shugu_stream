@@ -33,6 +33,21 @@ class VisitorIdentity:
     session_id: str = ""  # browser-ephemeral, from WS connection
 
 
+# Audit Pass 2 type-design P0.T4 — la docstring promet « le type-system empêche
+# un code visitor-path de forger une identité privilégiée », mais sans validateur,
+# `OperatorIdentity()` (constructeur vide) était possible et passait au runtime.
+# Les __post_init__ ci-dessous fail-fast au moindre champ identifiant vide pour
+# rendre la promesse vraie. Les Identity ne doivent JAMAIS être construites
+# manuellement hors des dépendances FastAPI auth.* (qui valident le JWT puis
+# remplissent tous les champs depuis la claim).
+def _require_nonempty(name: str, value: str) -> None:
+    if not value or not value.strip():
+        raise ValueError(
+            f"{name} must be non-empty — Identity types ne doivent être "
+            "construites que par auth.require_* après validation JWT."
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class MemberIdentity:
     """Produced by auth.require_member — user authentifié avec email vérifié."""
@@ -43,6 +58,11 @@ class MemberIdentity:
     jti: str = ""           # JWT ID, pour revocation
     session_id: str = ""    # WS connection id
     ip_hash: str = ""
+
+    def __post_init__(self) -> None:
+        _require_nonempty("MemberIdentity.user_id", self.user_id)
+        _require_nonempty("MemberIdentity.username", self.username)
+        _require_nonempty("MemberIdentity.jti", self.jti)
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,15 +82,38 @@ class VIPIdentity:
     vip_since: Optional[datetime] = None
     vip_until: Optional[datetime] = None   # None = VIP à vie / sans expiration
 
+    def __post_init__(self) -> None:
+        _require_nonempty("VIPIdentity.user_id", self.user_id)
+        _require_nonempty("VIPIdentity.username", self.username)
+        _require_nonempty("VIPIdentity.jti", self.jti)
+        # vip_since est obligatoire pour distinguer un VIP réel d'un Member
+        # promu transitoirement par erreur.
+        if self.vip_since is None:
+            raise ValueError(
+                "VIPIdentity.vip_since must be set — un VIP sans date d'activation "
+                "ne peut pas exister."
+            )
+
 
 @dataclass(frozen=True, slots=True)
 class OperatorIdentity:
-    """Produced by auth.require_operator FastAPI dependency only."""
+    """Produced by auth.require_operator FastAPI dependency only.
+
+    Note (audit Pass 2 type-design P0.T4) : la docstring promet que ce type
+    ne peut pas être forgé hors d'un flow JWT validé. La garde minimale ici
+    impose `username` non-vide. `jti` reste optionnel pour permettre l'usage
+    par l'agent bot interne (`agent/wiring.py`, `app.py`) qui n'a pas de
+    session JWT humaine — dans ce cas le bot doit fournir un username unique
+    pour le scoping mémoire (`subject="operator:streamer"`).
+    """
     role: Literal["operator"] = "operator"
     username: str = ""
-    jti: str = ""          # JWT ID, for revocation
+    jti: str = ""          # JWT ID, for revocation (vide pour bot interne)
     session_id: str = ""   # WS connection id, for private events
     ip_hash: str = ""
+
+    def __post_init__(self) -> None:
+        _require_nonempty("OperatorIdentity.username", self.username)
 
 
 Identity = VisitorIdentity | MemberIdentity | VIPIdentity | OperatorIdentity

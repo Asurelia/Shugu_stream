@@ -36,7 +36,14 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Protocol
 
 from ..core.protocols import EventBus
-from ..world.types import AvatarPoseAction, Mood, MoodSetAction, SceneTransitionAction
+from ..world.types import (
+    ActionUnion,
+    AvatarPoseAction,
+    Mood,
+    MoodSetAction,
+    SceneTransitionAction,
+    WorldState,
+)
 
 if TYPE_CHECKING:
     from .tools import ToolRegistry
@@ -63,9 +70,14 @@ class WorldStoreLike(Protocol):
 
     Méthodes requises :
         apply(action) : applique une ActionUnion, retourne le nouvel état (async).
+
+    Note (audit Pass 2 type-design) : la signature précédente
+    `apply(self, action: object) -> object` désactivait le typage des actions.
+    Maintenant on exige ActionUnion en entrée et WorldState en sortie — un handler
+    qui passerait un dict ou un MoodSetAction renommé sera détecté par mypy.
     """
 
-    async def apply(self, action: object) -> object:
+    async def apply(self, action: ActionUnion) -> WorldState:
         """Applique une action et retourne le nouvel état WorldState."""
         ...
 

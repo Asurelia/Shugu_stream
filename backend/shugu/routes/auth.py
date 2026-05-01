@@ -11,6 +11,7 @@ from pydantic import BaseModel
 
 from ..auth import jwt_tokens
 from ..auth.dependencies import ACCESS_COOKIE, REFRESH_COOKIE, require_operator
+from ..auth.rate_limit import enforce_rate_limit
 from ..config import Settings, get_settings
 from ..core.errors import AuthError
 from ..core.identity import OperatorIdentity, hash_ip
@@ -60,6 +61,25 @@ async def login(body: LoginBody, request: Request, response: Response,
                 settings: Settings = Depends(get_settings)):
     if not settings.operator_username or not settings.operator_password_hash:
         raise HTTPException(status_code=503, detail="operator credentials not configured")
+
+    # Rate-limit anti-brute-force AVANT bcrypt (audit Pass 2 P0.A1).
+    # Compte operator = 100% admin, bcrypt rounds=12 = ~5 essais/s/socket
+    # parallélisable. 10 tentatives/15min/IP est strict mais raisonnable
+    # pour un opérateur unique. La burst log à 5 alerte avant le throttle.
+    ip = request.client.host if request.client else "unknown"
+    ip_h = hash_ip(ip, settings.ip_hash_salt) if settings.ip_hash_salt else ip
+    try:
+        from ..app import get_redis
+        redis = get_redis()
+    except Exception:
+        redis = None  # Redis optionnel en test ; le rate-limit est skip
+    await enforce_rate_limit(
+        redis,
+        key=f"shugu:ratelimit:auth_login_op:{ip_h}",
+        limit=10,
+        window_s=900,
+        log_on_burst=5,
+    )
 
     # Constant-time-ish comparison via bcrypt.checkpw
     if body.username != settings.operator_username:

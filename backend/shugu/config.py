@@ -119,6 +119,14 @@ class Settings(BaseSettings):
     shugu_postgres_dsn: str = "postgresql+asyncpg://openclaw@localhost/shugu"
     shugu_redis_url: str = "redis://localhost:6379/1"
 
+    # SQLAlchemy pool sizing — défauts SA = 5 + 10 overflow ; insuffisant
+    # sous charge (100+ users + workers concurrents prep/picker/ingestion/
+    # extraction/scene_editor saturent en quelques secondes). Cf. audit
+    # Pass 2 perf finding #1 (`audit/pass2-performance.md`).
+    db_pool_size: int = 20
+    db_max_overflow: int = 20
+    db_pool_recycle_s: int = 1800  # 30 min — ferme les conn idle pour éviter MITM/idle TCP timeout
+
     # Event bus — v4 Phase 1 (brique 1.1). Mode `"inproc"` = bus asyncio
     # in-memory, identique au MVP pré-phase 1 (single worker). Mode `"redis"`
     # active le fanout cross-process via Redis pub/sub pour les topics listés

@@ -254,7 +254,12 @@ async def test_brain_respond_passes_viewer_subject_to_render_fragment() -> None:
     async for _ in brain.respond(
         prompt="Salut Alice !",
         history=[],
-        identity=VIPIdentity(username="alice"),
+        identity=VIPIdentity(
+            user_id="01HVIPALICE000000000000",
+            username="alice",
+            jti="test-jti-vip-alice",
+            vip_since=datetime.now(timezone.utc),
+        ),
     ):
         pass
 
