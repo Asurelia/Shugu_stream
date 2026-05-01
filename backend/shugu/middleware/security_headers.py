@@ -43,11 +43,14 @@ Usage
 """
 from __future__ import annotations
 
+import logging
 from typing import Awaitable, Callable
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
-from starlette.responses import Response
+from starlette.responses import JSONResponse, Response
+
+log = logging.getLogger(__name__)
 
 # CSP par défaut — strict mais compatible avec les réponses templates emails.
 # Le frontend Next.js a son propre CSP via next.config.js / metadata, plus
@@ -87,15 +90,8 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         self._csp = csp or _DEFAULT_CSP
         self._is_prod = env in _PROD_ENVS
 
-    async def dispatch(
-        self,
-        request: Request,
-        call_next: Callable[[Request], Awaitable[Response]],
-    ) -> Response:
-        response = await call_next(request)
-
-        # Headers défensifs — setdefault pour ne pas écraser des routes
-        # qui définissent leur propre valeur (rare, mais préservé).
+    def _apply_headers(self, response: Response) -> None:
+        """Pose les headers défensifs (idempotent via setdefault)."""
         response.headers.setdefault("Content-Security-Policy", self._csp)
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
         response.headers.setdefault("X-Frame-Options", "DENY")
@@ -107,7 +103,6 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             "geolocation=(), camera=(), microphone=(), usb=(), payment=(), "
             "interest-cohort=()",
         )
-
         # HSTS uniquement en prod (le browser cache la directive 1 an —
         # poser ça en dev empoisonnerait localhost).
         if self._is_prod:
@@ -116,6 +111,29 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
                 "max-age=31536000; includeSubDomains",
             )
 
+    async def dispatch(
+        self,
+        request: Request,
+        call_next: Callable[[Request], Awaitable[Response]],
+    ) -> Response:
+        # Audit Pass 2 review : si une exception remonte hors d'une route,
+        # l'outer error middleware Starlette générerait un 500 brut SANS nos
+        # headers défensifs (le call_next aurait raise avant qu'on touche la
+        # response). On wrap donc l'appel et on construit explicitement une
+        # 500 avec headers en cas d'exception non gérée.
+        try:
+            response = await call_next(request)
+        except Exception as exc:  # noqa: BLE001 — on doit attraper toute exc
+            log.exception(
+                "security_headers.unhandled_exception",
+                extra={"path": str(request.url.path), "error": str(exc)},
+            )
+            response = JSONResponse(
+                status_code=500,
+                content={"detail": "internal server error"},
+            )
+
+        self._apply_headers(response)
         return response
 
 

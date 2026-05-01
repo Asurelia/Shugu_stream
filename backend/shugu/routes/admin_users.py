@@ -212,6 +212,42 @@ async def set_vip(
                     .values(revoked_at=now)
                 )
 
+            # Push Redis revocation set DANS la transaction — fail-closed.
+            # Audit Pass 2 review : sans cette garde, Redis indisponible =
+            # vip_since=None en DB mais access JWT toujours valide jusqu'à
+            # expiration (1h LiveKit token). On rollback si Redis échoue.
+            if revoked_jtis:
+                try:
+                    redis = get_redis()
+                except Exception as exc:
+                    log.warning(
+                        "admin.vip_revoke_redis_unavailable",
+                        user_id=user_id, error=str(exc),
+                    )
+                    raise HTTPException(
+                        status_code=503,
+                        detail="revocation storage unavailable; revoke aborted",
+                    ) from exc
+
+                for jti in revoked_jtis:
+                    try:
+                        await user_tokens.revoke(
+                            jti, ttl_s=settings.user_refresh_ttl_s, redis=redis
+                        )
+                    except Exception as exc:
+                        log.warning(
+                            "admin.vip_revoke_jti_failed",
+                            user_id=user_id, jti=jti, error=str(exc),
+                        )
+                        raise HTTPException(
+                            status_code=503,
+                            detail=f"failed to revoke jti {jti}; revoke aborted",
+                        ) from exc
+                log.info(
+                    "admin.vip_revoked_sessions",
+                    user_id=user_id, count=len(revoked_jtis),
+                )
+
         snapshot = {
             "user_id": account.id,
             "username": account.username,
@@ -220,31 +256,6 @@ async def set_vip(
             "vip_until": account.vip_until,
             "is_active": account.is_active,
         }
-
-    # Hors transaction : push les jtis dans Redis revocation set (best-effort).
-    # Le TTL est settings.user_refresh_ttl_s pour couvrir toute durée de vie
-    # restante du refresh token (le set est nettoyé automatiquement après).
-    if revoked_jtis and body.action == "revoke":
-        redis = None
-        try:
-            redis = get_redis()
-        except Exception:
-            log.warning("admin.vip_revoke_no_redis", user_id=user_id)
-        if redis is not None:
-            for jti in revoked_jtis:
-                try:
-                    await user_tokens.revoke(
-                        jti, ttl_s=settings.user_refresh_ttl_s, redis=redis
-                    )
-                except Exception as exc:
-                    log.warning(
-                        "admin.vip_revoke_jti_failed",
-                        user_id=user_id, jti=jti, error=str(exc),
-                    )
-            log.info(
-                "admin.vip_revoked_sessions",
-                user_id=user_id, count=len(revoked_jtis),
-            )
 
     # Envoi email hors transaction (idempotent, best-effort)
     try:
@@ -283,13 +294,18 @@ async def deactivate(
     Audit Pass 2 P1.C : sans la révocation des sessions actives, un compte
     désactivé garde son access JWT valide jusqu'à expiration (1h). Pendant
     cette fenêtre, le user désactivé peut continuer à appeler les routes
-    protégées par require_member/require_vip. Avec révocation, la
-    déconnexion est immédiate.
+    protégées par require_member/require_vip.
+
+    Audit Pass 2 review (P1) : fail-closed si Redis indisponible. Sans cette
+    garde, un compte serait marqué `is_active=false` en DB mais ses access
+    tokens resteraient utilisables (la verify check Redis pour la révocation,
+    et Redis n'aurait pas reçu le jti). On exécute donc le push Redis DANS
+    la transaction DB — si Redis échoue, le `session_scope` rollback
+    automatique laisse le compte actif et l'admin doit retry.
     """
     from ..app import get_redis
     from ..auth import user_tokens
     now = datetime.now(tz=timezone.utc)
-    revoked_jtis: list[str] = []
 
     async with session_scope() as db:
         account = (await db.execute(
@@ -317,23 +333,21 @@ async def deactivate(
                 .values(revoked_at=now)
             )
 
-        snapshot = {
-            "user_id": account.id,
-            "username": account.username,
-            "email": account.email,
-            "vip_active": _is_vip_active(account, now),
-            "vip_until": account.vip_until,
-            "is_active": account.is_active,
-        }
+        # Push Redis revocation set DANS la transaction — si Redis échoue,
+        # le rollback DB laisse le compte actif (fail-closed).
+        if revoked_jtis:
+            try:
+                redis = get_redis()
+            except Exception as exc:
+                log.warning(
+                    "admin.deactivate_redis_unavailable",
+                    user_id=user_id, error=str(exc),
+                )
+                raise HTTPException(
+                    status_code=503,
+                    detail="revocation storage unavailable; deactivation aborted",
+                ) from exc
 
-    # Hors transaction : push les jtis dans Redis revocation set (best-effort).
-    if revoked_jtis:
-        redis = None
-        try:
-            redis = get_redis()
-        except Exception:
-            log.warning("admin.deactivate_no_redis", user_id=user_id)
-        if redis is not None:
             for jti in revoked_jtis:
                 try:
                     await user_tokens.revoke(
@@ -344,10 +358,23 @@ async def deactivate(
                         "admin.deactivate_jti_failed",
                         user_id=user_id, jti=jti, error=str(exc),
                     )
+                    raise HTTPException(
+                        status_code=503,
+                        detail=f"failed to revoke jti {jti}; deactivation aborted",
+                    ) from exc
             log.info(
                 "admin.deactivate_revoked_sessions",
                 user_id=user_id, count=len(revoked_jtis),
             )
+
+        snapshot = {
+            "user_id": account.id,
+            "username": account.username,
+            "email": account.email,
+            "vip_active": _is_vip_active(account, now),
+            "vip_until": account.vip_until,
+            "is_active": account.is_active,
+        }
 
     log.info("admin.user_deactivated",
              user_id=user_id, reason=body.reason, by=operator.username)

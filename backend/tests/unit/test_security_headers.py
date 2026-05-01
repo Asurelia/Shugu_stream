@@ -82,6 +82,32 @@ class TestSecurityHeaders:
         assert resp.headers["x-frame-options"] == "DENY"
         assert "default-src" in resp.headers["content-security-policy"]
 
+    def test_headers_present_on_unhandled_5xx(self) -> None:
+        """Audit Pass 2 review P1 : les headers doivent être posés MÊME quand
+        une exception non-gérée bubble hors d'une route. Sans le try/except
+        dans dispatch, l'outer error middleware générerait un 500 brut sans
+        CSP/HSTS/X-Frame-Options — surface XSS/clickjacking sur la page
+        d'erreur (qui peut leak des infos en mode debug).
+        """
+        client = TestClient(_make_app(env="production"), raise_server_exceptions=False)
+        resp = client.get("/error")
+        assert resp.status_code == 500
+        # Tous les headers défensifs doivent être présents
+        assert resp.headers["x-frame-options"] == "DENY"
+        assert resp.headers["x-content-type-options"] == "nosniff"
+        assert "default-src" in resp.headers["content-security-policy"]
+        assert "max-age=31536000" in resp.headers["strict-transport-security"]
+        assert "geolocation=()" in resp.headers["permissions-policy"]
+
+    def test_unhandled_5xx_in_dev_no_hsts_but_other_headers(self) -> None:
+        """En dev, pas de HSTS mais les autres headers doivent être présents
+        sur 500."""
+        client = TestClient(_make_app(env="dev"), raise_server_exceptions=False)
+        resp = client.get("/error")
+        assert resp.status_code == 500
+        assert resp.headers["x-frame-options"] == "DENY"
+        assert "strict-transport-security" not in resp.headers
+
     def test_x_powered_by_not_set(self) -> None:
         """On ne révèle pas la stack."""
         client = TestClient(_make_app())
