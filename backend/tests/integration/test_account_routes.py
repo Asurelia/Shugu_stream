@@ -30,13 +30,11 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from unittest.mock import AsyncMock
 
-import bcrypt
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from shugu.config import Settings
-
 
 # ─── In-memory DB ────────────────────────────────────────────────────────────
 
