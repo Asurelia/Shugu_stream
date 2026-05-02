@@ -27,6 +27,7 @@ export function CreatorHomeClient() {
   const [operator, setOperator] = useState<{ username: string } | null>(null);
   const [authChecked, setAuthChecked] = useState(false);
 
+  /* eslint-disable react-hooks/set-state-in-effect -- FIXME P5: fetch-on-mount auth check, cancelled flag prevents stale updates */
   useEffect(() => {
     if (previewMode) { setAuthChecked(true); return; }
     let cancelled = false;
@@ -37,6 +38,7 @@ export function CreatorHomeClient() {
     });
     return () => { cancelled = true; };
   }, [previewMode]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   useEffect(() => {
     if (previewMode) return;

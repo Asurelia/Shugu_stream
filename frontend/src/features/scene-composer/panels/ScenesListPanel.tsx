@@ -125,9 +125,11 @@ export function ScenesListPanel() {
     }
   }, []);
 
+  /* eslint-disable react-hooks/set-state-in-effect -- FIXME P5: fetch-on-mount pattern, refactor to useReducer when adopting data lib */
   useEffect(() => {
     void fetchScenes();
   }, [fetchScenes]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   const filtered = scenes.filter((s) =>
     s.name.toLowerCase().includes(filter.toLowerCase()),

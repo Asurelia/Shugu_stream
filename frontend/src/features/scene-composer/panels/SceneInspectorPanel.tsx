@@ -136,6 +136,7 @@ export function SceneInspectorPanel() {
   const [error, setError] = useState<string | null>(null);
 
   // Load scène seulement si aucun mesh n'est sélectionné.
+  /* eslint-disable react-hooks/set-state-in-effect -- FIXME P5: fetch-on-selection-change pattern, refactor to useReducer when adopting data lib */
   useEffect(() => {
     if (selectedMeshId) {
       // Mesh sélectionné — pas besoin de charger la scène.
@@ -169,6 +170,7 @@ export function SceneInspectorPanel() {
         setLoading(false);
       });
   }, [selectedSceneId, selectedMeshId]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   // ── Cas 1 : Mesh 3D sélectionné ─────────────────────────────────────────
   if (selectedMeshId && selectedPropInstance) {

@@ -51,6 +51,7 @@ export function AdminModal({ open, onClose }: { open: boolean; onClose: () => vo
     } catch (e: any) { setError(String(e?.message || e)); }
   };
 
+  /* eslint-disable react-hooks/set-state-in-effect -- FIXME P5: fetch+poll on open, refactor refresh to useReducer when data lib available */
   useEffect(() => {
     if (open) {
       refresh();
@@ -58,6 +59,7 @@ export function AdminModal({ open, onClose }: { open: boolean; onClose: () => vo
       return () => clearInterval(iv);
     }
   }, [open]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   const unban = async (ip: string) => {
     try { await fetch(`/api/admin/bans/${ip}`, { method: "DELETE", credentials: "include" }); await refresh(); } catch {}

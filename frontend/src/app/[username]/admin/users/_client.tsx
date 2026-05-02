@@ -104,7 +104,9 @@ export function AdminUsersClient() {
     }
   }, [roleFilter, verifiedOnly, offset]);
 
+  /* eslint-disable react-hooks/set-state-in-effect -- FIXME P5: fetch-on-mount + filter deps, refactor to useReducer when adopting data lib */
   useEffect(() => { load(); }, [load]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   const vipCount = useMemo(() => users.filter((u) => u.vip_active).length, [users]);
   const pendingCount = useMemo(() => users.filter((u) => !u.email_verified).length, [users]);

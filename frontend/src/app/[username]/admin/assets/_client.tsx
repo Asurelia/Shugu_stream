@@ -170,7 +170,9 @@ export function AssetsClient() {
     }
   }, [activeKind]);
 
+  /* eslint-disable react-hooks/set-state-in-effect -- FIXME P5: fetch-on-mount pattern, refactor to useReducer when adopting data lib */
   useEffect(() => { void load(); }, [load]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   const handleToggle = async (row: RegistryRow) => {
     try {
@@ -345,6 +347,7 @@ export function AssetsClient() {
 
         {/* Formulaire ──────────────────────────────────────────── */}
         <DynamicForm
+          key={kindDef.key}
           kindDef={kindDef}
           onCreated={() => { setFlash(`✓ ${kindDef.label.slice(0, -1)} ajouté`); void load(); }}
           onError={setError}
@@ -372,14 +375,7 @@ function DynamicForm({
   const [values, setValues] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useState(false);
 
-  // Reset form quand le kind change.
-  useEffect(() => {
-    setSlug("");
-    setDisplayName("");
-    setValues({});
-    clearFlash();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [kindDef.key]);
+  // Reset form quand le kind change — géré par key={kindDef.key} sur <DynamicForm />.
 
   const update = (name: string, value: string) =>
     setValues((prev) => ({ ...prev, [name]: value }));
