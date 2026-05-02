@@ -1,32 +1,35 @@
-import { useState } from "react";
-import { Meta } from "@/components/meta";
-import {
-  GlassCard,
-  GlassButton,
-  GlassInput,
-  GlassPill,
-  GlassTabs,
-  GlassModal,
-  GlassSwitch,
-  GlassSection,
-  GlassRow,
-} from "@/features/liquid-glass/primitives";
-import { Sparkline, BarList, Heatmap, MetricTile } from "@/features/liquid-glass/dataviz";
+"use client";
 
 /**
- * `/lg-preview` — smoke test visuel des primitives Liquid Glass.
+ * /lg-preview client island — smoke test visuel des primitives Liquid Glass.
  *
- * Sans runner de tests configuré, cette page vérifie que l'import + le
- * rendu de chaque primitive fonctionnent. Ouvre-la en dev : si tout
- * s'affiche et que la console reste vide, la lib est saine.
+ * Migration Pages Router → App Router (Sprint E3) :
+ *   - `<Meta title>` removed — le Server Component parent (page.tsx) déclare
+ *     `metadata` à la place.
+ *   - Cette page n&apos;utilise pas `useRouter`, aucune migration next/navigation.
+ *   - Apostrophes JSX échappées en `&apos;`.
  */
+import { useState } from "react";
+
+import { BarList, Heatmap, MetricTile, Sparkline } from "@/features/liquid-glass/dataviz";
+import {
+  GlassButton,
+  GlassCard,
+  GlassInput,
+  GlassModal,
+  GlassPill,
+  GlassRow,
+  GlassSection,
+  GlassSwitch,
+  GlassTabs,
+} from "@/features/liquid-glass/primitives";
 
 const CURVE = [30, 42, 38, 55, 49, 70, 62, 88, 80, 95, 110, 120, 135, 128];
 const HEAT = Array.from({ length: 7 }, (_, d) =>
   Array.from({ length: 24 }, (_, h) => Math.round(Math.abs(Math.sin((d + 1) * (h + 1) / 7)) * 100))
 );
 
-export default function LGPreview() {
+export function LgPreviewClient() {
   const [tab, setTab] = useState("a");
   const [modal, setModal] = useState(false);
   const [swA, setSwA] = useState(true);
@@ -34,7 +37,6 @@ export default function LGPreview() {
 
   return (
     <>
-      <Meta />
       <div className="lg-page font-quicksand min-h-screen px-6 py-10">
         <header className="mb-8 max-w-5xl mx-auto">
           <div className="font-mono text-[10px] uppercase tracking-[0.22em] text-shugu-cream-dim">
@@ -133,7 +135,7 @@ export default function LGPreview() {
             <GlassModal
               open={modal}
               onClose={() => setModal(false)}
-              title="Confirmer l'action"
+              title="Confirmer l&apos;action"
               footer={
                 <>
                   <GlassButton variant="ghost" onClick={() => setModal(false)}>annuler</GlassButton>

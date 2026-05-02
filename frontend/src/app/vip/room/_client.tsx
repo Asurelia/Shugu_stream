@@ -1,6 +1,21 @@
+"use client";
+
+/**
+ * /vip/room client island — LiveKit VIP voice room with Shugu.
+ *
+ * Migration Pages Router → App Router (Sprint E3) :
+ *   - `useRouter` import : `next/router` → `next/navigation`.
+ *   - `<Meta title>` removed — the parent Server Component (page.tsx)
+ *     declares `metadata` instead.
+ *   - Named export `VipRoomClient` (not default) per Sprint E pattern.
+ *   - LiveKitRoom cast preserved (see comment below).
+ *
+ * All LiveKit logic untouched : status checking, mintVIPToken, leave handler,
+ * RoomStage inner component.
+ */
+
 import React, { useEffect, useState } from "react";
-import { useRouter } from "next/router";
-import { Meta } from "@/components/meta";
+import { useRouter } from "next/navigation";
 import {
   GlassCard,
   GlassButton,
@@ -53,7 +68,7 @@ function RoomStage() {
 }
 
 
-export default function VIPRoomPage() {
+export function VipRoomClient() {
   const router = useRouter();
   const [status, setStatus] = useState<Status>("checking");
   const [errorDetail, setErrorDetail] = useState<string>("");
@@ -92,7 +107,6 @@ export default function VIPRoomPage() {
   if (status === "checking" || status === "connecting") {
     return (
       <div className="lg-page min-h-screen flex items-center justify-center p-6">
-        <Meta title="VIP Room — Shugu" />
         <GlassCard padded className="max-w-md w-full text-center">
           <h1 className="text-xl font-light tracking-tight text-shugu-cream mb-2">
             {status === "checking" ? "Vérification…" : "Connexion au salon VIP…"}
@@ -106,14 +120,13 @@ export default function VIPRoomPage() {
   if (status === "not_vip") {
     return (
       <div className="lg-page min-h-screen flex items-center justify-center p-6">
-        <Meta title="VIP Room — Shugu" />
         <GlassCard padded className="max-w-md w-full text-center">
           <h1 className="text-xl font-light tracking-tight text-shugu-cream mb-2">
             Accès réservé aux VIPs
           </h1>
           <p className="text-sm opacity-60 mb-6">
             Tu es connecté en tant que <strong>{me?.username}</strong>,
-            mais ton compte n'a pas (encore) l'accès VIP.
+            mais ton compte n&apos;a pas (encore) l&apos;accès VIP.
           </p>
           <GlassButton onClick={() => router.replace("/account/profile")}>
             Retour au profil
@@ -126,13 +139,12 @@ export default function VIPRoomPage() {
   if (status === "error" || !token || !serverUrl) {
     return (
       <div className="lg-page min-h-screen flex items-center justify-center p-6">
-        <Meta title="VIP Room — Shugu" />
         <GlassCard padded className="max-w-md w-full text-center">
           <h1 className="text-xl font-light tracking-tight text-shugu-cream mb-2">
             Impossible de rejoindre
           </h1>
           <p className="text-sm opacity-60 mb-2">
-            {errorDetail || "Le tunnel LiveKit n'est peut-être pas encore actif sur le serveur."}
+            {errorDetail || "Le tunnel LiveKit n&apos;est peut-être pas encore actif sur le serveur."}
           </p>
           <p className="text-xs opacity-50 mb-6">
             Vérifie que <code>LIVEKIT_URL</code> / <code>LIVEKIT_API_KEY</code> /
@@ -149,7 +161,6 @@ export default function VIPRoomPage() {
 
   return (
     <div className="lg-page min-h-screen flex items-center justify-center p-6">
-      <Meta title="VIP Room — Shugu" />
       <LiveKitRoom
         token={token}
         serverUrl={serverUrl}
