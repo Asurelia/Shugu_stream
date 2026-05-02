@@ -1,70 +1,62 @@
+"use client";
+
+/**
+ * Root viewer hub — App Router migration (Sprint E6).
+ *
+ * Pages Router → App Router changes applied:
+ *   - `useRouter` import: `next/router` → `next/navigation` (push/replace API
+ *     identical; `.query` was not used on this page).
+ *   - `<Meta>` component removed — metadata is declared in `page.tsx` (Server).
+ *   - next/font/google imports and local font const declarations removed; the
+ *     five CSS variables (--font-quicksand, --font-comfortaa, --font-display,
+ *     --font-body, --font-mono) are already applied on <html> by app/layout.tsx.
+ *   - Font variable classNames stripped from the root wrapper div (vars on <html>
+ *     are inherited — no className needed here).
+ */
 import { useContext, useEffect, useRef, useState } from "react";
-import { Quicksand, Comfortaa, Plus_Jakarta_Sans, Inter } from "next/font/google";
 import * as THREE from "three";
+import { useRouter } from "next/navigation";
+
+import { ChatFeed } from "@/components/ChatFeed";
+import { EmoteOverlay, EmoteOverlayHandle } from "@/components/EmoteOverlay";
+import { LiquidGlassFilter } from "@/components/LiquidGlassRail";
+import { LoadingScreen } from "@/components/LoadingScreen";
+import { OperatorVoicePanel } from "@/components/OperatorVoicePanel";
+import { SpeakingRing } from "@/components/SpeakingRing";
+import { VisitorLogin } from "@/components/VisitorLogin";
+import { ViewerStage, type ChatMsg, type Target as StageTarget } from "@/components/ViewerStage";
 import VrmViewer from "@/components/vrmViewer";
-import { ViewerContext } from "@/features/vrmViewer/viewerContext";
-import { Message, Screenplay } from "@/features/messages/messages";
-import { speakFromServer } from "@/features/messages/speakFromServer";
+import { Mode } from "@/components/OperatorPanel";
+import { ACTION_CLIPS, getActionClips, invalidateActionClipsCache } from "@/features/animations/animationPack";
+import { VirtualDesktop } from "@/features/desktop/VirtualDesktop";
+import { useDesktopState, WindowKind } from "@/features/desktop/desktopState";
 import {
   StreamingAudioPlayer,
   base64ChunkToUint8,
 } from "@/features/messages/audioStreamer";
-import { Meta } from "@/components/meta";
-import { VisitorLogin } from "@/components/VisitorLogin";
-import { ChatFeed } from "@/components/ChatFeed";
-import { SpeakingRing } from "@/components/SpeakingRing";
-import { LoadingScreen } from "@/components/LoadingScreen";
-import { OperatorVoicePanel } from "@/components/OperatorVoicePanel";
-import { EmoteOverlay, EmoteOverlayHandle } from "@/components/EmoteOverlay";
-import { LiquidGlassFilter } from "@/components/LiquidGlassRail";
-import { ViewerStage, type ChatMsg, type Target as StageTarget } from "@/components/ViewerStage";
-import { useRouter } from "next/router";
-import { Mode } from "@/components/OperatorPanel";
-import { SceneManager } from "@/features/scenes/SceneManager";
-import { VirtualDesktop } from "@/features/desktop/VirtualDesktop";
-import { useDesktopState, WindowKind } from "@/features/desktop/desktopState";
-import {
-  ACTION_CLIPS, getActionClips, invalidateActionClipsCache,
-} from "@/features/animations/animationPack";
-import { refreshScenes } from "@/features/scenes/scenes";
-import { refreshEmotes } from "@/components/EmoteOverlay";
+import { Message, Screenplay } from "@/features/messages/messages";
+import { speakFromServer } from "@/features/messages/speakFromServer";
 import { invalidate as invalidateRegistry } from "@/features/registry/registryClient";
-import { useVoiceInput } from "@/hooks/useVoiceInput";
+import { SceneManager } from "@/features/scenes/SceneManager";
+import { refreshScenes } from "@/features/scenes/scenes";
+import { ViewerContext } from "@/features/vrmViewer/viewerContext";
+import { refreshEmotes } from "@/components/EmoteOverlay";
 import { useHmsUptime } from "@/hooks/useHmsUptime";
+import { useVoiceInput } from "@/hooks/useVoiceInput";
 import {
-  ShuguClient, ShuguEvent, PerformanceTags, base64ToArrayBuffer, fetchAuthStatus, logout,
+  ShuguClient,
+  ShuguEvent,
+  PerformanceTags,
+  base64ToArrayBuffer,
+  fetchAuthStatus,
+  logout,
 } from "../services/shuguClient";
-
-const quicksand = Quicksand({
-  variable: "--font-quicksand",
-  subsets: ["latin"],
-  display: "swap",
-  weight: ["400", "500", "600", "700"],
-});
-const comfortaa = Comfortaa({
-  variable: "--font-comfortaa",
-  subsets: ["latin"],
-  display: "swap",
-  weight: ["500", "600", "700"],
-});
-const plusJakarta = Plus_Jakarta_Sans({
-  variable: "--font-display",
-  subsets: ["latin"],
-  display: "swap",
-  weight: ["500", "600", "700", "800"],
-});
-const interFont = Inter({
-  variable: "--font-body",
-  subsets: ["latin"],
-  display: "swap",
-  weight: ["400", "500", "600"],
-});
 
 type ConnStatus = "connecting" | "open" | "closed" | "error";
 
 const MAX_CHAT_LOG = 80;
 
-export default function Home() {
+export function HomeClient() {
   const { viewer } = useContext(ViewerContext);
   const { dispatch: desktopDispatch } = useDesktopState();
 
@@ -487,8 +479,7 @@ export default function Home() {
   };
 
   return (
-    <div className={`${quicksand.variable} ${comfortaa.variable} ${plusJakarta.variable} ${interFont.variable} font-quicksand`}>
-      <Meta />
+    <div className="font-quicksand">
       <LiquidGlassFilter />
 
       <EmoteOverlay ref={emoteOverlayRef} />

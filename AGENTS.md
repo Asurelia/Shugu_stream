@@ -3,10 +3,10 @@
 > Briefing complet pour tout agent IA (Claude Code, Cursor, Copilot, etc.)
 > qui travaille sur ce repo. Lis-moi en premier avant toute modification.
 
-**Stack** : FastAPI + asyncio + Redis + Postgres (pgvector) + Next.js 13 (Pages Router) + Three.js
+**Stack** : FastAPI + asyncio + Redis + Postgres (pgvector) + **Next.js 16 (App Router)** + React 18 + Three.js
 **Mission** : VTuber AI live multi-visiteurs, opérateur Hermes (MiniMax M2.7) pilote avatar VRM via tool_calls, streaming TTS MiniMax/ElevenLabs/Edge, STT faster-whisper, scène 3D temps réel.
 **Branche principale** : `main`
-**Date d'écriture** : 2026-05-01 (post-audit Pass 2 Sprint 5)
+**Date d'écriture** : 2026-05-01 (post-audit Pass 2 Sprint 5) — màj migration Next.js 13→16 + App Router (2026-05-02)
 
 ---
 
@@ -16,7 +16,7 @@
 2. **Architecture en couches L0→L4** — `docs/layers/L0-FOUNDATION.md` est strict (allowlist d'imports). Ne PAS importer un layer haut depuis un layer bas.
 3. **Tests réels uniquement** — TDD, pas de mock-driven. Si tu modifies un test pour le faire passer, tu casses la garantie.
 4. **Branche systématique** — JAMAIS commit sur main directement. Format : `type/description-YYYYMMDD-HHMMSS-NNN`.
-5. **Backend Python 3.13 + FastAPI moderne**, **frontend Next.js 13.2 (Pages Router)** en retard de 3 versions majeures (migration séparée backloggée).
+5. **Backend Python 3.13 + FastAPI moderne**, **frontend Next.js 16.2 (App Router)** — migration 13→16 + Pages Router → App Router complétée 2026-05-02 (PRs #76-#85).
 6. **5 métriques Prometheus observables** sur `/metrics` — utilise-les, ne les casse pas.
 
 ---
@@ -47,7 +47,7 @@ scene_composer/ # Phase E5 — authored scenes + player
 
 ```
 features/        # Domain-driven : viewer-3d, scene-composer, scene-editor, desktop, etc.
-pages/           # Next.js 13 Pages Router (account/, admin/, vip/, [username]/)
+app/             # Next.js 16 App Router (account/, admin/, vip/, [username]/, smoke/)
 lib/             # Utilities, hooks, stores (Zustand)
 components/      # Composants atomic + composés
 ```
@@ -101,15 +101,15 @@ Fallbacks documentés mais qui auraient besoin de métriques additionnelles ou d
 #### 24 P2 (cosmétiques)
 Timing oracles d'énumération, micro-optims perf (asyncio.Lock contention, snapshot world cache), 5 type-design suggestions, 2 tests fragiles. Voir `audit/PASS-2-CONSOLIDATION.md`.
 
-#### Migration Next.js 13 → 16 — **PHASE 1 EN COURS**
-PRs #76 (CI frontend), #77 (Next 14), #78 (Next 15), #79 (Next 16 + remove `publicRuntimeConfig`).
+#### ~~Migration Next.js 13 → 16~~ ✅ COMPLÉTÉE (2026-05-02)
 
-**Statut actuel après PR #79** : 0 critical CVEs (les 2 Next CRITICAL éliminés ✅). Reste 5 moderate (dompurify dans @charcoal-ui/icons, postcss devDep).
+**Phase 1 (bumps Next)** : PRs #76 (CI frontend) → #77 (Next 14) → #78 (Next 15) → #79 (Next 16 + remove `publicRuntimeConfig`). 0 critical CVEs (les 2 Next CRITICAL éliminés ✅). Reste 5 moderate (dompurify dans @charcoal-ui/icons, postcss devDep).
 
-**Phase 2 (App Router migration)** : PRs #80-#85 — bootstrap App Router puis migration page-par-page. Plan complet : `C:\Users\rafai\.claude\plans\velvety-skipping-penguin.md`.
+**Phase 2 (App Router)** : PRs #80 (bootstrap layout) → #81 (auth pages) → #82 (public pages) → #83 (scene-composer redirect) → #84 (10 admin pages) → #85 (root + cleanup). 100% des pages migrées de Pages Router vers App Router. Pattern Server shell + Client island appliqué partout. `pages/` directory supprimé.
 
-**Phase 3** : Three.js 0.149 → 0.160+ (44 fichiers, sprint séparé).
+**Phase 3 (Three.js)** : 0.149 → 0.160+ (44 fichiers, sprint séparé). Pas commencé. Voir `docs/findings/2026-05-02-three-stale-version.md`.
 
+Plan complet : `C:\Users\rafai\.claude\plans\velvety-skipping-penguin.md`.
 Findings collectés en chemin : `docs/findings/INDEX.md`.
 
 ---
@@ -340,4 +340,4 @@ gh pr create --title "..." --body "..."
 ---
 
 **Dernière mise à jour** : 2026-05-01 post-Sprint 5 PR #72.
-**Prochaine grosse étape** : Migration Next.js 13→16 (projet séparé) OU s'attaquer aux 11 silent failures Cat C / 24 P2.
+**Prochaine grosse étape** : Three.js 0.149 → 0.160+ (Phase 3) OU s'attaquer aux 11 silent failures Cat C / 24 P2 OU les 48 violations React Hooks strict (cf `docs/findings/2026-05-02-react-hooks-strict-rules-next16.md`).
