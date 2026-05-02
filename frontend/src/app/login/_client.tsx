@@ -1,7 +1,23 @@
+"use client";
+
+/**
+ * /login — Operator login client island.
+ *
+ * Migration Pages Router → App Router (Sprint E3) :
+ *   - `useRouter` import : `next/router` → `next/navigation`. The new API
+ *     keeps `.replace(url)` / `.push(url)` and is fully compatible here.
+ *   - `<Meta title>` removed — the parent Server Component (page.tsx)
+ *     declares `metadata` instead.
+ *   - Markup, classes, tabs, and stub signup() left exactly as in the
+ *     original Pages Router file.
+ *
+ * This page is the OPERATOR login (Spoukie / Hermes / scene-editor access),
+ * distinct from `/account/login` which is user-self-service.
+ */
+
 import { useEffect, useState } from "react";
-import { useRouter } from "next/router";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { Meta } from "@/components/meta";
 import { Sparkles } from "@/components/Sparkles";
 import { fetchAuthStatus, login } from "@/services/shuguClient";
 
@@ -20,21 +36,9 @@ import {
   GlassTabs,
 } from "@/features/liquid-glass/primitives";
 
-/**
- * `/login` — overlay Liquid Glass (iOS 26 style).
- *
- * Redesign : morph card centré (max-w-md) sur nébuleuse Celestial Veil.
- * Tabs Sign in / Create account. OAuth rail (Google / Discord / Twitch) —
- * visuels seuls ; aucun backend OAuth n'est encore câblé (voir TODO dans
- * shuguClient). En mode « Create account » on ajoute email + confirm.
- *
- * Les handlers mock (`signup`, OAuth) disent clairement "bientôt" plutôt
- * que de faire une requête vers une route qui n'existe pas.
- */
-
 type Mode = "signin" | "signup";
 
-export default function LoginPage() {
+export function LoginClient() {
   const router = useRouter();
   const [mode, setMode] = useState<Mode>("signin");
   const [username, setUsername] = useState("");
@@ -88,7 +92,6 @@ export default function LoginPage() {
 
   return (
     <div className="lg-page font-quicksand flex items-center justify-center px-4 py-10">
-      <Meta />
       <Sparkles />
 
       <main className="relative w-full max-w-md">
@@ -258,7 +261,7 @@ export default function LoginPage() {
                   créer mon compte ✦
                 </GlassButton>
                 <p className="text-[10px] text-shugu-cream-dim text-center leading-relaxed">
-                  En créant un compte, tu acceptes les conditions d'utilisation et la politique de confidentialité.
+                  En créant un compte, tu acceptes les conditions d&apos;utilisation et la politique de confidentialité.
                 </p>
               </form>
             )}
