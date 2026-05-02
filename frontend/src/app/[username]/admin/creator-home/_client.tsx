@@ -1,24 +1,29 @@
+"use client";
+
 /**
- * `/{username}/admin/creator-home` — port du bundle Claude Design.
+ * Creator Home client island.
  *
- * Expose les 6 variations "Shugu Creator Home" que l'opérateur peut
- * parcourir avec 1-6 / ← → / T. Pour l'instant c'est un **aperçu design**
- * non-câblé aux données live — le but est d'affiner visuellement avant
- * de choisir la variation finale à promouvoir sur la page visiteur `/`.
+ * Migration Pages Router → App Router (Sprint E5) :
+ *   - `useRouter` de `next/router` remplacé par `useRouter` + `useParams`
+ *     de `next/navigation`.
+ *   - `<Head>` + `<Meta>` supprimés — métadonnées déclarées dans `page.tsx`.
+ *   - `router.query.username` remplacé par `useParams<{ username?: string }>()`.
+ *   - `router.query.preview` remplacé par `useSearchParams()`.
  */
-import Head from "next/head";
 import { useEffect, useState } from "react";
-import { useRouter } from "next/router";
+import { useRouter, useParams, useSearchParams } from "next/navigation";
+
 import { fetchAuthStatus } from "@/services/shuguClient";
 import CreatorHomeShell from "@/features/creator-home/CreatorHomeShell";
 
-export default function CreatorHomePage() {
+export function CreatorHomeClient() {
   const router = useRouter();
-  const rawUsername = router.query.username;
-  const urlUsername = Array.isArray(rawUsername) ? rawUsername[0] : rawUsername;
+  const params = useParams<{ username?: string }>();
+  const searchParams = useSearchParams();
+  const urlUsername = params?.username;
   // `?preview=1` permet de voir le design sans être connecté — utile pour
-  // itérer sur le visuel avant d'avoir un backend auth stable.
-  const previewMode = router.query.preview === "1";
+  // itérer sur le visuel avant d&apos;avoir un backend auth stable.
+  const previewMode = searchParams?.get("preview") === "1";
   const [operator, setOperator] = useState<{ username: string } | null>(null);
   const [authChecked, setAuthChecked] = useState(false);
 
@@ -42,7 +47,7 @@ export default function CreatorHomePage() {
     }
   }, [previewMode, authChecked, operator, urlUsername, router]);
 
-  // Nécessaire pour que `body { overflow: hidden }` s'applique seulement sur
+  // Nécessaire pour que `body { overflow: hidden }` s&apos;applique seulement sur
   // cette page (le shell est plein écran, on veut éviter une scrollbar).
   useEffect(() => {
     const prev = document.body.style.overflow;
@@ -52,10 +57,6 @@ export default function CreatorHomePage() {
 
   return (
     <>
-      <Head>
-        <title>Shugu · Creator Home</title>
-        <meta name="viewport" content="width=device-width, initial-scale=1" />
-      </Head>
       {authChecked && (operator || previewMode) ? (
         <CreatorHomeShell />
       ) : (

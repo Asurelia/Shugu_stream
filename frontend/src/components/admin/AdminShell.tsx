@@ -1,6 +1,9 @@
+"use client";
+
 import Link from "next/link";
-import { useRouter } from "next/router";
+import { useParams, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
+
 import { fetchAuthStatus, logout } from "@/services/shuguClient";
 
 /**
@@ -48,7 +51,11 @@ type Props = {
 
 export function AdminShell({ active, title, subtitle, headerRight, children }: Props) {
   const router = useRouter();
-  const rawUsername = router.query.username;
+  // App Router : `useParams()` replaces `router.query` for dynamic segments.
+  // `params.username` may be `string | string[] | undefined` depending on the
+  // route shape — flatten to a single string here.
+  const params = useParams<{ username?: string | string[] }>();
+  const rawUsername = params?.username;
   const urlUsername = Array.isArray(rawUsername) ? rawUsername[0] : rawUsername;
   const [operator, setOperator] = useState<{ username: string } | null>(null);
   const [authChecked, setAuthChecked] = useState(false);
