@@ -166,9 +166,10 @@ jobs:
 
       - name: Build
         working-directory: frontend
-        # BASE_PATH vide en CI — l'app cible shugu.spoukie.uk depuis la racine.
-        # Sera renommé NEXT_PUBLIC_BASE_PATH au Sprint D (Next 16 supprime
-        # `publicRuntimeConfig`).
+        # NEXT_PUBLIC_BASE_PATH vide en CI — l'app cible shugu.spoukie.uk
+        # depuis la racine. Le préfixe NEXT_PUBLIC_ est requis pour que
+        # Next.js inline la valeur dans le bundle client (publicRuntimeConfig
+        # supprimé en Next 16, lecture build-time uniquement).
         env:
-          BASE_PATH: ""
+          NEXT_PUBLIC_BASE_PATH: ""
         run: npm run build

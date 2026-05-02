@@ -151,7 +151,11 @@ export class StreamingAudioPlayer {
       const next = this.pending.shift()!;
       try {
         this.updating = true;
-        this.sourceBuffer.appendBuffer(next);
+        // TypeScript 5.9+ narrows TypedArray's buffer generic to
+        // `ArrayBufferLike` ; SourceBuffer.appendBuffer expects the
+        // narrower `BufferSource` (which is ArrayBuffer | ArrayBufferView).
+        // The cast is safe — Uint8Array is a valid BufferSource at runtime.
+        this.sourceBuffer.appendBuffer(next as BufferSource);
       } catch (err) {
         this.updating = false;
         this.onError?.(err);
