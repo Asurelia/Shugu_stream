@@ -95,13 +95,19 @@ export function attachTransformControls(
   const { mode = "translate", onChange, onDraggingChanged } = options;
 
   // Crée le TransformControls sur la caméra utilisateur.
+  // Three.js r155+ : `TransformControls` n'est plus un Object3D — c'est le
+  // wrapper qui dispatch events et tient l'object attaché. Le gizmo visuel
+  // (axes, plans, picking spheres) est sur `getHelper()` (TransformControlsRoot,
+  // lui un Object3D). On garde une référence locale `helper` pour : (1)
+  // toggle `.visible` au lifecycle, (2) `scene.add(helper)` au mount,
+  // (3) `scene.remove(helper)` au dispose. `getHelper()` retourne toujours
+  // la même instance (cached `_root`).
   const controls = new TransformControls(camera, domElement);
+  const helper = controls.getHelper();
   controls.setMode(mode);
 
   // Masqué et désactivé par défaut — activé en mode "edit" uniquement.
-  // Three.js r155+ : `TransformControls` n'est plus un Object3D direct ; le
-  // gizmo visuel est exposé via `getHelper()` (TransformControlsRoot).
-  controls.getHelper().visible = false;
+  helper.visible = false;
   controls.enabled = false;
 
   // Listener dragging-changed : désactive orbit pendant drag pour éviter le
@@ -129,9 +135,9 @@ export function attachTransformControls(
   // eslint-disable-next-line
   controls.addEventListener("change", onChange_ as any);
 
-  // Ajoute à la scène (cast r149 requis — TransformControls n'est pas typé
-  // comme Object3D dans three r149 mais est bien un Object3D au runtime).
-  scene.add(controls as unknown as THREE.Object3D);
+  // Sans ajouter le helper à la scène, le gizmo ne rendrait pas et le
+  // raycast picking ne pourrait pas le toucher (CodeRabbit P1).
+  scene.add(helper);
 
   return {
     controls,
@@ -150,8 +156,10 @@ export function attachTransformControls(
 
     dispose(): void {
       // Ordre critique : detach → remove → dispose (Phase F lesson M2).
+      // Three r155+ : on remove le helper (Object3D ajouté à la scène),
+      // pas `controls` directement.
       controls.detach();
-      scene.remove(controls as unknown as THREE.Object3D);
+      scene.remove(helper);
       // eslint-disable-next-line
       controls.removeEventListener("dragging-changed", onDraggingChanged_ as any);
       // eslint-disable-next-line
