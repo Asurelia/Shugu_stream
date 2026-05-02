@@ -1,12 +1,24 @@
+"use client";
+
+/**
+ * /account/profile client island.
+ *
+ * Migration Pages Router → App Router (Sprint E2) :
+ *   - `useRouter` import : `next/router` → `next/navigation`. The new API
+ *     keeps `.replace(url)` / `.push(url)` so no signature change needed.
+ *   - `<Meta title>` removed — the parent Server Component (page.tsx)
+ *     declares `metadata` instead.
+ *   - Apostrophes in JSX text replaced with `&apos;`.
+ */
 import { useEffect, useState } from "react";
-import { useRouter } from "next/router";
-import { Meta } from "@/components/meta";
+import { useRouter } from "next/navigation";
+
 import {
   GlassCard, GlassButton, GlassPill,
 } from "@/features/liquid-glass/primitives";
 import { me as fetchMe, logout, type Me } from "@/services/accountClient";
 
-export default function AccountProfilePage() {
+export function ProfileClient() {
   const router = useRouter();
   const [me, setMe] = useState<Me | null>(null);
   const [loading, setLoading] = useState(true);
@@ -38,7 +50,6 @@ export default function AccountProfilePage() {
   if (loading || !me) {
     return (
       <div className="lg-page min-h-screen flex items-center justify-center">
-        <Meta title="Mon compte — Shugu" />
         <span className="text-sm opacity-60">chargement…</span>
       </div>
     );
@@ -52,7 +63,6 @@ export default function AccountProfilePage() {
 
   return (
     <div className="lg-page min-h-screen p-6">
-      <Meta title="Mon compte — Shugu" />
       <div className="max-w-lg mx-auto space-y-4">
         <GlassCard padded>
           <div className="flex items-start justify-between gap-4 mb-4">
@@ -78,7 +88,7 @@ export default function AccountProfilePage() {
             </div>
             {vipUntilLabel && (
               <div className="flex justify-between">
-                <dt className="opacity-60">VIP jusqu'au</dt>
+                <dt className="opacity-60">VIP jusqu&apos;au</dt>
                 <dd>{vipUntilLabel}</dd>
               </div>
             )}

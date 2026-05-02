@@ -1,9 +1,24 @@
-import { useState } from "react";
+"use client";
+
+/**
+ * /account/register client island.
+ *
+ * Migration Pages Router → App Router (Sprint E2) :
+ *   - `useRouter` import : `next/router` → `next/navigation`. The new API
+ *     keeps `.push(url)` but drops `.query` (we don't use it here).
+ *   - `<Meta title>` removed — the parent Server Component (page.tsx)
+ *     declares `metadata` instead.
+ *   - `<Link href>` from `next/link` keeps the same API.
+ *
+ * Form logic untouched : same accountClient calls, same password validation,
+ * same error/success UX.
+ */
 import Link from "next/link";
-import { useRouter } from "next/router";
-import { Meta } from "@/components/meta";
-import { GlassCard, GlassButton, GlassInput } from "@/features/liquid-glass/primitives";
-import { register, AccountError } from "@/services/accountClient";
+import { useRouter } from "next/navigation";
+import { useState } from "react";
+
+import { GlassButton, GlassCard, GlassInput } from "@/features/liquid-glass/primitives";
+import { AccountError, register } from "@/services/accountClient";
 
 type FormState = {
   username: string;
@@ -11,7 +26,7 @@ type FormState = {
   password: string;
 };
 
-export default function RegisterPage() {
+export function RegisterClient() {
   const router = useRouter();
   const [form, setForm] = useState<FormState>({ username: "", email: "", password: "" });
   const [loading, setLoading] = useState(false);
@@ -48,7 +63,6 @@ export default function RegisterPage() {
 
   return (
     <div className="lg-page min-h-screen flex items-center justify-center p-6">
-      <Meta title="Inscription — Shugu" />
       <GlassCard className="max-w-md w-full" padded>
         <h1 className="text-2xl font-light tracking-tight text-shugu-cream mb-1">
           Crée ton compte
@@ -62,7 +76,7 @@ export default function RegisterPage() {
               {success}
             </div>
             <p className="text-xs opacity-60">
-              Une fois l'email vérifié, tu pourras te connecter.
+              Une fois l&apos;email vérifié, tu pourras te connecter.
             </p>
             <GlassButton type="button" onClick={() => router.push("/account/login")}>
               Aller à la connexion
