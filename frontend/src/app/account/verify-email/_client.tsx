@@ -24,12 +24,9 @@ export function VerifyEmailClient() {
   const [status, setStatus] = useState<Status>("loading");
   const [detail, setDetail] = useState<string>("");
 
+  // Effect only runs when a token is present — no-token case is derived in render.
   useEffect(() => {
-    if (!token) {
-      setStatus("error");
-      setDetail("Lien invalide : token manquant.");
-      return;
-    }
+    if (!token) return;
     verifyEmail(token)
       .then((res) => {
         setStatus("success");
@@ -45,10 +42,14 @@ export function VerifyEmailClient() {
       });
   }, [token]);
 
+  // Derive no-token error without setState in effect (react-hooks/set-state-in-effect).
+  const effectiveStatus: Status = !token ? "error" : status;
+  const effectiveDetail = !token ? "Lien invalide : token manquant." : detail;
+
   return (
     <div className="lg-page min-h-screen flex items-center justify-center p-6">
       <GlassCard className="max-w-md w-full text-center" padded>
-        {status === "loading" && (
+        {effectiveStatus === "loading" && (
           <>
             <h1 className="text-2xl font-light tracking-tight text-shugu-cream mb-2">
               Vérification…
@@ -56,7 +57,7 @@ export function VerifyEmailClient() {
             <p className="text-sm opacity-70">Un instant, on valide ton lien.</p>
           </>
         )}
-        {status === "success" && (
+        {effectiveStatus === "success" && (
           <>
             <h1 className="text-2xl font-light tracking-tight text-shugu-cream mb-2">
               Email vérifié
@@ -69,12 +70,12 @@ export function VerifyEmailClient() {
             </GlassButton>
           </>
         )}
-        {status === "error" && (
+        {effectiveStatus === "error" && (
           <>
             <h1 className="text-2xl font-light tracking-tight text-shugu-cream mb-2">
               Vérification impossible
             </h1>
-            <p className="text-sm opacity-70 mb-2">{detail}</p>
+            <p className="text-sm opacity-70 mb-2">{effectiveDetail}</p>
             <p className="text-xs opacity-50 mb-6">
               Si le lien a expiré (24 h), demande un nouvel email depuis la page de connexion.
             </p>

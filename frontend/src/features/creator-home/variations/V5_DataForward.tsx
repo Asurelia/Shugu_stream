@@ -1,7 +1,7 @@
 /**
  * V5 — Data-Forward Studio. Metric tiles, live viewer pulse, dashboard-like.
  */
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   COPY, Logo, LiveDot, AvatarFrame, ReactionLayer, ReactionBar,
   ChatPanel, SubGoalCard,
@@ -17,7 +17,7 @@ export default function V5_DataForward({ tone }: { tone: Tone }) {
   const uptime = useUptime();
   const { items: reactions, add: addReaction } = useReactions();
 
-  const points = useMemo(() => {
+  const [pulse, setPulse] = useState<number[]>(() => {
     const arr: number[] = [];
     let v = 0.5;
     for (let i = 0; i < 60; i++) {
@@ -26,8 +26,7 @@ export default function V5_DataForward({ tone }: { tone: Tone }) {
       arr.push(v);
     }
     return arr;
-  }, []);
-  const [pulse, setPulse] = useState<number[]>(points);
+  });
   useEffect(() => {
     const id = setInterval(() => {
       setPulse((prev) => {

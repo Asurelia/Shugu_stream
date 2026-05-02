@@ -517,7 +517,10 @@ export function ViewerStage({
   const [unread, setUnread] = useState(0);
   const prevCountRef = useRef(messages.length);
 
+  /* eslint-disable react-hooks/set-state-in-effect */
   // Track new messages → incrémente unread si collapsed.
+  // FIXME(react-hooks/set-state-in-effect): pattern P3 — unread driven by two independent
+  // sources (messages.length + collapsed); not derivable without useSyncExternalStore.
   useEffect(() => {
     if (collapsed && messages.length > prevCountRef.current) {
       setUnread((u) => Math.min(99, u + (messages.length - prevCountRef.current)));
@@ -527,6 +530,7 @@ export function ViewerStage({
 
   // Reset unread à chaque ouverture.
   useEffect(() => { if (!collapsed) setUnread(0); }, [collapsed]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   const isAdmin = !!(session && session.tier === "admin");
   const hermesMode = isAdmin && target === "hermes";

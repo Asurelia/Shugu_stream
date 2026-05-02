@@ -25,6 +25,9 @@ export function CommandPalette() {
   const inputRef = useRef<HTMLInputElement | null>(null);
 
   // Reset on open / close.
+  // FIXME(react-hooks/set-state-in-effect): pattern P3 — reset query/activeIndex when
+  // open changes. Could use key={open} on parent; left as-is to avoid parent refactor.
+  /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     if (open) {
       setQuery("");
@@ -35,13 +38,17 @@ export function CommandPalette() {
     }
     return undefined;
   }, [open]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   const commands = useMemo(() => buildCommands(storeApi.getState()), [storeApi]);
   const filtered = useMemo(() => filterCommands(commands, query), [commands, query]);
 
+  // FIXME(react-hooks/set-state-in-effect): pattern P3 — reset activeIndex on query change.
+  /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     setActiveIndex(0);
   }, [query]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   if (!open) return null;
 

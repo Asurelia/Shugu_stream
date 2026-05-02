@@ -202,8 +202,10 @@ export function useAfkLoops({
   const setCurrentVrmaUrlRef = useRef(setCurrentVrmaUrl);
   setCurrentVrmaUrlRef.current = setCurrentVrmaUrl;
 
-  /** Timestamp de la dernière interaction utilisateur (ms epoch). */
-  const lastActivityAt = useRef<number>(Date.now());
+  /** Timestamp de la dernière interaction utilisateur (ms epoch).
+   * Initialisé à 0; seeded au mount dans le useEffect ci-dessous pour éviter
+   * un appel impur (Date.now()) pendant le render. */
+  const lastActivityAt = useRef<number>(0);
 
   /** Ref pour tracker si AFK est actif (pour le retour de résultat). */
   const afkActiveRef = useRef<boolean>(false);
@@ -216,6 +218,9 @@ export function useAfkLoops({
 
   // ── Setup listeners + interval ─────────────────────────────────────────────
   useEffect(() => {
+    // Seed le timestamp d'activité au mount (évite Date.now() en render).
+    lastActivityAt.current = Date.now();
+
     // pointermove sur window — interactions souris/pointer dans toute la page.
     // Intentionnellement sur window (pas canvasRef.current) car SceneComposerViewer
     // gère son propre canvasRef interne sans forwarded-ref exposé. Cela couvre aussi

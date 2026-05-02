@@ -77,8 +77,13 @@ export function ChatFeed({
   const [open, setOpen] = useState(true);
   const [unread, setUnread] = useState(0);
 
+  // FIXME(react-hooks/set-state-in-effect): pattern P3 — sync open with isDesktop prop;
+  // preserves user-toggle agency so can't be a simple derivation.
+  /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => { setOpen(isDesktop); }, [isDesktop]);
 
+  // FIXME(react-hooks/set-state-in-effect): pattern P3 — unread counter driven by two
+  // independent state sources (messages length + open); not derivable without useSyncExternalStore.
   useEffect(() => {
     if (open) {
       setUnread(0);
@@ -91,6 +96,7 @@ export function ChatFeed({
     }
     prevLenRef.current = visibleMessages.length;
   }, [visibleMessages.length, open, autoFollow]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   const onScroll = () => {
     const el = scrollRef.current;
