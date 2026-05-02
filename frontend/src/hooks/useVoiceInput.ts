@@ -1,6 +1,6 @@
 // Web Speech API wrapper — Chrome/Edge/Safari. Firefox has no native STT.
 // Produces interim + final transcripts in French by default.
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 
 type Opts = {
   lang?: string;
@@ -8,16 +8,15 @@ type Opts = {
 };
 
 export function useVoiceInput({ lang = "fr-FR", onFinal }: Opts = {}) {
-  const [supported, setSupported] = useState(false);
+  const [supported] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false;
+    return !!(
+      (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
+    );
+  });
   const [listening, setListening] = useState(false);
   const [interim, setInterim] = useState("");
   const recRef = useRef<any>(null);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    setSupported(!!SR);
-  }, []);
 
   const start = useCallback(() => {
     if (typeof window === "undefined") return;

@@ -35,6 +35,9 @@ export default function CreatorHomeShell() {
   const [hydrated, setHydrated] = useState(false);
 
   // Hydrate depuis localStorage au mount (client-only).
+  // FIXME(react-hooks/set-state-in-effect): SSR-safe hydration pattern — lazy useState
+  // is unsafe here (localStorage unavailable on server → hydration mismatch). Keep as-is.
+  /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     try {
       const raw = localStorage.getItem("shugu-creator-home");
@@ -46,6 +49,7 @@ export default function CreatorHomeShell() {
     } catch { /* ignore */ }
     setHydrated(true);
   }, []);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   // Persiste à chaque changement (après hydratation pour éviter d'écraser).
   useEffect(() => {

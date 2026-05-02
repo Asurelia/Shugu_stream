@@ -72,13 +72,21 @@ export default function V1_EditorialFaithful({ tone }: { tone: Tone }) {
           <div className="font-display" style={{ fontWeight: 700, fontSize: "0.95rem", marginTop: 6 }}>
             midnight hum <span style={{ color: "var(--on-surface-variant)", fontWeight: 500 }}>— loscil</span>
           </div>
+          <style>{`
+            @keyframes v1-bar-bounce {
+              0%, 100% { transform: scaleY(0.3); }
+              50%       { transform: scaleY(1); }
+            }
+          `}</style>
           <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 8 }}>
             {[...Array(24)].map((_, i) => (
               <div key={i} style={{
                 width: 2,
-                height: 4 + Math.abs(Math.sin(i * 0.8 + Date.now() / 1000)) * 14,
+                height: 18,
                 background: "linear-gradient(180deg, var(--primary), var(--secondary))",
                 borderRadius: 2, opacity: 0.7,
+                transformOrigin: "bottom",
+                animation: `v1-bar-bounce ${0.8 + (i % 5) * 0.15}s ease-in-out ${i * 80}ms infinite`,
               }} />
             ))}
           </div>
