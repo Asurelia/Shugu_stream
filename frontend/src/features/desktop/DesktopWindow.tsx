@@ -94,16 +94,15 @@ export function DesktopWindow({ win }: Props) {
           </button>
         </div>
       </header>
-
       {!isMinimized && (
         <div className="flex-1 min-h-0 overflow-auto scroll-hidden">
           {isImage ? (
             // kind=image uses window.content as the src URL
-            <img
+            (<img
               src={win.content}
               alt={win.fileName}
               className="w-full h-full object-contain"
-            />
+            />)
           ) : (
             <pre
               className={`p-3 text-[11px] leading-snug whitespace-pre-wrap break-words ${
