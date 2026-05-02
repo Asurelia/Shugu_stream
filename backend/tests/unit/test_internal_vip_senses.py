@@ -262,3 +262,53 @@ def test_post_tool_chat_still_publishes_sense_raw(
     asyncio.run(run())
     assert received, "sense.raw non publié pour chat.post VIP — régression mémoire"
     assert received[0]["event_type"] == "chat_in"
+
+
+# ---------------------------------------------------------------------------
+# T5 — Robustesse fallback subject (CodeRabbit P2 — Sprint 6 PR #75)
+# ---------------------------------------------------------------------------
+
+
+def test_post_tool_chat_with_blank_sender_and_whitespace_session_does_not_crash(
+    client: TestClient,
+    bus_and_queue,
+) -> None:
+    """Un agent VIP buggé qui émet sender="" + session_id="   " ne doit pas
+    crasher /internal/vip/tool en 500.
+
+    `make_vip_subject` lève sur empty/whitespace après strip — sans triple
+    fallback (sender_lc OR session_id.strip() OR "vip"), un payload
+    malformé tuait le tool endpoint silencieusement et bloquait le flow VIP.
+    """
+    bus, _ = bus_and_queue
+    received: list[dict] = []
+
+    async def consume() -> None:
+        async for ev in bus.subscribe("sense.chat"):
+            received.append(ev)
+            return
+
+    async def run() -> None:
+        sub_task = asyncio.create_task(consume())
+        await asyncio.sleep(0.01)
+
+        resp = await asyncio.to_thread(
+            client.post,
+            "/internal/vip/tool",
+            # Cas hostile : sender absent, session_id whitespace.
+            json=_tool_payload("chat.post", text="hello", sender="", session_id="   "),
+            headers={"X-Internal-Secret": TEST_SECRET},
+        )
+        # Doit retourner 200, PAS 500.
+        assert resp.status_code == 200, (
+            f"Expected 200 with fallback subject, got {resp.status_code}: {resp.text}"
+        )
+
+        await asyncio.wait_for(sub_task, timeout=1.0)
+
+    asyncio.run(run())
+    assert received, "Pas d'event sense.chat avec fallback subject"
+    # Fallback ultime : subject="vip:vip" (helper lowercase + préfixe).
+    assert received[0]["subject"] == "vip:vip", (
+        f"Fallback subject incorrect: {received[0]['subject']!r}"
+    )

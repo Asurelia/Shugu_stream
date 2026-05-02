@@ -157,12 +157,23 @@ async def post_tool(
             raise HTTPException(
                 status.HTTP_400_BAD_REQUEST, "chat.post requires non-empty text",
             )
+        # `session_id` est utilisé en double : (1) fallback identifiant pour
+        # le subject si sender absent, (2) passé tel quel à publish_sense_raw.
+        # On le strip pour le fallback subject mais on garde la valeur raw
+        # (avec d'éventuels espaces) pour le param session_id qui n'a pas
+        # cette contrainte.
         session_id = str(call.args.get("session_id", "vip"))
         # Sender VIP — passé par le vip_agent dans args.sender (LiveKit identity).
-        # Subject = vip:<sender_lc> ; fallback vip:<session_id> si sender absent.
-        # `sender_lc or session_id` garantit non-vide pour make_vip_subject
-        # (lève sinon — invariant : on ne publie jamais de subject vide).
-        sender_lc = str(call.args.get("sender", "")).strip().lower() or session_id
+        # Subject = vip:<sender_lc> ; fallback vip:<session_id_stripped> si
+        # sender absent ; ultime fallback "vip" si les deux sont whitespace
+        # (make_vip_subject lève sinon — invariant : jamais de subject vide).
+        # Cas d'usage hostile : un agent VIP buggé qui émet sender="" et
+        # session_id="   " ne doit pas crasher le tool endpoint en 500.
+        sender_lc = (
+            str(call.args.get("sender", "")).strip().lower()
+            or session_id.strip()
+            or "vip"
+        )
 
         # Mémoire PR 2 — publish sense.raw event_type=chat_in (un VIP qui chatte
         # via le bridge LiveKit). Avant l'enqueue, comme visitor_ws / operator_ws.
