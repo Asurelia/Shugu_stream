@@ -106,8 +106,9 @@ describe("useGizmoBindingWithCallbacks · onGizmoChange extraction", () => {
     const gizmoHandle = makeMockGizmoHandle();
     const meshRegistry = { current: new Map<string, THREE.Object3D>() };
 
+    const gizmoHandleRef = { current: gizmoHandle };
     const { result } = renderHook(() =>
-      useGizmoBindingWithCallbacks({ gizmoHandle, meshRegistry }),
+      useGizmoBindingWithCallbacks({ gizmoHandleRef, gizmoReady: true, meshRegistry }),
     );
 
     const obj = makeTestObject([1.5, 0.5, -2.0], [0, 0, 0], [1, 1, 1], "mesh_test");
@@ -135,8 +136,9 @@ describe("useGizmoBindingWithCallbacks · onGizmoChange extraction", () => {
     const gizmoHandle = makeMockGizmoHandle();
     const meshRegistry = { current: new Map<string, THREE.Object3D>() };
 
+    const gizmoHandleRef = { current: gizmoHandle };
     const { result } = renderHook(() =>
-      useGizmoBindingWithCallbacks({ gizmoHandle, meshRegistry }),
+      useGizmoBindingWithCallbacks({ gizmoHandleRef, gizmoReady: true, meshRegistry }),
     );
 
     // 90° en radians = Math.PI / 2.
@@ -166,8 +168,9 @@ describe("useGizmoBindingWithCallbacks · onGizmoChange extraction", () => {
     const gizmoHandle = makeMockGizmoHandle();
     const meshRegistry = { current: new Map<string, THREE.Object3D>() };
 
+    const gizmoHandleRef = { current: gizmoHandle };
     const { result } = renderHook(() =>
-      useGizmoBindingWithCallbacks({ gizmoHandle, meshRegistry }),
+      useGizmoBindingWithCallbacks({ gizmoHandleRef, gizmoReady: true, meshRegistry }),
     );
 
     const obj1 = makeTestObject([1, 0, 0], [0, 0, 0], [1, 1, 1], "mesh_db");
@@ -197,8 +200,9 @@ describe("useGizmoBindingWithCallbacks · no selectedMeshId", () => {
     const gizmoHandle = makeMockGizmoHandle();
     const meshRegistry = { current: new Map<string, THREE.Object3D>() };
 
+    const gizmoHandleRef = { current: gizmoHandle };
     const { result } = renderHook(() =>
-      useGizmoBindingWithCallbacks({ gizmoHandle, meshRegistry }),
+      useGizmoBindingWithCallbacks({ gizmoHandleRef, gizmoReady: true, meshRegistry }),
     );
 
     const obj = makeTestObject([99, 0, 0]);
@@ -220,11 +224,12 @@ describe("useGizmoBindingWithCallbacks · sync transformMode → gizmo", () => {
     useSceneComposerStore.getState().setTransformMode("rotate");
 
     const gizmoHandle = makeMockGizmoHandle();
+    const gizmoHandleRef = { current: gizmoHandle };
     const meshRegistry = { current: new Map<string, THREE.Object3D>() };
 
     act(() => {
       renderHook(() =>
-        useGizmoBindingWithCallbacks({ gizmoHandle, meshRegistry }),
+        useGizmoBindingWithCallbacks({ gizmoHandleRef, gizmoReady: true, meshRegistry }),
       );
     });
 
@@ -234,11 +239,12 @@ describe("useGizmoBindingWithCallbacks · sync transformMode → gizmo", () => {
   it("transformMode 'translate' au mount → gizmoHandle.setMode('translate') appelé", () => {
     // L'état initial du store est "translate".
     const gizmoHandle = makeMockGizmoHandle();
+    const gizmoHandleRef = { current: gizmoHandle };
     const meshRegistry = { current: new Map<string, THREE.Object3D>() };
 
     act(() => {
       renderHook(() =>
-        useGizmoBindingWithCallbacks({ gizmoHandle, meshRegistry }),
+        useGizmoBindingWithCallbacks({ gizmoHandleRef, gizmoReady: true, meshRegistry }),
       );
     });
 
@@ -250,11 +256,12 @@ describe("useGizmoBindingWithCallbacks · sync selectedMeshId → gizmo attach",
   it("selectedMeshId null → gizmoHandle.attach(null)", () => {
     // État initial : selectedMeshId = null.
     const gizmoHandle = makeMockGizmoHandle();
+    const gizmoHandleRef = { current: gizmoHandle };
     const meshRegistry = { current: new Map<string, THREE.Object3D>() };
 
     act(() => {
       renderHook(() =>
-        useGizmoBindingWithCallbacks({ gizmoHandle, meshRegistry }),
+        useGizmoBindingWithCallbacks({ gizmoHandleRef, gizmoReady: true, meshRegistry }),
       );
     });
 
@@ -265,12 +272,13 @@ describe("useGizmoBindingWithCallbacks · sync selectedMeshId → gizmo attach",
     useSceneComposerStore.getState().setSelectedMeshId("mesh_xyz");
 
     const gizmoHandle = makeMockGizmoHandle();
+    const gizmoHandleRef = { current: gizmoHandle };
     const meshRegistry = { current: new Map<string, THREE.Object3D>() };
     // Registry vide — mesh non trouvé.
 
     act(() => {
       renderHook(() =>
-        useGizmoBindingWithCallbacks({ gizmoHandle, meshRegistry }),
+        useGizmoBindingWithCallbacks({ gizmoHandleRef, gizmoReady: true, meshRegistry }),
       );
     });
 
@@ -281,13 +289,14 @@ describe("useGizmoBindingWithCallbacks · sync selectedMeshId → gizmo attach",
     useSceneComposerStore.getState().setSelectedMeshId("mesh_abc");
 
     const gizmoHandle = makeMockGizmoHandle();
+    const gizmoHandleRef = { current: gizmoHandle };
     const meshRegistry = { current: new Map<string, THREE.Object3D>() };
     const mesh = makeTestObject();
     meshRegistry.current.set("mesh_abc", mesh);
 
     act(() => {
       renderHook(() =>
-        useGizmoBindingWithCallbacks({ gizmoHandle, meshRegistry }),
+        useGizmoBindingWithCallbacks({ gizmoHandleRef, gizmoReady: true, meshRegistry }),
       );
     });
 
@@ -320,8 +329,9 @@ describe("useGizmoBindingWithCallbacks · C1 fix — RAF instanceId binding (rac
     meshRegistry.current.set("mesh_A", meshA);
     meshRegistry.current.set("mesh_B", meshB);
 
+    const gizmoHandleRef = { current: gizmoHandle };
     const { result } = renderHook(() =>
-      useGizmoBindingWithCallbacks({ gizmoHandle, meshRegistry }),
+      useGizmoBindingWithCallbacks({ gizmoHandleRef, gizmoReady: true, meshRegistry }),
     );
 
     // Capture les RAF IDs pour les déclencher manuellement.

@@ -96,13 +96,9 @@ export function SceneComposerViewer({
 
   // Refs latest pour les props lues dans les closures (RAF loop, async load).
   const cameraPresetRef = useRef<CameraPreset>(cameraPreset);
-  cameraPresetRef.current = cameraPreset;
   const viewModeRef = useRef<"edit" | "preview">(viewMode);
-  viewModeRef.current = viewMode;
   const vrmaUrlRef = useRef<string | undefined>(vrmaUrl);
-  vrmaUrlRef.current = vrmaUrl;
   const vrmaLoopRef = useRef<boolean>(vrmaLoop);
-  vrmaLoopRef.current = vrmaLoop;
 
   // Store — sélecteurs fins.
   const selectedMeshId = useSceneComposerStore(selectSelectedMeshId);
@@ -115,8 +111,8 @@ export function SceneComposerViewer({
   //
   // Pourquoi null-init est sûr : le gizmo Three.js ne peut pas émettre `onChange`
   // avant la fin du useEffect mount de useSceneRig (post-commit React) — moment
-  // où `.current` a déjà été assigné par la ligne `onGizmoChangeRef.current = onGizmoChange`
-  // ci-dessous. L'optional chaining `?.()` dans useSceneRig.ts est purement
+  // où `.current` a déjà été assigné dans le useEffect sync (no-dep-array) ci-dessous.
+  // L'optional chaining `?.()` dans useSceneRig.ts est purement
   // défensif contre un cas d'invocation impossible en pratique.
   const onGizmoChangeRef = useRef<((obj: THREE.Object3D) => void) | null>(null);
 
@@ -132,6 +128,7 @@ export function SceneComposerViewer({
     sceneRigRef,
     cameraRigRef,
     gizmoHandleRef,
+    gizmoReady,
     meshRegistryRef,
     cameraRefForHooks,
     vrmRef,
@@ -153,11 +150,20 @@ export function SceneComposerViewer({
   // Note : gizmoHandleRef.current sera null au mount initial — le hook est no-op
   // jusqu'à ce que le rig soit initialisé (useSceneRig set gizmoHandleRef).
   const { onGizmoChange } = useGizmoBindingWithCallbacks({
-    gizmoHandle: gizmoHandleRef.current,
+    gizmoHandleRef,
+    gizmoReady,
     meshRegistry: meshRegistryRef,
   });
-  // Mise à jour de la ref latest pour que le closure onChange du gizmo soit toujours frais.
-  onGizmoChangeRef.current = onGizmoChange;
+
+  // Sync all ref mirrors after each commit (no dep array → runs after every render).
+  // onGizmoChange is included here because it depends on useGizmoBindingWithCallbacks above.
+  useEffect(() => {
+    cameraPresetRef.current = cameraPreset;
+    viewModeRef.current = viewMode;
+    vrmaUrlRef.current = vrmaUrl;
+    vrmaLoopRef.current = vrmaLoop;
+    onGizmoChangeRef.current = onGizmoChange;
+  });
 
   // ── Hook useDragDropTarget ────────────────────────────────────────────────
   const handleAssetDropped = useCallback(

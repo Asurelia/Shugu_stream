@@ -62,7 +62,13 @@ export function useEditorWebSocket(
   // Fix H-1 : ref qui reflète toujours le dernier `sceneId` reçu par le
   // hook. Utilisée par `onOpen` pour re-subscribe après reconnect.
   const sceneIdRef = useRef<string | null>(sceneId);
-  sceneIdRef.current = sceneId;
+
+  // Sync ref mirror after each commit (no dep array → runs after every render).
+  // 1-tick reconnect race acceptable: onOpen reads sceneIdRef.current which will
+  // already be current by the time any user interaction triggers a reconnect.
+  useEffect(() => {
+    sceneIdRef.current = sceneId;
+  });
 
   // Les actions Zustand sont stables (Zustand garantit l'identité tant que
   // le store n'est pas recréé) → on peut les accéder via getState() sans

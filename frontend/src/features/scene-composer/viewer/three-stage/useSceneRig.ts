@@ -17,7 +17,7 @@
  * @module viewer/three-stage/useSceneRig
  */
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { createScene } from "./createScene";
 import { createCamera } from "./createCamera";
@@ -74,6 +74,12 @@ export interface SceneRigRefs {
   cameraRigRef: React.MutableRefObject<CameraRig | null>;
   /** Handle du gizmo TransformControls. */
   gizmoHandleRef: React.MutableRefObject<TransformControlsHandle | null>;
+  /**
+   * true après que le gizmo TransformControls a été assigné à `gizmoHandleRef`.
+   * Permet aux hooks dépendants (useGizmoBinding) de s'abonner via un dep React
+   * plutôt que de lire `.current` au render (évite les stale reads).
+   */
+  gizmoReady: boolean;
   /** Registry instanceId → Object3D pour la sélection et le gizmo attach. */
   meshRegistryRef: React.MutableRefObject<Map<string, THREE.Object3D>>;
   /** Référence caméra exposée aux hooks d'interaction. */
@@ -131,6 +137,8 @@ export function useSceneRig({
 
   // Refs E5.3 — gizmo + selection + registry.
   const gizmoHandleRef = useRef<TransformControlsHandle | null>(null);
+  /** true après que gizmoHandle a été assigné — signal React-friendly pour les hooks dépendants. */
+  const [gizmoReady, setGizmoReady] = useState(false);
   /** Registry instanceId → Object3D pour la sélection et le gizmo attach. */
   const meshRegistryRef = useRef<Map<string, THREE.Object3D>>(new Map());
   /** Ref de la caméra exposée aux hooks interaction. */
@@ -139,7 +147,11 @@ export function useSceneRig({
   // Capture stable de setSelectedMeshId pour la closure du mount effect.
   // (la ref évite que le useEffect[] se re-exécute si le store change)
   const setSelectedMeshIdRef = useRef(setSelectedMeshId);
-  setSelectedMeshIdRef.current = setSelectedMeshId;
+
+  // Sync ref mirror after each commit (no dep array → runs after every render).
+  useEffect(() => {
+    setSelectedMeshIdRef.current = setSelectedMeshId;
+  });
 
   // Capture stable de vrmUrl pour le load initial.
   const vrmUrlInitRef = useRef(vrmUrl);
@@ -189,6 +201,7 @@ export function useSceneRig({
       },
     );
     gizmoHandleRef.current = gizmoHandle;
+    setGizmoReady(true);
 
     // Gizmo visible seulement en mode edit.
     // Three.js r155+ : `.visible` est sur `getHelper()` (TransformControlsRoot).
@@ -320,6 +333,7 @@ export function useSceneRig({
     sceneRigRef,
     cameraRigRef,
     gizmoHandleRef,
+    gizmoReady,
     meshRegistryRef,
     cameraRefForHooks,
     vrmRef,

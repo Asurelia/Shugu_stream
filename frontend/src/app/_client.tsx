@@ -96,10 +96,12 @@ export function HomeClient() {
   const uptime = useHmsUptime(streamStartMs);
   const router = useRouter();
   useEffect(() => {
-    if (connStatus === "open" && streamStartMs === null) {
-      setStreamStartMs(Date.now());
+    if (connStatus === "open") {
+      // P6: functional update — sets startMs once on first "open", never re-triggers.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setStreamStartMs((prev) => prev ?? Date.now());
     }
-  }, [connStatus, streamStartMs]);
+  }, [connStatus]);
 
   const clientRef = useRef<ShuguClient | null>(null);
   const modeRef = useRef<Mode>(mode);
@@ -136,6 +138,8 @@ export function HomeClient() {
   useEffect(() => {
     if (!operator) return;
     try {
+      // P2: SSR-safe localStorage init in effect gated on operator — cannot use useState lazy init here.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setDebugCaptions(localStorage.getItem("shugu.debug_captions") === "1");
     } catch {}
   }, [operator]);

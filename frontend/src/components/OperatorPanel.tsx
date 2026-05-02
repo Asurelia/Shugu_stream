@@ -40,6 +40,8 @@ export function OperatorPanel({
   };
 
   useEffect(() => {
+    // FIXME: false positive — markActive → setExpanded is intentional (P3 idle timer init).
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     markActive();
     return () => { if (idleTimer.current) clearTimeout(idleTimer.current); };
   }, []);

@@ -1,11 +1,12 @@
 ---
 date: 2026-05-02
-status: mitigated
+status: fixed
 severity: medium
 discovered_during: PR #79 (Sprint D — Next 15 → 16 bump)
+fixed_by: PR #88 (Sprint 7a, 11 violations) + PR #89 (Sprint 7b, 11 violations) + PR #90 (Sprint 7c, 26 violations) — règles ré-activées en `error` dans `eslint.config.mjs`
 related_files:
   - frontend/eslint.config.mjs
-  - frontend/src/pages/index.tsx
+  - frontend/src/app/_client.tsx
   - frontend/src/features/scene-composer/
   - frontend/src/features/scene-editor-v2/
   - frontend/src/components/
