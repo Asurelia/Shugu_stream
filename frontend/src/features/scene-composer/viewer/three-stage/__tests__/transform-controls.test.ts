@@ -28,16 +28,20 @@ import * as THREE from "three";
 // On utilise __mocks__ via vi.mock avec une factory inline (pas de référence
 // à des variables top-level pour éviter le hoisting issue).
 
-vi.mock("three/examples/jsm/controls/TransformControls", () => {
+vi.mock("three/examples/jsm/controls/TransformControls.js", () => {
   // La factory doit être self-contained — on ne peut pas référencer des
   // variables extérieures déclarées après le hoist.
   type ThreeListener = (e: unknown) => void;
 
+  // Three.js r155+ : `TransformControls` n'est plus un Object3D ; `.visible`
+  // est exposé via `getHelper()` (qui retourne un TransformControlsRoot, lui
+  // bien Object3D). Le mock ci-dessous reflète ce split — un sub-objet
+  // `_helper` porte `visible`, et `getHelper()` le retourne.
   class TransformControls {
     object: object | null = null;
-    visible = true;
     enabled = true;
     private _ls: Map<string, ThreeListener[]> = new Map();
+    private _helper = { visible: true };
 
     addEventListener(type: string, fn: ThreeListener) {
       if (!this._ls.has(type)) this._ls.set(type, []);
@@ -52,6 +56,10 @@ vi.mock("three/examples/jsm/controls/TransformControls", () => {
       (this._ls.get(type) ?? []).forEach((fn) => fn(event));
     }
 
+    getHelper() {
+      return this._helper;
+    }
+
     setMode = vi.fn();
     attach = vi.fn(function(this: TransformControls, obj: object) { this.object = obj; });
     detach = vi.fn(function(this: TransformControls) { this.object = null; });
@@ -61,7 +69,7 @@ vi.mock("three/examples/jsm/controls/TransformControls", () => {
   return { TransformControls };
 });
 
-vi.mock("three/examples/jsm/controls/OrbitControls", () => {
+vi.mock("three/examples/jsm/controls/OrbitControls.js", () => {
   class OrbitControls {
     enabled = true;
     dispose = vi.fn();
@@ -71,8 +79,8 @@ vi.mock("three/examples/jsm/controls/OrbitControls", () => {
 
 // Import après mock.
 import { attachTransformControls } from "../transform-controls";
-import { TransformControls } from "three/examples/jsm/controls/TransformControls";
-import { OrbitControls } from "three/examples/jsm/controls/OrbitControls";
+import { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
+import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -82,7 +90,7 @@ function makeSetup() {
   const scene = new THREE.Scene();
   // OrbitControls expects (camera, domElement) — the test only needs an
   // instance whose `enabled` flag attachTransformControls toggles.
-  const orbit = new OrbitControls(camera, domElement) as unknown as import("three/examples/jsm/controls/OrbitControls").OrbitControls;
+  const orbit = new OrbitControls(camera, domElement) as unknown as import("three/examples/jsm/controls/OrbitControls.js").OrbitControls;
 
   const onChange = vi.fn();
   const onDraggingChanged = vi.fn();
@@ -93,7 +101,8 @@ function makeSetup() {
     onDraggingChanged,
   });
 
-  // Accès à l'instance mock via cast.
+  // Accès à l'instance mock via cast. `visible` est désormais exposé via
+  // `getHelper()` (Three.js r155+ TransformControls split du gizmo visuel).
   const mockCtrl = handle.controls as unknown as {
     _emit: (type: string, event?: Record<string, unknown>) => void;
     object: THREE.Object3D | null;
@@ -101,7 +110,7 @@ function makeSetup() {
     attach: ReturnType<typeof vi.fn>;
     detach: ReturnType<typeof vi.fn>;
     dispose: ReturnType<typeof vi.fn>;
-    visible: boolean;
+    getHelper: () => { visible: boolean };
     enabled: boolean;
   };
 
@@ -129,7 +138,7 @@ describe("attachTransformControls · création handle", () => {
 
   it("le gizmo est initialement masqué et désactivé", () => {
     const { mockCtrl } = makeSetup();
-    expect(mockCtrl.visible).toBe(false);
+    expect(mockCtrl.getHelper().visible).toBe(false);
     expect(mockCtrl.enabled).toBe(false);
   });
 });

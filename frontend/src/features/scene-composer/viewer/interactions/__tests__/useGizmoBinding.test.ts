@@ -21,7 +21,7 @@ import { renderHook, act } from "@testing-library/react";
 import * as THREE from "three";
 
 // Mock des dépendances Three.js TransformControls/OrbitControls si importés.
-vi.mock("three/examples/jsm/controls/TransformControls", () => ({
+vi.mock("three/examples/jsm/controls/TransformControls.js", () => ({
   TransformControls: class {
     visible = false;
     enabled = false;
@@ -34,7 +34,7 @@ vi.mock("three/examples/jsm/controls/TransformControls", () => ({
     dispose = vi.fn();
   },
 }));
-vi.mock("three/examples/jsm/controls/OrbitControls", () => ({
+vi.mock("three/examples/jsm/controls/OrbitControls.js", () => ({
   OrbitControls: class {
     enabled = true;
     dispose = vi.fn();
@@ -56,7 +56,7 @@ function makeMockGizmoHandle(): TransformControlsHandle {
     controls: {
       dragging: false,
       object: null,
-    } as unknown as import("three/examples/jsm/controls/TransformControls").TransformControls,
+    } as unknown as import("three/examples/jsm/controls/TransformControls.js").TransformControls,
     setMode: mockSetMode,
     attach: mockAttach,
     dispose: mockDispose,

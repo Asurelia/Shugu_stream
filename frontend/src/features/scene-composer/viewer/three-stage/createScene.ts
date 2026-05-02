@@ -53,9 +53,10 @@ export function createScene(
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: false });
   renderer.setSize(width, height);
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-  // Three.js r149 : `outputEncoding` (outputColorSpace n'existe qu'à partir de r152).
-  // sRGBEncoding = 3001 — constante stable dans r149.
-  renderer.outputEncoding = 3001;
+  // Three.js r152+ : `outputEncoding` removed in favor of `outputColorSpace`.
+  // We use the `THREE.SRGBColorSpace` constant which renders the same gamma
+  // correction as the legacy `THREE.sRGBEncoding` (3001) did pre-r152.
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
 
   // ── Scene ─────────────────────────────────────────────────────────────────
   const scene = new THREE.Scene();

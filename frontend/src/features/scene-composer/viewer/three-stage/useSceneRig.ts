@@ -191,7 +191,8 @@ export function useSceneRig({
     gizmoHandleRef.current = gizmoHandle;
 
     // Gizmo visible seulement en mode edit.
-    gizmoHandle.controls.visible = viewModeRef.current === "edit";
+    // Three.js r155+ : `.visible` est sur `getHelper()` (TransformControlsRoot).
+    gizmoHandle.controls.getHelper().visible = viewModeRef.current === "edit";
     gizmoHandle.controls.enabled = viewModeRef.current === "edit";
 
     // 5. Raycaster selection (click-to-pick).

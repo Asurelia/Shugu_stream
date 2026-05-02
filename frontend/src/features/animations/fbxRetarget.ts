@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { FBXLoader } from "three/examples/jsm/loaders/FBXLoader";
+import { FBXLoader } from "three/examples/jsm/loaders/FBXLoader.js";
 import type { VRMHumanBoneName } from "@pixiv/three-vrm";
 import { VRMAnimation } from "@/lib/VRMAnimation/VRMAnimation";
 

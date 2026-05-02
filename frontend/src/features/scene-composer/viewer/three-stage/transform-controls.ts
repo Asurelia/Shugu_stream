@@ -20,8 +20,8 @@
  */
 
 import * as THREE from "three";
-import { TransformControls } from "three/examples/jsm/controls/TransformControls";
-import type { OrbitControls } from "three/examples/jsm/controls/OrbitControls";
+import { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
+import type { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -99,7 +99,9 @@ export function attachTransformControls(
   controls.setMode(mode);
 
   // Masqué et désactivé par défaut — activé en mode "edit" uniquement.
-  controls.visible = false;
+  // Three.js r155+ : `TransformControls` n'est plus un Object3D direct ; le
+  // gizmo visuel est exposé via `getHelper()` (TransformControlsRoot).
+  controls.getHelper().visible = false;
   controls.enabled = false;
 
   // Listener dragging-changed : désactive orbit pendant drag pour éviter le
