@@ -85,16 +85,15 @@ Plus les 6 compteurs Phase 8.2 (agent_runner_*, world_delta_*, sense_events_*).
 
 ### Backlog identifié à traiter ensuite
 
-#### P1 type-design (~4h) — pas commencé
-- **NewType `UserId`** (str ULID, distinct des `username`)
-- **NewType `Subject`** (string scoping mémoire — load-bearing pour privacy)
-- **NewType `SessionId`** (WS session distinct des `jti`)
-- **NewType `OperatorUsername`** (distinct des `username` user)
+#### ~~P1 type-design (~4h)~~ ✅ Fait Sprint 6 PR #75
+- `core/types.py` : `Subject`, `UserId`, `SessionId`, `OperatorUsername` (NewType de str, zéro overhead runtime).
+- Helpers `make_visitor_subject` / `make_member_subject` / `make_vip_subject` / `make_operator_subject` — lowercase + valident non-vide.
+- Wired dans 5 call-sites prod : `operator_ws.py`, `operator_voice_ws.py`, `visitor_ws.py`, `internal_vip.py` (×2), `director/orchestrator.py`. Élimine la duplication des conventions `f"<role>:{x.lower()}"`.
+- `derive_viewer_subject` retourne `Optional[Subject]` mais préserve la casse (le persona store `relationships` est keyed en raw — lowercaser casserait les states legacy). Documenté.
+- Mypy non gaté en CI : ces NewType sont une documentation type pour qui lance mypy localement et un point central pour les futurs callsites.
 
-Pourquoi : actuellement `def f(user_id: str, username: str)` permet de swap les deux args sans erreur de type. Avec NewType, mypy détecte.
-
-#### Tests `/api/account/*` E2E (~3-4h) — Sprint 2 partiel
-Routes user (register, verify-email, login user, refresh user, logout user, me user) — pas de test E2E. Couverture critique via unit tests user_tokens + dependencies, mais flows complets (collision username, email pas vérifié, etc.) restent non testés. Besoin d'un fixture Postgres léger.
+#### ~~Tests `/api/account/*` E2E (~3-4h)~~ ✅ Fait Sprint 6 PR #74
+Routes user (register, verify-email, login user, refresh user, logout user, me user) couvertes par 38 tests E2E avec `_FakeDB` stateful in-memory. Voir `backend/tests/integration/test_account_routes.py`.
 
 #### 11 silent failures Cat C (légitimes mais à observer)
 Fallbacks documentés mais qui auraient besoin de métriques additionnelles ou de narrow except. Voir `audit/pass2-silent-failures.md` section Cat C.
@@ -337,4 +336,4 @@ gh pr create --title "..." --body "..."
 ---
 
 **Dernière mise à jour** : 2026-05-01 post-Sprint 5 PR #72.
-**Prochaine grosse étape** : Sprint 6 (NewType + tests account E2E) OU Migration Next.js 13→16 (projet séparé).
+**Prochaine grosse étape** : Migration Next.js 13→16 (projet séparé) OU s'attaquer aux 11 silent failures Cat C / 24 P2.

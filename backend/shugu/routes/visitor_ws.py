@@ -21,6 +21,7 @@ from ulid import ULID
 from ..config import Settings
 from ..core.identity import VisitorIdentity, hash_ip
 from ..core.protocols import EventBus, ModerationLayer
+from ..core.types import make_visitor_subject
 from ..director.wiring import publish_chat_trigger
 from ..memory.sense_publish import publish_sense_raw
 from ..pipeline.queue import QueuedMessage, RedisQueue, new_msg_id
@@ -168,8 +169,8 @@ async def _handle_visitor_message(
     # subject="visitor:<ip_hash_lc>" utilisée par memory.types.MemoryItem.
     # Choix conscient await (pas create_task) : Redis publish ~1ms en local
     # acceptable, code plus simple, pas de leaks au shutdown (cf. retour
-    # adversarial H2).
-    subject = f"visitor:{identity.ip_hash}"
+    # adversarial H2). make_visitor_subject centralise la convention.
+    subject = make_visitor_subject(identity.ip_hash)
     chat_payload = {"text": text, "nonce": nonce}
 
     # Mémoire PR 2 — publish sense.raw AVANT l'enqueue. No-op si

@@ -52,6 +52,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Callable, Optional
 
 from ..config import Settings
+from ..core.types import make_vip_subject
 from ..memory.types import RecallQuery
 from .brain_provider import DirectorBrain
 
@@ -330,7 +331,7 @@ class Orchestrator:
                 # Convention subject : "vip:<sender_lc>" pour vip_arrival,
                 # "vip:<sender_lc>" aussi pour chat (le wiring lowercase déjà).
                 # On query par subject uniquement (text="" → "last N by subject").
-                subject = f"vip:{sender.lower()}"
+                subject = make_vip_subject(sender)
                 try:
                     recalled = await self._memory_agent.recall(
                         RecallQuery(text="", subject=subject, limit=5)
