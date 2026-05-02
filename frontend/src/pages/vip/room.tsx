@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useRouter } from "next/router";
 import { Meta } from "@/components/meta";
 import {
@@ -7,13 +7,23 @@ import {
   GlassPill,
 } from "@/features/liquid-glass/primitives";
 import {
-  LiveKitRoom,
+  LiveKitRoom as LiveKitRoomImpl,
   RoomAudioRenderer,
   VoiceAssistantControlBar,
   useVoiceAssistant,
   BarVisualizer,
   useLocalParticipant,
 } from "@livekit/components-react";
+
+// @livekit/components-react 2.x types its components as `(props) => ReactNode`
+// rather than `JSX.Element`, which TypeScript rejects when used as a JSX tag
+// under strict mode. Cast to a permissive component type so the JSX call site
+// type-checks. See: https://github.com/livekit/components-js/issues — known
+// upstream typing gap, removable once livekit-react ships JSX.Element-typed
+// components.
+const LiveKitRoom = LiveKitRoomImpl as unknown as React.ComponentType<
+  Record<string, unknown>
+>;
 import "@livekit/components-styles";
 import { mintVIPToken, LiveKitError } from "@/services/livekitClient";
 import { me as fetchMe, type Me } from "@/services/accountClient";

@@ -18,7 +18,7 @@ if (typeof globalThis.ResizeObserver === "undefined") {
     unobserve(): void {}
     disconnect(): void {}
   }
-  // @ts-expect-error — stub jsdom only
+  // Stub for jsdom environment (no ResizeObserver in jsdom < 22).
   globalThis.ResizeObserver = ResizeObserverStub;
 }
 
