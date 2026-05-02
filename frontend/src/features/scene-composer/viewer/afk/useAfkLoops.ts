@@ -47,7 +47,7 @@
  * @module viewer/afk/useAfkLoops
  */
 
-import { useEffect, useRef, useCallback } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { VrmaAnimationEntry } from "../../api/catalogClient";
 import type { AfkLoopsConfig, PlayMode } from "../../store/useSceneComposerStore";
 
@@ -188,27 +188,28 @@ export function useAfkLoops({
   // Ref latest — permet aux closures du setInterval de lire les valeurs actuelles
   // sans restarting l'intervalle à chaque re-render.
   const playModeRef = useRef<PlayMode>(playMode);
-  playModeRef.current = playMode;
-
   const afkLoopsRef = useRef<AfkLoopsConfig>(afkLoops);
-  afkLoopsRef.current = afkLoops;
-
   const vrmaCatalogueRef = useRef<VrmaAnimationEntry[]>(vrmaCatalogue);
-  vrmaCatalogueRef.current = vrmaCatalogue;
-
   const currentViewerCountRef = useRef<number>(currentViewerCount);
-  currentViewerCountRef.current = currentViewerCount;
-
   const setCurrentVrmaUrlRef = useRef(setCurrentVrmaUrl);
-  setCurrentVrmaUrlRef.current = setCurrentVrmaUrl;
+
+  // Sync ref mirrors after each commit (no dep array → runs after every render).
+  useEffect(() => {
+    playModeRef.current = playMode;
+    afkLoopsRef.current = afkLoops;
+    vrmaCatalogueRef.current = vrmaCatalogue;
+    currentViewerCountRef.current = currentViewerCount;
+    setCurrentVrmaUrlRef.current = setCurrentVrmaUrl;
+  });
 
   /** Timestamp de la dernière interaction utilisateur (ms epoch).
    * Initialisé à 0; seeded au mount dans le useEffect ci-dessous pour éviter
    * un appel impur (Date.now()) pendant le render. */
   const lastActivityAt = useRef<number>(0);
 
-  /** Ref pour tracker si AFK est actif (pour le retour de résultat). */
-  const afkActiveRef = useRef<boolean>(false);
+  /** State AFK actif — true si une VRMA idle a été sélectionnée au dernier cycle.
+   * Note: lags reality by up to POLL_INTERVAL_MS when conditions flip false (acceptable). */
+  const [afkActive, setAfkActive] = useState(false);
 
   // ── Handlers d'activité ────────────────────────────────────────────────────
 
@@ -246,10 +247,10 @@ export function useAfkLoops({
         const url = selectIdleVrma(vrmaCatalogueRef.current);
         if (url) {
           setCurrentVrmaUrlRef.current(url);
-          afkActiveRef.current = true;
+          setAfkActive(true);
         }
       } else {
-        afkActiveRef.current = false;
+        setAfkActive(false);
       }
     }, POLL_INTERVAL_MS);
 
@@ -262,17 +263,5 @@ export function useAfkLoops({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // Mount-only — toutes les props lues via refs.
 
-  // Note : afkActive est une valeur dérivée de afkActiveRef. Ce hook ne force
-  // pas de re-render sur le changement d'état AFK — c'est intentionnel pour
-  // éviter les re-renders inutiles. Le parent (SceneComposerPage) peut lire
-  // afkActiveRef.current si besoin d'un indicateur temps réel.
-  // Pour E5.4, on retourne false/true basé sur l'évaluation synchrone actuelle.
-  const isCurrentlyAfk =
-    playMode === "playing" &&
-    afkLoops.enabled &&
-    currentViewerCount < afkLoops.viewerThreshold;
-
-  return {
-    afkActive: isCurrentlyAfk && afkActiveRef.current,
-  };
+  return { afkActive };
 }

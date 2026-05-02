@@ -32,6 +32,8 @@ export function OperatorVoicePanel({ enabled }: Props) {
     if (!active) {
       voiceRef.current?.stop();
       voiceRef.current = null;
+      // FIXME P3: voice resource lifecycle gated on `active` prop — setState in effect is intentional here.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setStatus("closed");
       setState("idle");
       return;

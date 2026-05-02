@@ -19,9 +19,9 @@ export default defineConfig([
       // un audit React Hooks dédié. Cf docs/findings/2026-05-02-react-hooks-
       // strict-rules-next16.md pour suivi. Sprint cible : Phase 2 / E1-E6
       // (la migration App Router force de re-lire chaque hook).
-      "react-hooks/set-state-in-effect": "warn",
-      "react-hooks/refs": "warn",
-      "react-hooks/purity": "warn",
+      "react-hooks/set-state-in-effect": "error",
+      "react-hooks/refs": "error",
+      "react-hooks/purity": "error",
     },
   },
 ]);

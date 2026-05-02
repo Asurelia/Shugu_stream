@@ -19,7 +19,7 @@
  * @module viewer/interactions/useGizmoBinding
  */
 
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, type MutableRefObject } from "react";
 import * as THREE from "three";
 import type { TransformControlsHandle, GizmoMode } from "../three-stage/transform-controls";
 import {
@@ -34,10 +34,15 @@ import {
 /** Props du hook `useGizmoBinding`. */
 export interface UseGizmoBindingProps {
   /**
-   * Handle du TransformControls (retourné par `attachTransformControls`).
-   * Peut être `null` si le rig n'est pas encore initialisé.
+   * Ref au handle du TransformControls.
+   * Dereferencé à l'intérieur des useEffect — jamais au render.
    */
-  gizmoHandle: TransformControlsHandle | null;
+  gizmoHandleRef: MutableRefObject<TransformControlsHandle | null>;
+  /**
+   * Signal React-friendly : true une fois que `gizmoHandleRef.current` est non-null.
+   * Utilisé comme dep dans les useEffect pour éviter les stale reads.
+   */
+  gizmoReady: boolean;
   /**
    * Map des Object3D de la scène, indexée par instanceId.
    * Fourni par le viewer pour permettre la résolution `selectedMeshId → Object3D`.
@@ -57,7 +62,7 @@ export interface UseGizmoBindingProps {
 export function useGizmoBindingWithCallbacks(props: UseGizmoBindingProps): {
   onGizmoChange: (object: THREE.Object3D) => void;
 } {
-  const { gizmoHandle, meshRegistry } = props;
+  const { gizmoHandleRef, gizmoReady, meshRegistry } = props;
   const selectedMeshId = useSceneComposerStore(selectSelectedMeshId);
   const transformMode = useSceneComposerStore(selectTransformMode);
   const updateMeshTransform = useSceneComposerStore((s) => s.updateMeshTransform);
@@ -66,7 +71,11 @@ export function useGizmoBindingWithCallbacks(props: UseGizmoBindingProps): {
   const pendingTransformRef = useRef<{ instanceId: string; transform: Partial<ObjectTransform> } | null>(null);
   const rafIdRef = useRef<number | null>(null);
   const updateMeshTransformRef = useRef(updateMeshTransform);
-  updateMeshTransformRef.current = updateMeshTransform;
+
+  // Sync ref mirror after each commit (no dep array → runs after every render).
+  useEffect(() => {
+    updateMeshTransformRef.current = updateMeshTransform;
+  });
 
   const flushPending = useCallback(() => {
     rafIdRef.current = null;
@@ -113,14 +122,16 @@ export function useGizmoBindingWithCallbacks(props: UseGizmoBindingProps): {
     [flushPending],
   );
 
-  // Sync transformMode → gizmo.
+  // Sync transformMode → gizmo. Deps on gizmoReady ensures this fires once gizmo is mounted.
   useEffect(() => {
+    const gizmoHandle = gizmoHandleRef.current;
     if (!gizmoHandle) return;
     gizmoHandle.setMode(transformMode as GizmoMode);
-  }, [gizmoHandle, transformMode]);
+  }, [gizmoHandleRef, gizmoReady, transformMode]);
 
-  // Sync selectedMeshId → gizmo attach.
+  // Sync selectedMeshId → gizmo attach. Deps on gizmoReady ensures correct initial attach.
   useEffect(() => {
+    const gizmoHandle = gizmoHandleRef.current;
     if (!gizmoHandle) return;
 
     if (!selectedMeshId) {
@@ -134,7 +145,7 @@ export function useGizmoBindingWithCallbacks(props: UseGizmoBindingProps): {
     } else {
       gizmoHandle.attach(null);
     }
-  }, [gizmoHandle, selectedMeshId, meshRegistry]);
+  }, [gizmoHandleRef, gizmoReady, selectedMeshId, meshRegistry]);
 
   // Cleanup RAF.
   useEffect(() => {

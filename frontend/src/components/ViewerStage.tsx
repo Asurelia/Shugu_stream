@@ -80,6 +80,8 @@ function Bubble({ rank, who, text, glyph, time, stream = false, hermes = false }
   const [shown, setShown] = useState<string>(stream ? "" : text);
   const [streaming, setStreaming] = useState<boolean>(stream);
 
+  // FIXME P3: streaming-text pattern — setShown/setStreaming driven by stream+text change.
+  /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     if (!stream) { setShown(text); setStreaming(false); return; }
     setShown(""); setStreaming(true);
@@ -94,6 +96,7 @@ function Bubble({ rank, who, text, glyph, time, stream = false, hermes = false }
     timer = window.setTimeout(tick, 120);
     return () => window.clearTimeout(timer);
   }, [text, stream]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   const cls = `bubble rank-${rank} ${hermes ? "hermes" : ""}`.trim();
 
@@ -431,6 +434,7 @@ type ReactionItem = { id: string; emoji: string; x: number; r: string; delay: nu
 function Reactions({ seed }: { seed: number }) {
   const [items, setItems] = useState<ReactionItem[]>([]);
   useEffect(() => {
+    // FIXME P3: trigger-by-increment pattern — setItems driven by seed increment (emoji burst on performance.audio).
     if (seed === 0) return;
     const count = 3 + Math.floor(Math.random() * 3);
     const batch: ReactionItem[] = Array.from({ length: count }, (_, i) => ({
@@ -440,6 +444,7 @@ function Reactions({ seed }: { seed: number }) {
       r: (Math.random() * 30 - 15) + "deg",
       delay: i * 180,
     }));
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setItems((prev) => [...prev, ...batch]);
     const batchIds = new Set(batch.map((b) => b.id));
     const t = window.setTimeout(() => {

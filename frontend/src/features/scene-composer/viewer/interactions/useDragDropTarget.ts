@@ -146,9 +146,13 @@ export function useDragDropTarget({
 }: UseDragDropTargetProps): void {
   // Ref latest pour les callbacks (évite les closures stales).
   const onAssetDroppedRef = useRef(onAssetDropped);
-  onAssetDroppedRef.current = onAssetDropped;
   const disabledRef = useRef(disabled);
-  disabledRef.current = disabled;
+
+  // Sync ref mirrors after each commit (no dep array → runs after every render).
+  useEffect(() => {
+    onAssetDroppedRef.current = onAssetDropped;
+    disabledRef.current = disabled;
+  });
 
   useEffect(() => {
     const canvas = canvasRef.current;

@@ -1,4 +1,4 @@
-import { useContext, useCallback, useRef } from "react";
+import { useContext, useCallback, useEffect, useRef } from "react";
 import { ViewerContext } from "../features/vrmViewer/viewerContext";
 import { buildUrl } from "@/utils/buildUrl";
 
@@ -11,7 +11,11 @@ export default function VrmViewer({ onLoaded }: Props) {
 
   // Stable reference to onLoaded — avoids ref callback invalidation on parent re-renders.
   const onLoadedRef = useRef(onLoaded);
-  onLoadedRef.current = onLoaded;
+
+  // Sync ref mirror after each commit (no dep array → runs after every render).
+  useEffect(() => {
+    onLoadedRef.current = onLoaded;
+  });
 
   // Guard: only run setup() + loadVrm() once per canvas element. Prevents multiple
   // requestAnimationFrame loops (which were causing stutter) and duplicate 28 MB downloads.
