@@ -1,14 +1,14 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
-  // On the shugu.spoukie.uk subdomain we serve from root. BASE_PATH kept for
-  // optional path-based hosting in dev.
-  assetPrefix: process.env.BASE_PATH || "",
-  basePath: process.env.BASE_PATH || "",
+  // On the shugu.spoukie.uk subdomain we serve from root. NEXT_PUBLIC_BASE_PATH
+  // kept for optional path-based hosting in dev. Note (Next 16) : read at
+  // build time and inlined as a static string in client bundles via the
+  // NEXT_PUBLIC_ prefix — `publicRuntimeConfig` was removed in Next 16. To
+  // change the base path, rebuild the frontend with the new env value.
+  assetPrefix: process.env.NEXT_PUBLIC_BASE_PATH || "",
+  basePath: process.env.NEXT_PUBLIC_BASE_PATH || "",
   trailingSlash: false,
-  publicRuntimeConfig: {
-    root: process.env.BASE_PATH || "",
-  },
 
   // Dev proxy: in production nginx forwards /auth/*, /api/*, /ws/* to the
   // backend uvicorn on port 8701. In dev Next runs alone on 3100, so we

@@ -101,12 +101,16 @@ Fallbacks documentés mais qui auraient besoin de métriques additionnelles ou d
 #### 24 P2 (cosmétiques)
 Timing oracles d'énumération, micro-optims perf (asyncio.Lock contention, snapshot world cache), 5 type-design suggestions, 2 tests fragiles. Voir `audit/PASS-2-CONSOLIDATION.md`.
 
-#### Migration Next.js 13 → 16 (3-5 jours, projet séparé)
-10 vulns frontend restantes ne peuvent être éliminées sans cette migration :
-- Pages Router → App Router (optionnel mais recommandé)
-- Vitest 1 → 4 (config tests à réécrire)
-- elevenlabs 0.x → 1.59 (API client refondu)
-- 182 packages ajoutés / 44 supprimés / 47 changés au total
+#### Migration Next.js 13 → 16 — **PHASE 1 EN COURS**
+PRs #76 (CI frontend), #77 (Next 14), #78 (Next 15), #79 (Next 16 + remove `publicRuntimeConfig`).
+
+**Statut actuel après PR #79** : 0 critical CVEs (les 2 Next CRITICAL éliminés ✅). Reste 5 moderate (dompurify dans @charcoal-ui/icons, postcss devDep).
+
+**Phase 2 (App Router migration)** : PRs #80-#85 — bootstrap App Router puis migration page-par-page. Plan complet : `C:\Users\rafai\.claude\plans\velvety-skipping-penguin.md`.
+
+**Phase 3** : Three.js 0.149 → 0.160+ (44 fichiers, sprint séparé).
+
+Findings collectés en chemin : `docs/findings/INDEX.md`.
 
 ---
 
