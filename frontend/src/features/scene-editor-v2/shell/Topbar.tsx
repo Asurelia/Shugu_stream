@@ -9,9 +9,13 @@
  * - Bouton "exit" (retour /admin) à droite.
  */
 
+"use client";
+
 import Link from "next/link";
-import { useRouter } from "next/router";
+import { useParams } from "next/navigation";
+
 import { GlassButton } from "@/features/liquid-glass/primitives";
+
 import { useSceneEditorStore } from "../store/useSceneEditorStore";
 import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
 
@@ -19,8 +23,11 @@ export function Topbar() {
   const sceneName = useSceneEditorStore((s) => s.sceneName);
   const dirty = useSceneEditorStore((s) => s.dirty);
   const openPalette = useSceneEditorStore((s) => s.openPalette);
-  const router = useRouter();
-  const usernameRaw = router.query.username;
+  // App Router : `useParams()` replaces Pages Router's `router.query` for
+  // dynamic segments. `[username]` may be string | string[] depending on
+  // the route shape — flatten to a single string.
+  const params = useParams<{ username?: string | string[] }>();
+  const usernameRaw = params?.username;
   const username = Array.isArray(usernameRaw) ? usernameRaw[0] : usernameRaw;
   const adminHref = username ? `/${encodeURIComponent(username)}/admin` : "/";
 
