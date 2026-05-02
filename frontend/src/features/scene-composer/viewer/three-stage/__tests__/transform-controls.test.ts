@@ -80,7 +80,9 @@ function makeSetup() {
   const camera = new THREE.PerspectiveCamera();
   const domElement = document.createElement("canvas");
   const scene = new THREE.Scene();
-  const orbit = new OrbitControls() as unknown as import("three/examples/jsm/controls/OrbitControls").OrbitControls;
+  // OrbitControls expects (camera, domElement) — the test only needs an
+  // instance whose `enabled` flag attachTransformControls toggles.
+  const orbit = new OrbitControls(camera, domElement) as unknown as import("three/examples/jsm/controls/OrbitControls").OrbitControls;
 
   const onChange = vi.fn();
   const onDraggingChanged = vi.fn();

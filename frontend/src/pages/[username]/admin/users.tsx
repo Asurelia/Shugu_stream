@@ -151,7 +151,7 @@ export default function AdminUsersPage() {
               <GlassTabs
                 value={roleFilter}
                 onChange={(v) => { setRoleFilter(v as RoleFilter); setPage(0); }}
-                options={[
+                tabs={[
                   { value: "all", label: "Tous" },
                   { value: "member", label: "Members" },
                   { value: "vip", label: "VIPs" },

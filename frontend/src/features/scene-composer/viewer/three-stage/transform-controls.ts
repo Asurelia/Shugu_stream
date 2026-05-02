@@ -113,7 +113,7 @@ export function attachTransformControls(
     }
     onDraggingChanged(dragging);
   };
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  // eslint-disable-next-line
   controls.addEventListener("dragging-changed", onDraggingChanged_ as any);
 
   // Listener change : déclenché à chaque frame pendant drag.
@@ -124,7 +124,7 @@ export function attachTransformControls(
       onChange(attached);
     }
   };
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  // eslint-disable-next-line
   controls.addEventListener("change", onChange_ as any);
 
   // Ajoute à la scène (cast r149 requis — TransformControls n'est pas typé
@@ -150,9 +150,9 @@ export function attachTransformControls(
       // Ordre critique : detach → remove → dispose (Phase F lesson M2).
       controls.detach();
       scene.remove(controls as unknown as THREE.Object3D);
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      // eslint-disable-next-line
       controls.removeEventListener("dragging-changed", onDraggingChanged_ as any);
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      // eslint-disable-next-line
       controls.removeEventListener("change", onChange_ as any);
       controls.dispose();
     },
