@@ -21,7 +21,6 @@ export function DesktopWindow({ win }: Props) {
 
   useEffect(() => {
     if (!win.pendingAppend) {
-      setRevealedSuffix("");
       return;
     }
     // Animate the append char-by-char, then clear pendingAppend.

@@ -45,12 +45,13 @@ export function HermesStateWindow() {
 
   // When the backend broadcasts `hermes_state.window_open` with a different
   // tab, keep the local view in sync.
+  /* eslint-disable react-hooks/exhaustive-deps, react-hooks/set-state-in-effect -- FIXME P3: sync state from external signal, activeTab omitted intentionally to avoid loop */
   useEffect(() => {
     if (state.hermesHud.tab && state.hermesHud.tab !== activeTab) {
       setActiveTab(state.hermesHud.tab as TabKey);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.hermesHud.tab]);
+  /* eslint-enable react-hooks/exhaustive-deps, react-hooks/set-state-in-effect */
 
   const fetchTab = useCallback(async (tab: TabKey) => {
     try {
@@ -77,6 +78,7 @@ export function HermesStateWindow() {
     }
   }, []);
 
+  /* eslint-disable react-hooks/set-state-in-effect -- FIXME P6: setLoading in mount effect, timer-derived state — refactor to useReducer when adopting data lib */
   useEffect(() => {
     setLoading(true);
     void fetchTab(activeTab);
@@ -88,6 +90,7 @@ export function HermesStateWindow() {
       if (timerRef.current) window.clearInterval(timerRef.current);
     };
   }, [activeTab, fetchTab]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   return (
     <div
