@@ -207,7 +207,9 @@ export function SceneComposerViewer({
     }
 
     if (gizmoHandle) {
-      gizmoHandle.controls.visible = isEdit;
+      // Three.js r155+ : visibility sits on `getHelper()` (TransformControlsRoot)
+      // rather than on TransformControls itself.
+      gizmoHandle.controls.getHelper().visible = isEdit;
       gizmoHandle.controls.enabled = isEdit;
       if (!isEdit) {
         // Mode preview : désattacher le gizmo.

@@ -32,7 +32,9 @@ vi.mock("three", async () => {
 
   class WebGLRendererStub {
     domElement: HTMLCanvasElement;
-    outputEncoding = 0;
+    // Three.js r152+ renamed `outputEncoding` → `outputColorSpace`. Stub keeps
+    // the field assignable without enforcing a specific colorspace value.
+    outputColorSpace = "srgb";
     constructor(opts: { canvas?: HTMLCanvasElement } = {}) {
       this.domElement = opts.canvas ?? document.createElement("canvas");
     }
@@ -50,7 +52,7 @@ vi.mock("three", async () => {
 
 // ─── MOCK GLTFLoader ──────────────────────────────────────────────────────────
 
-vi.mock("three/examples/jsm/loaders/GLTFLoader", () => ({
+vi.mock("three/examples/jsm/loaders/GLTFLoader.js", () => ({
   GLTFLoader: class {
     register(): void {}
     load(): void {}
@@ -63,7 +65,7 @@ vi.mock("three/examples/jsm/loaders/GLTFLoader", () => ({
 
 // ─── MOCK OrbitControls ───────────────────────────────────────────────────────
 
-vi.mock("three/examples/jsm/controls/OrbitControls", () => ({
+vi.mock("three/examples/jsm/controls/OrbitControls.js", () => ({
   OrbitControls: class {
     target = { copy: () => {}, set: () => {} };
     enableDamping = false;

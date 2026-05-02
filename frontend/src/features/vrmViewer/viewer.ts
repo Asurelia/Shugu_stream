@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import { Model } from "./model";
 import { buildUrl } from "@/utils/buildUrl";
-import { OrbitControls } from "three/examples/jsm/controls/OrbitControls";
+import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 
 /**
  * three.js-based 3D viewer for the VRM avatar.
@@ -116,7 +116,9 @@ export class Viewer {
       alpha: true,
       antialias: true,
     });
-    this._renderer.outputEncoding = THREE.sRGBEncoding;
+    // Three.js r152+ : `outputEncoding` removed in favor of `outputColorSpace`.
+    // `THREE.SRGBColorSpace` replaces the deprecated `THREE.sRGBEncoding` (3001).
+    this._renderer.outputColorSpace = THREE.SRGBColorSpace;
     this._renderer.setSize(width, height);
     this._renderer.setPixelRatio(window.devicePixelRatio);
 

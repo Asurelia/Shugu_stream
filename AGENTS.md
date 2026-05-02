@@ -107,7 +107,7 @@ Timing oracles d'énumération, micro-optims perf (asyncio.Lock contention, snap
 
 **Phase 2 (App Router)** : PRs #80 (bootstrap layout) → #81 (auth pages) → #82 (public pages) → #83 (scene-composer redirect) → #84 (10 admin pages) → #85 (root + cleanup). 100% des pages migrées de Pages Router vers App Router. Pattern Server shell + Client island appliqué partout. `pages/` directory supprimé.
 
-**Phase 3 (Three.js)** : 0.149 → 0.160+ (44 fichiers, sprint séparé). Pas commencé. Voir `docs/findings/2026-05-02-three-stale-version.md`.
+**Phase 3 (Three.js)** : ✅ COMPLÉTÉE PR #86 (2026-05-02). Three 0.149 → 0.170 + @pixiv/three-vrm 1.0.9 → 3.5.2 + @types/three 0.170. Migrations mécaniques : `outputEncoding` → `outputColorSpace`, `THREE.sRGBEncoding` → `THREE.SRGBColorSpace`, `TransformControls.visible` → `getHelper().visible` (3 sites), `.js` extensions sur les imports `three/examples/jsm/` (10 fichiers + tests). 369/369 tests verts.
 
 Plan complet : `C:\Users\rafai\.claude\plans\velvety-skipping-penguin.md`.
 Findings collectés en chemin : `docs/findings/INDEX.md`.
@@ -340,4 +340,4 @@ gh pr create --title "..." --body "..."
 ---
 
 **Dernière mise à jour** : 2026-05-01 post-Sprint 5 PR #72.
-**Prochaine grosse étape** : Three.js 0.149 → 0.160+ (Phase 3) OU s'attaquer aux 11 silent failures Cat C / 24 P2 OU les 48 violations React Hooks strict (cf `docs/findings/2026-05-02-react-hooks-strict-rules-next16.md`).
+**Prochaine grosse étape** : 48 violations React Hooks strict (cf `docs/findings/2026-05-02-react-hooks-strict-rules-next16.md`) OU 11 silent failures Cat C / 24 P2 OU plugin `@typescript-eslint/eslint-plugin` (cf `docs/findings/2026-05-02-typescript-eslint-plugin-missing.md`).

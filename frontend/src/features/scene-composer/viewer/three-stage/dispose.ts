@@ -17,7 +17,7 @@
 
 import * as THREE from "three";
 import type { VRM } from "@pixiv/three-vrm";
-import { OrbitControls } from "three/examples/jsm/controls/OrbitControls";
+import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import type { HelperSet } from "./helpers";
 import type { AnimationRig } from "./animations";
 

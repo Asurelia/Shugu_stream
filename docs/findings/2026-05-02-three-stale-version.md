@@ -1,8 +1,9 @@
 ---
 date: 2026-05-02
-status: open
+status: fixed
 severity: low
 discovered_during: Audit Phase 1 exploration migration Next 13→16 (PR #76)
+fixed_by: PR #86 (Phase 3 Three.js 0.149 → 0.170 + @pixiv/three-vrm 1.0.9 → 3.5.2)
 related_files:
   - frontend/package.json
   - frontend/src/features/scene-composer/
