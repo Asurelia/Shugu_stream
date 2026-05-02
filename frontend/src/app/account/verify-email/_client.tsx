@@ -1,20 +1,30 @@
+"use client";
+
+/**
+ * /account/verify-email client island.
+ *
+ * Migration Pages Router → App Router (Sprint E2) :
+ *   - `useRouter` + `router.query.token` → `useSearchParams().get("token")`
+ *     from `next/navigation` (App Router always ready, no `isReady` check).
+ *   - `<Meta title>` removed — the parent Server Component (page.tsx)
+ *     declares `metadata` instead.
+ */
 import { useEffect, useState } from "react";
-import { useRouter } from "next/router";
-import { Meta } from "@/components/meta";
+import { useRouter, useSearchParams } from "next/navigation";
+
 import { GlassCard, GlassButton } from "@/features/liquid-glass/primitives";
 import { verifyEmail, AccountError } from "@/services/accountClient";
 
 type Status = "loading" | "success" | "error";
 
-export default function VerifyEmailPage() {
+export function VerifyEmailClient() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const token = searchParams?.get("token");
   const [status, setStatus] = useState<Status>("loading");
   const [detail, setDetail] = useState<string>("");
 
   useEffect(() => {
-    if (!router.isReady) return;
-    const raw = router.query.token;
-    const token = Array.isArray(raw) ? raw[0] : raw;
     if (!token) {
       setStatus("error");
       setDetail("Lien invalide : token manquant.");
@@ -33,11 +43,10 @@ export default function VerifyEmailPage() {
           setDetail("Erreur réseau inattendue.");
         }
       });
-  }, [router.isReady, router.query.token]);
+  }, [token]);
 
   return (
     <div className="lg-page min-h-screen flex items-center justify-center p-6">
-      <Meta title="Vérification email — Shugu" />
       <GlassCard className="max-w-md w-full text-center" padded>
         {status === "loading" && (
           <>

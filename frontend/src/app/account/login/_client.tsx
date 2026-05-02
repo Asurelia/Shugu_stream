@@ -1,11 +1,27 @@
-import { useState } from "react";
-import Link from "next/link";
-import { useRouter } from "next/router";
-import { Meta } from "@/components/meta";
-import { GlassCard, GlassButton, GlassInput } from "@/features/liquid-glass/primitives";
-import { login, resendVerify, AccountError } from "@/services/accountClient";
+"use client";
 
-export default function AccountLoginPage() {
+/**
+ * /account/login client island.
+ *
+ * Migration Pages Router → App Router (Sprint E2) :
+ *   - `useRouter` import : `next/router` → `next/navigation`. The new API
+ *     keeps `.replace(url)` / `.push(url)` but drops `.query` (we don't use
+ *     it here, so no impact on this page).
+ *   - `<Meta title>` removed — the parent Server Component (page.tsx)
+ *     declares `metadata` instead.
+ *   - `<Link href>` from `next/link` keeps the same API.
+ *
+ * Form logic untouched : same accountClient calls, same error UX
+ * (resend-verify CTA when "not verified" appears).
+ */
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { useState } from "react";
+
+import { GlassButton, GlassCard, GlassInput } from "@/features/liquid-glass/primitives";
+import { AccountError, login, resendVerify } from "@/services/accountClient";
+
+export function LoginClient() {
   const router = useRouter();
   const [usernameOrEmail, setUsernameOrEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -44,7 +60,6 @@ export default function AccountLoginPage() {
 
   return (
     <div className="lg-page min-h-screen flex items-center justify-center p-6">
-      <Meta title="Connexion — Shugu" />
       <GlassCard className="max-w-md w-full" padded>
         <h1 className="text-2xl font-light tracking-tight text-shugu-cream mb-1">
           Bon retour
@@ -90,7 +105,7 @@ export default function AccountLoginPage() {
           )}
           {resendState === "sent" && (
             <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-sm text-emerald-100">
-              Si ton compte existe, un email vient d'être envoyé.
+              Si ton compte existe, un email vient d&apos;être envoyé.
             </div>
           )}
           <GlassButton type="submit" disabled={loading} className="w-full">
@@ -98,7 +113,7 @@ export default function AccountLoginPage() {
           </GlassButton>
           <p className="text-xs opacity-50 text-center">
             Pas encore de compte ?{" "}
-            <Link href="/account/register" className="underline">S'inscrire</Link>
+            <Link href="/account/register" className="underline">S&apos;inscrire</Link>
           </p>
         </form>
       </GlassCard>

@@ -1,3 +1,5 @@
+"use client";
+
 /**
  * Shugu — Liquid Glass primitives (iOS 26-style)
  *
@@ -7,6 +9,11 @@
  *
  * Usage:
  *   import { GlassCard, GlassButton, GlassInput } from "@/features/liquid-glass/primitives";
+ *
+ * Sprint E2 (App Router migration) — `"use client"` required because
+ * this module uses `useEffect` for the LiquidLayers shimmer setup.
+ * Pages Router ignores the directive, so this is a forward-compatible
+ * change with no impact on the legacy code path.
  */
 
 import React, { forwardRef, useEffect } from "react";
