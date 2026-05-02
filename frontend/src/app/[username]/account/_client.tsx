@@ -1,7 +1,18 @@
+"use client";
+
+/**
+ * Account client island.
+ *
+ * Migration Pages Router → App Router (Sprint E5) :
+ *   - `useRouter` de `next/router` remplacé par `useRouter` + `useParams`
+ *     de `next/navigation`.
+ *   - `<Meta>` supprimé — métadonnées déclarées dans `page.tsx`.
+ *   - `router.query.username` remplacé par `useParams<{ username?: string }>()`.
+ */
 import { useEffect, useState } from "react";
-import { useRouter } from "next/router";
+import { useRouter, useParams } from "next/navigation";
 import Link from "next/link";
-import { Meta } from "@/components/meta";
+
 import { fetchAuthStatus, logout } from "@/services/shuguClient";
 import {
   GlassCard,
@@ -28,16 +39,16 @@ import {
  *  - Zone dangereuse (supprimer le compte)
  *
  * Les actions mutantes sont mockées — on affiche un modal de confirmation
- * et on annonce "bientôt" pour les flux non encore câblés côté backend.
+ * et on annonce &apos;bientôt&apos; pour les flux non encore câblés côté backend.
  */
 
 type Me = { username: string };
 type Tier = "free" | "vip" | "admin";
 
-export default function AccountPage() {
+export function AccountClient() {
   const router = useRouter();
-  const rawUsername = router.query.username;
-  const urlUsername = Array.isArray(rawUsername) ? rawUsername[0] : rawUsername;
+  const params = useParams<{ username?: string }>();
+  const urlUsername = params?.username;
   const [me, setMe] = useState<Me | null>(null);
   const [authChecked, setAuthChecked] = useState(false);
   const [section, setSection] = useState<
@@ -70,7 +81,6 @@ export default function AccountPage() {
   if (!authChecked || !me) {
     return (
       <div className="lg-page flex items-center justify-center">
-        <Meta />
         <span className="text-sm text-shugu-cream-dim">chargement…</span>
       </div>
     );
@@ -78,7 +88,6 @@ export default function AccountPage() {
 
   return (
     <div className="lg-page font-quicksand">
-      <Meta />
       <div className="max-w-[960px] mx-auto px-4 sm:px-8 py-8">
         {/* Header page */}
         <header className="mb-6 flex items-end justify-between gap-4 flex-wrap">
@@ -174,7 +183,7 @@ export default function AccountPage() {
       >
         <p className="text-[13px] text-shugu-cream-dim leading-relaxed">
           Cette action est irréversible. Ton historique de streams, tes assets et tes clips seront perdus.
-          Pour l'instant la suppression se fait manuellement — écris à support@shugu.tv.
+          Pour l&apos;instant la suppression se fait manuellement — écris à support@shugu.tv.
         </p>
       </GlassModal>
     </div>
@@ -222,7 +231,7 @@ function ProfileSection({ username }: { username: string }) {
             </div>
           </div>
           <GlassButton variant="ghost" size="sm" onClick={() => {/* TODO upload */}}>
-            Changer l'avatar
+            Changer l&apos;avatar
           </GlassButton>
         </div>
         <div className="flex flex-col gap-3">
@@ -242,7 +251,7 @@ function ProfileSection({ username }: { username: string }) {
       </GlassSection>
 
       <GlassSection title="Préférences de langue">
-        <GlassRow label="Langue de l'interface" value={<code className="text-shugu-cream font-mono text-[12px]">fr-FR</code>} />
+        <GlassRow label="Langue de l&apos;interface" value={<code className="text-shugu-cream font-mono text-[12px]">fr-FR</code>} />
         <GlassRow label="Fuseau horaire" value={<code className="text-shugu-cream font-mono text-[12px]">Europe/Paris</code>} />
       </GlassSection>
     </>
@@ -432,7 +441,7 @@ function NotificationsSection() {
 
 function ConnectionsSection() {
   return (
-    <GlassSection title="Services connectés" subtitle="Relie tes comptes pour l'auth et les webhooks.">
+    <GlassSection title="Services connectés" subtitle="Relie tes comptes pour l&apos;auth et les webhooks.">
       {[
         { name: "Google",  sub: "non connecté",            connected: false },
         { name: "Discord", sub: "@spoukie#0001 · depuis juin", connected: true },

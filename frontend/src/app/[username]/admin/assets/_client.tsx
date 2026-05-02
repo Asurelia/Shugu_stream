@@ -1,20 +1,15 @@
+"use client";
+
 /**
- * `/[username]/admin/assets` — Phase 1 data-fication complète.
+ * Asset Registry client island.
  *
- * 6 kinds data-fiés avec onglets :
- *   - gesture (url FBX/VRMA + source)
- *   - scene   (camera + background + idle_animation)
- *   - emote   (emoji + hue)
- *   - shot    (fov + offset)
- *   - expression (vrm_blendshape) — en registre mais validator Literal
- *   - mood    (weight_multipliers optional) — idem
- *
- * Les 4 kinds Phase 5 (outfit_piece, prop, decor, wardrobe_slot) ne sont pas
- * affichés pour éviter le bruit visuel — ils seront ajoutés en même temps
- * que l'upload pipeline.
+ * Migration Pages Router → App Router (Sprint E5) :
+ *   - `<Meta>` supprimé — métadonnées déclarées côté Server (`page.tsx`).
+ *   - `AdminShell` migré vers `next/navigation` ; fonctionne uniquement App Router.
+ *   - `export default` renommé en `export function AssetsClient`.
  */
 import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { Meta } from "@/components/meta";
+
 import { AdminShell } from "@/components/admin/AdminShell";
 
 type RegistryRow = {
@@ -148,7 +143,7 @@ function numOr(s: string | undefined, fallback: number): number {
 
 // ─── Page component ───────────────────────────────────────────────────────
 
-export default function AssetsPage() {
+export function AssetsClient() {
   const [activeKind, setActiveKind] = useState<KindKey>("gesture");
   const [rows, setRows] = useState<RegistryRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -207,160 +202,157 @@ export default function AssetsPage() {
   };
 
   return (
-    <>
-      <Meta />
-      <AdminShell
-        active="assets"
-        title="Asset Registry"
-        subtitle="Données-fiées : Hermes voit toute addition au prochain appel, sans redéploiement."
-      >
-        {/* Tabs kinds ──────────────────────────────────────────────── */}
-        <div style={{ display: "flex", gap: 6, marginBottom: 20, flexWrap: "wrap" }}>
-          {KINDS.map((k) => (
-            <button
-              key={k.key}
-              onClick={() => setActiveKind(k.key)}
-              style={{
-                background: activeKind === k.key
-                  ? "linear-gradient(135deg, var(--primary), var(--primary-container))"
-                  : "rgba(36,36,52,0.45)",
-                color: activeKind === k.key ? "#1a0a24" : "var(--on-surface-variant)",
-                border: "none",
-                borderRadius: 999,
-                padding: "8px 16px",
-                fontFamily: "var(--font-display)",
-                fontWeight: 700,
-                fontSize: "0.78rem",
-                letterSpacing: "0.04em",
-                textTransform: "uppercase",
-                cursor: "pointer",
-                boxShadow: activeKind === k.key
-                  ? "0 10px 30px -10px rgba(224,142,254,0.6)"
-                  : "inset 0 0 0 1px rgba(71,71,84,0.25)",
-                transition: "all 0.2s ease",
-              }}
-            >
-              {k.label}
-            </button>
-          ))}
-        </div>
-
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 360px", gap: 24, alignItems: "flex-start" }}>
-          {/* Table ──────────────────────────────────────────────── */}
-          <section
+    <AdminShell
+      active="assets"
+      title="Asset Registry"
+      subtitle="Données-fiées : Hermes voit toute addition au prochain appel, sans redéploiement."
+    >
+      {/* Tabs kinds ──────────────────────────────────────────────── */}
+      <div style={{ display: "flex", gap: 6, marginBottom: 20, flexWrap: "wrap" }}>
+        {KINDS.map((k) => (
+          <button
+            key={k.key}
+            onClick={() => setActiveKind(k.key)}
             style={{
-              background: "rgba(36,36,52,0.45)",
-              borderRadius: 16,
-              padding: 20,
-              boxShadow: "inset 0 0 0 1px rgba(71,71,84,0.25)",
-              minHeight: 360,
+              background: activeKind === k.key
+                ? "linear-gradient(135deg, var(--primary), var(--primary-container))"
+                : "rgba(36,36,52,0.45)",
+              color: activeKind === k.key ? "#1a0a24" : "var(--on-surface-variant)",
+              border: "none",
+              borderRadius: 999,
+              padding: "8px 16px",
+              fontFamily: "var(--font-display)",
+              fontWeight: 700,
+              fontSize: "0.78rem",
+              letterSpacing: "0.04em",
+              textTransform: "uppercase",
+              cursor: "pointer",
+              boxShadow: activeKind === k.key
+                ? "0 10px 30px -10px rgba(224,142,254,0.6)"
+                : "inset 0 0 0 1px rgba(71,71,84,0.25)",
+              transition: "all 0.2s ease",
             }}
           >
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
-              <div style={{
-                fontFamily: "var(--font-display)", letterSpacing: "0.14em",
-                textTransform: "uppercase", color: "var(--on-surface-variant)",
-                fontSize: "0.72rem", fontWeight: 600,
-              }}>
-                {kindDef.label} · {rows.filter((r) => r.is_active).length} actifs / {rows.length} total
-              </div>
-              <button
-                onClick={() => void load()}
+            {k.label}
+          </button>
+        ))}
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 360px", gap: 24, alignItems: "flex-start" }}>
+        {/* Table ──────────────────────────────────────────────── */}
+        <section
+          style={{
+            background: "rgba(36,36,52,0.45)",
+            borderRadius: 16,
+            padding: 20,
+            boxShadow: "inset 0 0 0 1px rgba(71,71,84,0.25)",
+            minHeight: 360,
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+            <div style={{
+              fontFamily: "var(--font-display)", letterSpacing: "0.14em",
+              textTransform: "uppercase", color: "var(--on-surface-variant)",
+              fontSize: "0.72rem", fontWeight: 600,
+            }}>
+              {kindDef.label} · {rows.filter((r) => r.is_active).length} actifs / {rows.length} total
+            </div>
+            <button
+              onClick={() => void load()}
+              style={{
+                background: "transparent", border: "none", cursor: "pointer",
+                color: "var(--on-surface-variant)", fontFamily: "var(--font-mono)", fontSize: "0.72rem",
+              }}
+            >↻ refresh</button>
+          </div>
+          <div style={{ fontFamily: "var(--font-mono)", fontSize: "0.68rem", color: "var(--on-surface-muted)", marginBottom: 12 }}>
+            {kindDef.summary}
+          </div>
+
+          {loading && <div style={{ color: "var(--on-surface-muted)", padding: 12 }}>chargement…</div>}
+          {error && (
+            <div style={{
+              background: "rgba(255,106,138,0.12)",
+              color: "var(--danger, #ff6a8a)",
+              borderRadius: 8, padding: 10, marginBottom: 12, fontSize: "0.8rem",
+            }}>
+              ✕ {error}
+            </div>
+          )}
+
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {rows.map((r) => (
+              <div
+                key={r.id}
                 style={{
-                  background: "transparent", border: "none", cursor: "pointer",
-                  color: "var(--on-surface-variant)", fontFamily: "var(--font-mono)", fontSize: "0.72rem",
+                  display: "grid",
+                  gridTemplateColumns: "auto 1fr 1.4fr auto auto",
+                  alignItems: "center",
+                  gap: 12, padding: "8px 10px",
+                  background: r.is_active ? "rgba(9,9,18,0.4)" : "rgba(9,9,18,0.15)",
+                  opacity: r.is_active ? 1 : 0.55,
+                  borderRadius: 8,
+                  boxShadow: "inset 0 0 0 1px rgba(71,71,84,0.18)",
                 }}
-              >↻ refresh</button>
-            </div>
-            <div style={{ fontFamily: "var(--font-mono)", fontSize: "0.68rem", color: "var(--on-surface-muted)", marginBottom: 12 }}>
-              {kindDef.summary}
-            </div>
-
-            {loading && <div style={{ color: "var(--on-surface-muted)", padding: 12 }}>chargement…</div>}
-            {error && (
-              <div style={{
-                background: "rgba(255,106,138,0.12)",
-                color: "var(--danger, #ff6a8a)",
-                borderRadius: 8, padding: 10, marginBottom: 12, fontSize: "0.8rem",
-              }}>
-                ✕ {error}
-              </div>
-            )}
-
-            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              {rows.map((r) => (
-                <div
-                  key={r.id}
+              >
+                <span style={{
+                  width: 6, height: 6, borderRadius: "50%",
+                  background: r.is_active ? "var(--tertiary)" : "var(--on-surface-muted)",
+                }} />
+                <span style={{
+                  fontFamily: "var(--font-display)", fontWeight: 700,
+                  fontSize: "0.82rem", color: "var(--on-surface)",
+                }}>
+                  {r.slug}
+                </span>
+                <span style={{
+                  fontFamily: "var(--font-mono)", fontSize: "0.72rem",
+                  color: "var(--on-surface-variant)",
+                  overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                }}>
+                  {kindDef.renderRow(r.payload)}
+                </span>
+                <button
+                  onClick={() => void handleToggle(r)}
                   style={{
-                    display: "grid",
-                    gridTemplateColumns: "auto 1fr 1.4fr auto auto",
-                    alignItems: "center",
-                    gap: 12, padding: "8px 10px",
-                    background: r.is_active ? "rgba(9,9,18,0.4)" : "rgba(9,9,18,0.15)",
-                    opacity: r.is_active ? 1 : 0.55,
-                    borderRadius: 8,
-                    boxShadow: "inset 0 0 0 1px rgba(71,71,84,0.18)",
+                    background: "transparent", border: "none", cursor: "pointer",
+                    color: "var(--on-surface-variant)",
+                    fontFamily: "var(--font-mono)", fontSize: "0.7rem",
+                    padding: "4px 8px",
                   }}
                 >
-                  <span style={{
-                    width: 6, height: 6, borderRadius: "50%",
-                    background: r.is_active ? "var(--tertiary)" : "var(--on-surface-muted)",
-                  }} />
-                  <span style={{
-                    fontFamily: "var(--font-display)", fontWeight: 700,
-                    fontSize: "0.82rem", color: "var(--on-surface)",
-                  }}>
-                    {r.slug}
-                  </span>
-                  <span style={{
-                    fontFamily: "var(--font-mono)", fontSize: "0.72rem",
-                    color: "var(--on-surface-variant)",
-                    overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-                  }}>
-                    {kindDef.renderRow(r.payload)}
-                  </span>
-                  <button
-                    onClick={() => void handleToggle(r)}
-                    style={{
-                      background: "transparent", border: "none", cursor: "pointer",
-                      color: "var(--on-surface-variant)",
-                      fontFamily: "var(--font-mono)", fontSize: "0.7rem",
-                      padding: "4px 8px",
-                    }}
-                  >
-                    {r.is_active ? "désactiver" : "activer"}
-                  </button>
-                  <button
-                    onClick={() => void handleDelete(r)}
-                    style={{
-                      background: "transparent", border: "none", cursor: "pointer",
-                      color: "var(--danger, #ff6a8a)",
-                      fontFamily: "var(--font-mono)", fontSize: "0.7rem",
-                      padding: "4px 8px",
-                    }}
-                    disabled={!r.is_active}
-                  >✕</button>
-                </div>
-              ))}
-              {!loading && rows.length === 0 && (
-                <div style={{ color: "var(--on-surface-muted)", padding: 16, textAlign: "center" }}>
-                  Aucun {kindDef.label.toLowerCase().slice(0, -1)} — utilise le formulaire à droite.
-                </div>
-              )}
-            </div>
-          </section>
+                  {r.is_active ? "désactiver" : "activer"}
+                </button>
+                <button
+                  onClick={() => void handleDelete(r)}
+                  style={{
+                    background: "transparent", border: "none", cursor: "pointer",
+                    color: "var(--danger, #ff6a8a)",
+                    fontFamily: "var(--font-mono)", fontSize: "0.7rem",
+                    padding: "4px 8px",
+                  }}
+                  disabled={!r.is_active}
+                >✕</button>
+              </div>
+            ))}
+            {!loading && rows.length === 0 && (
+              <div style={{ color: "var(--on-surface-muted)", padding: 16, textAlign: "center" }}>
+                Aucun {kindDef.label.toLowerCase().slice(0, -1)} — utilise le formulaire à droite.
+              </div>
+            )}
+          </div>
+        </section>
 
-          {/* Formulaire ──────────────────────────────────────────── */}
-          <DynamicForm
-            kindDef={kindDef}
-            onCreated={() => { setFlash(`✓ ${kindDef.label.slice(0, -1)} ajouté`); void load(); }}
-            onError={setError}
-            flash={flash}
-            clearFlash={() => setFlash(null)}
-          />
-        </div>
-      </AdminShell>
-    </>
+        {/* Formulaire ──────────────────────────────────────────── */}
+        <DynamicForm
+          kindDef={kindDef}
+          onCreated={() => { setFlash(`✓ ${kindDef.label.slice(0, -1)} ajouté`); void load(); }}
+          onError={setError}
+          flash={flash}
+          clearFlash={() => setFlash(null)}
+        />
+      </div>
+    </AdminShell>
   );
 }
 

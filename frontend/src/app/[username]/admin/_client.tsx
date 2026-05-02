@@ -1,5 +1,14 @@
+"use client";
+
+/**
+ * `/[username]/admin` — Live Control Center client island.
+ *
+ * Migration Pages Router → App Router (Sprint E5) :
+ *   - `<Meta>` supprimé → métadonnées déclarées côté Server (`page.tsx`).
+ *   - `AdminShell` migré vers `next/navigation` — fonctionne uniquement sous App Router.
+ */
 import Link from "next/link";
-import { Meta } from "@/components/meta";
+
 import { AdminShell } from "@/components/admin/AdminShell";
 import {
   GlassCard,
@@ -9,50 +18,36 @@ import {
   GlassPill,
 } from "@/features/liquid-glass/primitives";
 
-/**
- * `/[username]/admin` — Live Control Center, redesign Liquid Glass.
- *
- * Objectif : densifier sans charger visuellement. Hero preview en haut
- * (ratio 16:9 + overlays LIVE/viewers/uptime/bitrate). Stats en grille
- * compacte 4-col. Quick actions en rail pilule. Rail droit : chat preview
- * + "derniers supporters" pour rappeler le lien avec le rail viewer.
- *
- * Tous les chiffres sont mockés — les hooks live seront câblés quand
- * le bridge shuguClient côté admin sera livré.
- */
-export default function AdminHome() {
+export function AdminHomeClient() {
   return (
-    <>
-      <Meta />
-      <AdminShell
-        active="overview"
-        title="Live Control"
-        subtitle="Maîtrise ton flux, ton environnement et tes overrides."
-        headerRight={
-          <div className="flex items-center gap-2">
-            <Link href="/" className="lgb lgb-ghost lgb-md" style={{ textDecoration: "none" }}>
-              ⎋ Retour au live
-            </Link>
-            <button type="button" className="lgb lgb-secondary lgb-md">
-              ● Start Stream
-            </button>
-          </div>
-        }
-      >
-        <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-5">
-          <section className="flex flex-col gap-5">
-            <HeroPreview />
-            <StatsGrid />
-            <QuickActions />
-            <RecentEvents />
-          </section>
-          <aside className="flex flex-col gap-4">
-            <ChatPreview />
-            <TopSupporters />
-          </aside>
+    <AdminShell
+      active="overview"
+      title="Live Control"
+      subtitle="Maîtrise ton flux, ton environnement et tes overrides."
+      headerRight={
+        <div className="flex items-center gap-2">
+          <Link href="/" className="lgb lgb-ghost lgb-md" style={{ textDecoration: "none" }}>
+            ⎋ Retour au live
+          </Link>
+          <button type="button" className="lgb lgb-secondary lgb-md">
+            ● Start Stream
+          </button>
         </div>
-      </AdminShell>
-    </>
+      }
+    >
+      <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-5">
+        <section className="flex flex-col gap-5">
+          <HeroPreview />
+          <StatsGrid />
+          <QuickActions />
+          <RecentEvents />
+        </section>
+        <aside className="flex flex-col gap-4">
+          <ChatPreview />
+          <TopSupporters />
+        </aside>
+      </div>
+    </AdminShell>
   );
 }
 
@@ -165,10 +160,10 @@ function QuickActions() {
 
 function RecentEvents() {
   const events = [
-    { who: "Nebula",     what: "s'est abonné · tier 2", t: "il y a 12s",  tone: "primary"   as const },
-    { who: "StarDawnXO", what: "a envoyé 500 bits",       t: "il y a 34s",  tone: "warn"      as const },
-    { who: "Stardust",   what: "a suivi la chaîne",       t: "il y a 1m",   tone: "tertiary"  as const },
-    { who: "Lumen",      what: "raid · 128 viewers",      t: "il y a 2m",   tone: "secondary" as const },
+    { who: "Nebula",     what: "s&apos;est abonné · tier 2", t: "il y a 12s",  tone: "primary"   as const },
+    { who: "StarDawnXO", what: "a envoyé 500 bits",           t: "il y a 34s",  tone: "warn"      as const },
+    { who: "Stardust",   what: "a suivi la chaîne",           t: "il y a 1m",   tone: "tertiary"  as const },
+    { who: "Lumen",      what: "raid · 128 viewers",          t: "il y a 2m",   tone: "secondary" as const },
   ];
   return (
     <GlassSection title="Événements récents" subtitle="Flux temps-réel des interactions viewer.">

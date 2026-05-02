@@ -1,3 +1,5 @@
+"use client";
+
 /**
  * AdminAuthGuard — wrap minimal "êtes-vous operator ?" pour les pages admin.
  *
@@ -25,7 +27,7 @@
  * 7 pages admin existantes dans cette PR).
  */
 
-import { useRouter } from "next/router";
+import { useRouter, useParams } from "next/navigation";
 import { useEffect, useState, type ReactNode } from "react";
 import { fetchAuthStatus } from "@/services/shuguClient";
 
@@ -64,8 +66,8 @@ const DEFAULT_FALLBACK = (
 
 export function AdminAuthGuard({ children, fallback = DEFAULT_FALLBACK }: Props) {
   const router = useRouter();
-  const rawUsername = router.query.username;
-  const urlUsername = Array.isArray(rawUsername) ? rawUsername[0] : rawUsername;
+  const params = useParams<{ username?: string }>();
+  const urlUsername = params?.username;
 
   const [operator, setOperator] = useState<Operator | null>(null);
   const [authChecked, setAuthChecked] = useState(false);
