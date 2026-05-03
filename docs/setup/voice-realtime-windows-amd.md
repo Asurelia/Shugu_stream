@@ -13,28 +13,62 @@
 docker --version
 ```
 
-### 2. Ollama Windows (Vulkan AMD)
-```powershell
-# Téléchargement officiel : https://ollama.com/download/windows
-# Installer le .exe officiel
+### 2. LLM backend — llama.cpp + llama-server (default) OU Ollama (alternative)
 
-# Variables d'environnement permanentes :
+#### Option A — llama.cpp (recommandée, latence top, contrôle max)
+
+Pré-requis :
+- Visual Studio 2022 Build Tools ou Community (avec C++ workload)
+- CMake 3.20+
+- Ninja (via `pip install ninja` ou `conda install ninja`)
+- Vulkan SDK installé (https://vulkan.lunarg.com/)
+- Git
+
+Build :
+```powershell
+git clone https://github.com/ggml-org/llama.cpp E:\ai\tools\llama.cpp
+cd E:\ai\tools\llama.cpp
+
+# Charger l'env VS2022 puis configurer + build
+$vcvars = "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat"
+cmd /c "`"$vcvars`" && cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DGGML_VULKAN=ON -DLLAMA_CURL=OFF"
+cmd /c "`"$vcvars`" && cmake --build build --config Release"
+```
+
+Vérifier le GPU :
+```powershell
+E:\ai\tools\llama.cpp\build\bin\llama-cli.exe --list-devices
+# Doit afficher : Vulkan0: AMD Radeon RX 7800 XT (16368 MiB, ~15400 MiB free)
+```
+
+Télécharger le modèle Gemma 4 26B-A4B IQ4_XS (13.4 GB, sweet spot pour 16GB VRAM) :
+```powershell
+mkdir E:\ai\models\gemma4 -ErrorAction SilentlyContinue
+cd E:\ai\models\gemma4
+huggingface-cli download unsloth/gemma-4-26B-A4B-it-GGUF gemma-4-26B-A4B-it-UD-IQ4_XS.gguf --local-dir . --local-dir-use-symlinks False
+```
+
+Lancer le serveur (utilisera les flags optimisés Vulkan) :
+```powershell
+pwsh -File infra/llama/start-llama-server.ps1
+```
+
+API exposée sur `http://localhost:11434/v1/chat/completions` (OpenAI-compat).
+
+#### Option B — Ollama (fallback, plus simple, 5-10% overhead)
+
+Si déjà installé sur ta machine, set les env vars sur E: pour ne pas remplir C: :
+```powershell
+[System.Environment]::SetEnvironmentVariable("OLLAMA_MODELS", "E:\ai\ollama\models", "User")
 [System.Environment]::SetEnvironmentVariable("OLLAMA_VULKAN", "1", "User")
 [System.Environment]::SetEnvironmentVariable("OLLAMA_FLASH_ATTENTION", "1", "User")
 [System.Environment]::SetEnvironmentVariable("OLLAMA_KV_CACHE_TYPE", "q8_0", "User")
 
-# Redémarrer Ollama service après set des env vars
-# Pull le modèle Gemma 4 26B-A4B en Q5_K_M
-ollama pull gemma4:26b-a4b-q5_K_M
-# NOTE : vérifier le nom exact sur https://ollama.com/library/gemma4 au moment de l'install.
-# Le tag exact peut différer (ex: gemma4:26b-q5, gemma4:26b-a4b-instruct-q5_k_m, etc.)
-
-# Vérifier que Vulkan est utilisé
-ollama serve  # dans un terminal
-# Dans un autre :
-ollama run gemma4:26b "Hello" --verbose
-# Doit afficher GPU usage
+# Redémarrer le service Ollama après set des env vars
+ollama pull gemma4:26b-a4b-iq4_xs  # vérifier le tag exact sur ollama.com/library
 ```
+
+Dans `.env`, l'endpoint reste le même (`http://localhost:11434`) — le code Python ne fait pas la distinction.
 
 ### 3. whisper.cpp + Vulkan
 ```powershell
@@ -83,8 +117,8 @@ docker logs shugu-livekit  # vérifier "Server listening on port 7880"
 LIVEKIT_URL=ws://localhost:7880
 LIVEKIT_API_KEY=devkey
 LIVEKIT_API_SECRET=secret_change_me_at_least_32_characters_long_xxxxxx
-OLLAMA_BASE_URL=http://localhost:11434
-OLLAMA_MODEL=gemma4:26b-a4b-q5_K_M
+LLM_BASE_URL=http://localhost:11434
+LLM_MODEL=gemma-4-26b-a4b-iq4_xs   # référence cosmétique (llama-server l'ignore, c'est le -m qui compte)
 WHISPER_BIN=F:/tools/whisper.cpp/build/bin/Release/whisper-cli.exe
 WHISPER_MODEL=F:/tools/whisper.cpp/models/ggml-small.bin
 PIPER_BIN=F:/tools/piper/piper.exe
@@ -98,8 +132,12 @@ Note : `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` activent aussi le 
 
 ### Bench LLM
 ```powershell
-ollama run gemma4:26b "Raconte une blague" --verbose
+# Option A — llama.cpp bench
+E:\ai\tools\llama.cpp\build\bin\llama-bench.exe -m E:\ai\models\gemma4\gemma-4-26B-A4B-it-UD-IQ4_XS.gguf -ngl 99 -t 8
 # Note tokens/s et TTFB
+
+# Option B — Ollama (si utilisé en fallback)
+# ollama run gemma4:26b-a4b-iq4_xs "Raconte une blague" --verbose
 ```
 
 ### Bench STT
@@ -121,9 +159,15 @@ Measure-Command { echo "Bonjour, je suis Shugu et je test la synthèse vocale" |
 
 ## Troubleshooting
 
-### Ollama n'utilise pas le GPU
+### llama-server ne démarre pas
+- Vérifier que `E:\ai\tools\llama.cpp\build\bin\llama-server.exe` existe (recompiler si absent)
+- Vérifier que le modèle GGUF est bien téléchargé dans `E:\ai\models\gemma4\`
+- Vérifier que le Vulkan SDK est installé : `vulkaninfo` doit retourner le 7800 XT
+
+### Ollama n'utilise pas le GPU (fallback Option B)
 - Vérifier `OLLAMA_VULKAN=1` dans Environment Variables (System Properties → Environment Variables)
 - Redémarrer le service Ollama (Task Manager → Services → Ollama)
+- Attention conflit de port : un seul entre llama-server et Ollama peut tourner sur :11434 à la fois
 
 ### LiveKit container ne démarre pas
 - Vérifier les ports 7880, 7881, 50000-50100 disponibles
