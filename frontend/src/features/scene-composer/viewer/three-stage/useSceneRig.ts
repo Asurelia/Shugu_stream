@@ -279,6 +279,11 @@ export function useSceneRig({
       }
     });
 
+    // Snapshot meshRegistryRef.current at effect entry so the cleanup closure
+    // holds a stable reference (standard pattern — ref.current may change
+    // between mount and unmount).
+    const meshRegistry = meshRegistryRef.current;
+
     // ── Cleanup (unmount) ──────────────────────────────────────────────────
     return () => {
       token.cancelled = true;
@@ -301,12 +306,12 @@ export function useSceneRig({
       // disposePropInstance throw sur un material corrompu.
       try {
         // Dispose toutes les props de la scène.
-        for (const [, obj] of meshRegistryRef.current) {
+        for (const [, obj] of meshRegistry) {
           sceneRig.scene.remove(obj);
           disposePropInstance(obj);
         }
       } finally {
-        meshRegistryRef.current.clear();
+        meshRegistry.clear();
 
         disposeAll({
           renderer: sceneRigRef.current?.renderer,

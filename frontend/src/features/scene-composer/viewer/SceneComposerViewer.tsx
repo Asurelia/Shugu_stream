@@ -369,7 +369,6 @@ export function SceneComposerViewer({
       cancelled = true;
     };
   // vrmaLoop intentionnellement exclu — changement loop non supporté mid-animation.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [vrmaUrl, vrmRef, animRigRef, vrmaLoopRef]);
 
   // ── Cleanup vrmLoadTokenRef au unmount ──────────────────────────────────────

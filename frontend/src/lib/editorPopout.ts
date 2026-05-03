@@ -582,7 +582,6 @@ export function subscribePopout(
     // checker AVANT le nonce pour préserver le warn "mismatched origin"
     // attendu par le scenario 4 Playwright.
     if (origin !== null && data.senderOrigin !== origin) {
-      // eslint-disable-next-line no-console
       console.warn(
         "[editorPopout] dropped message with mismatched origin",
         { received: data.senderOrigin, expected: origin },
@@ -594,7 +593,6 @@ export function subscribePopout(
     // onglet `localhost:3005` n'a pas accès à notre sessionStorage).
     const expectedNonce = getPopoutNonce();
     if (data.senderNonce !== expectedNonce) {
-      // eslint-disable-next-line no-console
       console.warn(
         "[editorPopout] dropped message with mismatched nonce",
         { received: data.senderNonce, expected: expectedNonce },

@@ -167,7 +167,7 @@ export function ScenesListPanel() {
       </div>
 
       {/* Corps */}
-      <div style={LIST_STYLE}>
+      <div style={LIST_STYLE} role="listbox" aria-label="Scènes">
         {loading && (
           <div style={{ padding: "12px", color: "#555566", textAlign: "center" }}>
             Chargement…
@@ -203,8 +203,8 @@ export function ScenesListPanel() {
                 onClick={() => setSelectedSceneId(scene.id)}
                 onMouseEnter={() => setHoveredId(scene.id)}
                 onMouseLeave={() => setHoveredId(null)}
-                role="button"
-                tabIndex={0}
+                role="option"
+                tabIndex={-1}
                 aria-selected={isSelected}
                 onKeyDown={(e) => {
                   if (e.key === "Enter" || e.key === " ") {
