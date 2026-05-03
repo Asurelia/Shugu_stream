@@ -13,51 +13,64 @@
 docker --version
 ```
 
-### 2. LLM backend — llama.cpp + llama-server (default) OU Ollama (alternative)
+### 2. LLM backend — llama-cpp-python avec Vulkan AMD (Voie A finale)
 
-#### Option A — llama.cpp (recommandée, latence top, contrôle max)
+#### Pourquoi llama-cpp-python (pas llama-server)
 
-Pré-requis :
+`llama-server` master b9011 a un bug router : `/v1/models` retourne `null` et `/v1/chat/completions` rejette tous les model names. Cf. issue [#18234](https://github.com/ggml-org/llama.cpp/issues/18234). On contourne en embedding llama.cpp directement dans le process Python.
+
+#### Pré-requis
+
 - Visual Studio 2022 Build Tools ou Community (avec C++ workload)
-- CMake 3.20+
-- Ninja (via `pip install ninja` ou `conda install ninja`)
+- CMake 3.20+ + Ninja
 - Vulkan SDK installé (https://vulkan.lunarg.com/)
-- Git
+- Python 3.13+ (déjà dans le projet)
 
-Build :
+#### Install (Windows + AMD 7800 XT + Vulkan)
+
 ```powershell
-git clone https://github.com/ggml-org/llama.cpp E:\ai\tools\llama.cpp
-cd E:\ai\tools\llama.cpp
-
-# Charger l'env VS2022 puis configurer + build
 $vcvars = "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat"
-cmd /c "`"$vcvars`" && cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DGGML_VULKAN=ON -DLLAMA_CURL=OFF"
-cmd /c "`"$vcvars`" && cmake --build build --config Release"
+$env:CMAKE_ARGS = "-DGGML_VULKAN=on"
+$env:FORCE_CMAKE = "1"
+cmd /c "`"$vcvars`" && pip install llama-cpp-python --no-cache-dir"
 ```
 
-Vérifier le GPU :
-```powershell
-E:\ai\tools\llama.cpp\build\bin\llama-cli.exe --list-devices
-# Doit afficher : Vulkan0: AMD Radeon RX 7800 XT (16368 MiB, ~15400 MiB free)
+Compilation ~5-10 min. Vérifier au runtime que Vulkan est actif :
+```python
+from llama_cpp import Llama
+llm = Llama(model_path='...', n_gpu_layers=99, verbose=True)
+# Doit afficher au load :
+#   ggml_vulkan: Found 2 Vulkan devices:
+#   ggml_vulkan: 0 = AMD Radeon RX 7800 XT
+#   register_backend: registered backend Vulkan (2 devices)
+#   llama_model_load_from_file_impl: using device Vulkan0
 ```
 
-Télécharger le modèle Gemma 4 26B-A4B IQ4_XS (13.4 GB, sweet spot pour 16GB VRAM) :
+Si tu vois 1 tok/s en gen, c'est que Vulkan n'est pas actif (CPU pure). Réinstalle avec les env vars correctes.
+
+#### Modèle MVP — Gemma 4 26B-A4B IQ4_XS
+
 ```powershell
-mkdir E:\ai\models\gemma4 -ErrorAction SilentlyContinue
-cd E:\ai\models\gemma4
+mkdir E:\ai\models\gemma4-26b -ErrorAction SilentlyContinue
+cd E:\ai\models\gemma4-26b
 huggingface-cli download unsloth/gemma-4-26B-A4B-it-GGUF gemma-4-26B-A4B-it-UD-IQ4_XS.gguf --local-dir . --local-dir-use-symlinks False
 ```
 
-Lancer le serveur (utilisera les flags optimisés Vulkan) :
-```powershell
-pwsh -File infra/llama/start-llama-server.ps1
-```
+Fichier ~13.4 GB. Tient en VRAM 16 GB du 7800 XT en single-model mode.
 
-API exposée sur `http://localhost:11434/v1/chat/completions` (OpenAI-compat).
+#### Bench attendu (mesuré)
 
-#### Option B — Ollama (fallback, plus simple, 5-10% overhead)
+| Métrique | Valeur |
+|---|---|
+| TTFB chaud | 187ms |
+| Gen tok/s | 43-50 |
+| Prompt eval tok/s | 288 |
+| VRAM utilisée | ~12.5 GB |
+| VRAM libre | ~3.5 GB (suffit pour Whisper small Q5 ~470 MB) |
 
-Si déjà installé sur ta machine, set les env vars sur E: pour ne pas remplir C: :
+#### Option B — Ollama (en stand-by, llama-server abandonné)
+
+`llama-server` est en stand-by (bug router master b9011). Ollama reste une option de fallback si llama-cpp-python pose un problème de build :
 ```powershell
 [System.Environment]::SetEnvironmentVariable("OLLAMA_MODELS", "E:\ai\ollama\models", "User")
 [System.Environment]::SetEnvironmentVariable("OLLAMA_VULKAN", "1", "User")
