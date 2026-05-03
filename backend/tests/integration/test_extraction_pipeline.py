@@ -284,7 +284,7 @@ async def test_extraction_worker_skips_tool_call_episode(
         "episode_id": str(ULID()),
         "subject": subject,
         "event_type": "tool_call",  # ← pas de texte libre, skip attendu
-        "actor": "hermes",
+        "actor": "operator",
         "ts": datetime.now(timezone.utc).isoformat(),
         "had_redaction": False,
         "payload": {"text": "body.gesture wave I'm Alice", "tool": "gesture"},

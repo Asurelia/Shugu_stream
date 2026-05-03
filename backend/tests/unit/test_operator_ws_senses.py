@@ -36,7 +36,6 @@ def settings_stub():
     s.memory_enabled = True
     s.ip_hash_salt = "test-salt-32-bytes-minimum-!!!!"
     s.director_enabled = False
-    s.hermes_embodied = False
     return s
 
 
@@ -62,11 +61,9 @@ def deps(bus, settings_stub, ws_mock, queue_stub):
         redis=AsyncMock(),
         http=AsyncMock(),
         tts=AsyncMock(),
-        filter_brain=AsyncMock(),
         viewer_counter=None,
         ambient=None,
         body_router=None,
-        hermes_embodied=None,
     )
     operator_ws.set_deps(d)
     return d
