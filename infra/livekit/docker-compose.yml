@@ -1,0 +1,21 @@
+version: "3.9"
+services:
+  livekit:
+    image: livekit/livekit-server:latest
+    container_name: shugu-livekit
+    ports:
+      - "7880:7880"        # API + WebSocket
+      - "7881:7881/tcp"    # WebRTC TCP fallback
+      - "50000-50100:50000-50100/udp"  # WebRTC UDP (range réduit pour Windows)
+    environment:
+      - LIVEKIT_KEYS=devkey: secret_change_me_at_least_32_characters_long_xxxxxx
+    volumes:
+      - ./livekit.yaml:/etc/livekit.yaml:ro
+    command: --config /etc/livekit.yaml
+    restart: unless-stopped
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    # LiveKit needs a writable /tmp for WebRTC operations
+    tmpfs:
+      - /tmp
