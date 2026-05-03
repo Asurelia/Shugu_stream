@@ -10,12 +10,11 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 
 export type Rank = "guest" | "sub" | "vip" | "mod" | "king" | "admin" | "assistant";
 export type Tier = "user" | "vip" | "admin";
-export type Target = "shugu" | "hermes";
 
 export type ChatMsg =
   | { kind: "system"; text: string }
   | { kind: "visitor"; who: string; text: string; rank?: Rank; glyph?: string }
-  | { kind: "assistant"; who: string; text: string; stream?: boolean; hermes?: boolean };
+  | { kind: "assistant"; who: string; text: string; stream?: boolean };
 
 export type Session = { name: string; tier: Tier } | null;
 
@@ -37,8 +36,6 @@ type Props = {
   onInputChange: (v: string) => void;
   onSend: (text: string) => void;
   inputDisabled: boolean;
-  target?: Target;
-  setTarget?: (t: Target) => void;
   reactionSeed: number;
   /** Handlers brand-menu (proto HudTop). */
   onLogin?: () => void;
@@ -73,10 +70,9 @@ type BubbleProps = {
   glyph?: string;
   time?: string;
   stream?: boolean;
-  hermes?: boolean;
 };
 
-function Bubble({ rank, who, text, glyph, time, stream = false, hermes = false }: BubbleProps) {
+function Bubble({ rank, who, text, glyph, time, stream = false }: BubbleProps) {
   const [shown, setShown] = useState<string>(stream ? "" : text);
   const [streaming, setStreaming] = useState<boolean>(stream);
 
@@ -98,7 +94,7 @@ function Bubble({ rank, who, text, glyph, time, stream = false, hermes = false }
   }, [text, stream]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
-  const cls = `bubble rank-${rank} ${hermes ? "hermes" : ""}`.trim();
+  const cls = `bubble rank-${rank}`;
 
   return (
     <div className={`msg rank-${rank}`}>
@@ -120,34 +116,6 @@ function nowClock(): string {
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 }
 
-/* ══════════════════════ TARGET SELECTOR (admin only) ══════════════════════ */
-function TargetSelector({ target, setTarget }: { target: Target; setTarget: (t: Target) => void }) {
-  return (
-    <div className="target-selector lg lg-pill">
-      <LiquidLayers />
-      <span className="ts-label">target</span>
-      <div className="ts-seg">
-        <button
-          type="button"
-          className={`shugu ${target === "shugu" ? "active" : ""}`}
-          onClick={() => setTarget("shugu")}
-          aria-pressed={target === "shugu"}
-        >
-          <span className="ts-glyph">✦</span> Shugu
-        </button>
-        <button
-          type="button"
-          className={`hermes ${target === "hermes" ? "active" : ""}`}
-          onClick={() => setTarget("hermes")}
-          aria-pressed={target === "hermes"}
-        >
-          <span className="ts-glyph">⚡</span> Hermes
-        </button>
-      </div>
-    </div>
-  );
-}
-
 /* ══════════════════════ CHAT CARD (collapsible) ══════════════════════ */
 type ChatCardProps = {
   messages: ChatMsg[];
@@ -159,10 +127,6 @@ type ChatCardProps = {
   onSend: (text: string) => void;
   listening: boolean;
   onMicToggle: () => void;
-  hermesMode: boolean;
-  isAdmin: boolean;
-  target: Target;
-  setTarget: (t: Target) => void;
   inputDisabled: boolean;
   voiceSupported: boolean;
 };
@@ -171,7 +135,6 @@ function ChatCard({
   messages, collapsed, onToggleCollapse, unread,
   input, setInput, onSend,
   listening, onMicToggle,
-  hermesMode, isAdmin, target, setTarget,
   inputDisabled, voiceSupported,
 }: ChatCardProps) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -242,10 +205,9 @@ function ChatCard({
                       rank="assistant"
                       who={m.who}
                       text={m.text}
-                      glyph={m.hermes ? "⚡" : "✦"}
+                      glyph="✦"
                       time={nowClock()}
                       stream={m.stream}
-                      hermes={m.hermes}
                     />
                   );
                 }
@@ -263,7 +225,6 @@ function ChatCard({
             </div>
 
             <div className="chat-input-wrap">
-              {isAdmin && <TargetSelector target={target} setTarget={setTarget} />}
               <form
                 className={`chat-input lg-pill ${listening ? "listening" : ""}`}
                 onSubmit={submit}
@@ -273,7 +234,7 @@ function ChatCard({
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
                   placeholder={
-                    listening ? "✦ écoute…" : (hermesMode ? "⚡ commande Hermes…" : "Send a message…")
+                    listening ? "✦ écoute…" : "Send a message…"
                   }
                   disabled={listening || inputDisabled}
                   aria-label="message"
@@ -294,7 +255,7 @@ function ChatCard({
                   disabled={!input.trim() || listening || inputDisabled}
                   aria-label="envoyer"
                 >
-                  {hermesMode ? "⚡" : "→"}
+                  {"→"}
                 </button>
               </form>
             </div>
@@ -507,8 +468,6 @@ export function ViewerStage({
   onInputChange,
   onSend,
   inputDisabled,
-  target = "shugu",
-  setTarget = () => {},
   reactionSeed,
   onLogin,
   onSignup,
@@ -536,9 +495,6 @@ export function ViewerStage({
   // Reset unread à chaque ouverture.
   useEffect(() => { if (!collapsed) setUnread(0); }, [collapsed]);
   /* eslint-enable react-hooks/set-state-in-effect */
-
-  const isAdmin = !!(session && session.tier === "admin");
-  const hermesMode = isAdmin && target === "hermes";
 
   return (
     <div className="viewer-proto-root">
@@ -581,10 +537,6 @@ export function ViewerStage({
           if (!voice) return;
           voice.listening ? voice.stop() : voice.start();
         }}
-        hermesMode={hermesMode}
-        isAdmin={isAdmin}
-        target={target}
-        setTarget={setTarget}
         inputDisabled={inputDisabled}
         voiceSupported={!!voice?.supported}
       />

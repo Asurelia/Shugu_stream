@@ -39,7 +39,6 @@ type Props = {
   onInputChange: (v: string) => void;
   onSubmit: (e: FormEvent) => void;
   inputDisabled: boolean;
-  hermesMode?: boolean;
   voice?: VoiceProps;
   /**
    * "default" → comportement historique (aside fixed right-8 top-24 bottom-12
@@ -63,7 +62,7 @@ const ROLE_STYLES = {
 
 export function ChatFeed({
   messages, showAssistant = false, viewerCount,
-  inputValue, onInputChange, onSubmit, inputDisabled, hermesMode, voice,
+  inputValue, onInputChange, onSubmit, inputDisabled, voice,
   variant = "default",
 }: Props) {
   const isDesktop = useMediaQuery(DESKTOP_QUERY, true);
@@ -107,7 +106,7 @@ export function ChatFeed({
 
   const placeholder = voice?.listening
     ? (voice.interim ? `✦ « ${voice.interim} »` : "✦ écoute…")
-    : (hermesMode ? "⚡ commande Hermes…" : "Send a message…");
+    : "Send a message…";
 
   const inputEl = (
     <form onSubmit={onSubmit} className="p-4">
@@ -117,7 +116,7 @@ export function ChatFeed({
           value={voice?.listening ? voice.interim : inputValue}
           onChange={(e) => onInputChange(e.target.value)}
           placeholder={placeholder}
-          maxLength={hermesMode ? 2000 : 500}
+          maxLength={500}
           disabled={inputDisabled || !!voice?.listening}
           aria-label="message"
           className="w-full bg-white/5 border border-white/10 rounded-full py-3 pl-6 pr-12 text-sm focus:outline-none focus:ring-1 focus:ring-celestial-purple placeholder:text-gray-500 text-white veil-body"
@@ -145,7 +144,7 @@ export function ChatFeed({
             aria-label="envoyer"
             className="w-7 h-7 rounded-full flex items-center justify-center text-sm font-bold bg-gradient-to-r from-[#b585ff] to-[#e879f9] text-black hover:scale-105 transition-transform disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:scale-100"
           >
-            {hermesMode ? "⚡" : "→"}
+            {"→"}
           </button>
         </div>
       </div>
