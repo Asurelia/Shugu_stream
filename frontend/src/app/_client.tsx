@@ -322,7 +322,7 @@ export function HomeClient() {
         } else if (ev.type === "viewer.count") {
           setViewerCount(ev.n);
         } else if (ev.type === "scene.change") {
-          // Direct state-change from Hermes body control — bypasses picker.
+          // Direct state-change from LLM body control — bypasses picker.
           sceneManagerRef.current?.requestScene(ev.scene);
         } else if (ev.type === "scene.preview") {
           // Scene editor admin broadcast — applique la config directement

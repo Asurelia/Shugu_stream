@@ -5,7 +5,7 @@
  *   - Global CSS imports (only allowed in this file under App Router).
  *   - 5 next/font/google families exposed as CSS variables.
  *   - `<html lang="fr">` + `<body className="shugu-body">` (was in _document).
- *   - `DesktopProvider` mounted via the client `<ClientProviders>` boundary.
+ *   - Client providers mounted via the `<ClientProviders>` boundary.
  *
  * Coexistence Pages Router : as long as `pages/*` exists, those routes keep
  * being served by Pages Router — App Router only takes over the overlapping

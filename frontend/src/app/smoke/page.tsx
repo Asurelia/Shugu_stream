@@ -2,7 +2,7 @@
  * Smoke test page for App Router bootstrap (Sprint E1).
  *
  * Purpose : validate that the new `app/` tree is reachable, fonts/styles
- * apply, and the client `DesktopProvider` boundary mounts without error.
+ * apply, and the client `<ClientProviders>` boundary mounts without error.
  *
  * Phase 2 sprints E2-E6 will migrate real pages from `pages/` to `app/`,
  * at which point this smoke route can be deleted (or kept as a permanent

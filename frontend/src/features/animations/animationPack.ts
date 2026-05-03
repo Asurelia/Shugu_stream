@@ -12,7 +12,7 @@
  *   2. `frontend/public/animations/<slug>.fbx`
  *   3. POST /api/admin/registry { kind: "gesture", slug, display_name,
  *      payload: { url: "/animations/<slug>.fbx", source: "fbx" } }
- *   4. Hermes le voit au prochain appel LLM (sans redéploiement)
+ *   4. Le LLM le voit au prochain appel (sans redéploiement)
  *
  * Appeler `invalidateActionClipsCache()` après une mutation admin pour
  * forcer un refresh immédiat (sinon TTL 30 s).

@@ -144,7 +144,7 @@ export function AdminModal({ open, onClose }: { open: boolean; onClose: () => vo
                       p.author_role === "operator" ? "bg-shugu-lavender/30 text-shugu-lavender" :
                       "bg-shugu-blue/20 text-shugu-blue"
                     }`}>
-                      {p.route === "shugu_filtered" ? "Hermes→filtré" : p.author_role}
+                      {p.route === "shugu_filtered" ? "filtré" : p.author_role}
                     </span>
                     <span>{new Date(p.created_at).toLocaleString("fr-FR")}</span>
                     {p.duration_ms != null && <span>• {Math.round(p.duration_ms / 100) / 10}s</span>}

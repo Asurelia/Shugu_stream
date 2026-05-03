@@ -319,11 +319,11 @@ function SubscriptionSection({ tier }: { tier: Tier }) {
     <>
       <GlassSection
         title="Ton tier"
-        subtitle="Déverrouille plus de fonctionnalités, commandes Hermes et support prioritaire."
+        subtitle="Déverrouille plus de fonctionnalités et le support prioritaire."
       >
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-2">
           <TierCard name="Free"  price="0 €"   features={["Stream 720p", "Chat basique"]} active={tier === "free"} />
-          <TierCard name="VIP"   price="9 €/mo" features={["1080p @ 60fps", "Aura expressions +", "Commandes Hermes"]} active={tier === "vip"} tierBtn="vip" />
+          <TierCard name="VIP"   price="9 €/mo" features={["1080p @ 60fps", "Aura expressions +", "Commandes vocales"]} active={tier === "vip"} tierBtn="vip" />
           <TierCard name="Admin" price="sur demande" features={["Multi-streams", "SLA prioritaire", "Accès tokens API"]} active={tier === "admin"} tierBtn="admin" />
         </div>
       </GlassSection>

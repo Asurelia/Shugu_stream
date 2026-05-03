@@ -2,7 +2,7 @@ const { light, dark } = require("@charcoal-ui/theme");
 const { createTailwindConfig } = require("@charcoal-ui/tailwind-config");
 /**
  * Shugu stream UI — Hololive-kawaii palette.
- *   pink / pink-soft  → LIVE badge, actions, Hermes mode
+ *   pink / pink-soft  → LIVE badge, actions
  *   blue / lavender   → accent secondaire, chat messages, halos
  *   cream             → texte sur fond sombre
  *   ink / ink-soft    → backgrounds
