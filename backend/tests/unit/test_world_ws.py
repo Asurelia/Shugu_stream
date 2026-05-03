@@ -5,6 +5,13 @@ Approche :
   infrastructure externe. Mini-app avec uniquement le router `world_ws`.
 * JWT operator minté via `jwt_tokens.issue_pair()` (pas de mock).
 * `InProcessEventBus` pour le fan-out local.
+* Pour publier sur le bus depuis un test sync, on utilise
+  ``client.portal.call(bus.publish, topic, payload)`` — le portal anyio
+  exposé par TestClient (quand utilisé comme context manager) exécute la
+  coroutine sur la même event loop que l'app ASGI. Cela évite le pattern
+  fragile ``asyncio.get_event_loop().run_until_complete(...)`` qui hang
+  sous Python 3.13 + pytest-asyncio mode auto (les asyncio.Queue sont
+  créées dans la loop interne de TestClient, pas dans la loop pytest).
 
 Coverage L4 :
 1. Connexion sans token -> close 4401.
@@ -17,7 +24,6 @@ Coverage L4 :
 """
 from __future__ import annotations
 
-import asyncio
 import json
 from typing import Iterator
 
@@ -116,10 +122,9 @@ def test_valid_token_connect_and_receive_world_delta(
     """Connexion valide : après publish world.delta, le client reçoit le JSON."""
     token = _issue_token(settings, "alice")
     with client.websocket_connect(f"/ws/world?token={token}") as ws:
-        # Publie un delta sur le bus dans la même boucle event pytest-anyio.
-        asyncio.get_event_loop().run_until_complete(
-            event_bus.publish("world.delta", {"avatar_pose": "wave"})
-        )
+        # client.portal est le BlockingPortal anyio de TestClient — exécute
+        # publish sur la même loop que l'app ASGI (évite le hang Py3.13).
+        client.portal.call(event_bus.publish, "world.delta", {"avatar_pose": "wave"})
         raw = ws.receive_text()
         msg = json.loads(raw)
         assert msg["avatar_pose"] == "wave"
@@ -130,17 +135,23 @@ def test_multi_client_both_receive_world_delta(
     settings,
     event_bus: InProcessEventBus,
 ) -> None:
-    """Deux connexions simultanées reçoivent toutes deux le delta."""
+    """Deux connexions simultanées reçoivent toutes deux le delta.
+
+    Les deux WS doivent être ouvertes depuis le MÊME TestClient (même portal
+    anyio = même event loop) pour que les asyncio.Queue créées par
+    InProcessEventBus.subscribe() soient toutes les deux dans la même loop.
+    Avec deux TestClient séparés (deux loops distinctes), portal.call() ne
+    réveillerait que les subscribers de sa propre loop.
+    """
     token_a = _issue_token(settings, "alice")
     token_b = _issue_token(settings, "bob")
-    with TestClient(app) as client_a, TestClient(app) as client_b:
+    with TestClient(app) as client:
         with (
-            client_a.websocket_connect(f"/ws/world?token={token_a}") as ws_a,
-            client_b.websocket_connect(f"/ws/world?token={token_b}") as ws_b,
+            client.websocket_connect(f"/ws/world?token={token_a}") as ws_a,
+            client.websocket_connect(f"/ws/world?token={token_b}") as ws_b,
         ):
-            asyncio.get_event_loop().run_until_complete(
-                event_bus.publish("world.delta", {"mood": "happy"})
-            )
+            # portal.call exécute publish sur la loop partagée par ws_a et ws_b.
+            client.portal.call(event_bus.publish, "world.delta", {"mood": "happy"})
             msg_a = json.loads(ws_a.receive_text())
             msg_b = json.loads(ws_b.receive_text())
             assert msg_a["mood"] == "happy"
@@ -172,8 +183,8 @@ def test_world_delta_props_forwarded(
     token = _issue_token(settings, "alice")
     props_payload = [{"prop_id": "glass", "x": 1.0, "y": 0.0, "z": 0.5}]
     with client.websocket_connect(f"/ws/world?token={token}") as ws:
-        asyncio.get_event_loop().run_until_complete(
-            event_bus.publish("world.delta", {"props": props_payload, "clock_ms": 100})
+        client.portal.call(
+            event_bus.publish, "world.delta", {"props": props_payload, "clock_ms": 100}
         )
         msg = json.loads(ws.receive_text())
         assert msg["props"] == props_payload
