@@ -125,6 +125,11 @@ export function HomeClient() {
       viewerRef.current?.triggerChatGlance({ x: 0.7, y: 0.25 });
     }
   };
+  // Ref-mirror so the ShuguClient useEffect closure always calls the latest
+  // appendLog without needing to list it as a dep (which would reconnect the
+  // WebSocket on every render since appendLog is recreated each render).
+  const appendLogRef = useRef(appendLog);
+  useEffect(() => { appendLogRef.current = appendLog; });
 
   useEffect(() => {
     if (!operator) return;
@@ -212,7 +217,7 @@ export function HomeClient() {
           }
 
           if (ev.text) {
-            appendLog({ role: "assistant", content: ev.text });
+            appendLogRef.current({ role: "assistant", content: ev.text });
             setReactionSeed((s) => s + 1);
           }
 
@@ -265,7 +270,7 @@ export function HomeClient() {
             }
           }
           if (ev.text) {
-            appendLog({ role: "assistant", content: ev.text });
+            appendLogRef.current({ role: "assistant", content: ev.text });
             setReactionSeed((s) => s + 1);
           }
 
