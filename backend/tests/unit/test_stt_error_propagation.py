@@ -40,8 +40,8 @@ class TestSTTErrorTypeHierarchy:
 
 
 class TestSTTChainImportsSTTError:
-    """Verrouille que la chaîne STT (stt_streaming, stt_livekit_adapter,
-    voice_duplex) importe STTError — preuve structurelle qu'elle peut
+    """Verrouille que la chaîne STT (stt_streaming, stt_livekit_adapter)
+    importe STTError — preuve structurelle qu'elle peut
     raise/catch ce type. Une régression qui retirerait l'import + reviendrait
     à `return ""` serait détectée par ce test (l'audit P1.B1/B2/B8 reviendrait).
     """
@@ -60,25 +60,6 @@ class TestSTTChainImportsSTTError:
         from shugu.adapters import stt_livekit_adapter
         assert hasattr(stt_livekit_adapter, "STTError")
         assert stt_livekit_adapter.STTError is STTError
-
-    def test_voice_duplex_imports_stterror(self) -> None:
-        from shugu.pipeline import voice_duplex
-        assert hasattr(voice_duplex, "STTError")
-        assert voice_duplex.STTError is STTError
-
-    def test_voice_duplex_source_handles_stt_error(self) -> None:
-        """Vérifie que voice_duplex contient bien un except STTError + un
-        envoi de VoiceEvent("error", ...) — garde anti-régression sur le
-        fix P1.B8.
-        """
-        from shugu.pipeline import voice_duplex
-        source = inspect.getsource(voice_duplex)
-        assert "except STTError" in source, (
-            "voice_duplex doit catcher STTError pour remonter au client"
-        )
-        assert '"stt_failed"' in source, (
-            "voice_duplex doit envoyer un VoiceEvent error avec reason=stt_failed"
-        )
 
     def test_stt_streaming_source_raises_stt_error(self) -> None:
         """Vérifie que stt_streaming.transcribe_pcm16 raise STTError au

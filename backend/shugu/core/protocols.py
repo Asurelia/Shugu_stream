@@ -82,7 +82,7 @@ class PersonalityDoc:
 
 class BrainAdapter(Protocol):
     """LLM backend. Implementations: ShuguPersonaBrain (MiniMax persona),
-    HermesAgentBrain (HTTP to Hermes api_server), FilterBrain (MiniMax + filter prompt)."""
+    FilterBrain (MiniMax + filter prompt)."""
     name: str
 
     async def respond(

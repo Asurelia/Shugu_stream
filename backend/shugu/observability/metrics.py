@@ -30,7 +30,6 @@ Compteurs exposés
 - ``sense_events_received_total``               (Counter, label=kind)
 - ``tts_fallback_total``                        (Counter, labels=from,to) — Sprint 4 P1.C1
 - ``event_bus_drop_total``                      (Counter, label=topic) — Sprint 4 P1.C4
-- ``persona_fallback_total``                    (Counter, labels=from,to) — Sprint 4 P1.C2
 - ``memory_recall_failed_total``                (Counter, label=error_kind) — Sprint 4 P1.C6
 - ``moderation_ban_check_failed_total``         (Counter, label=error_kind) — Sprint 5 P1.B7
 """
@@ -100,14 +99,6 @@ class MetricsRecorder(Protocol):
         """
         ...
 
-    def record_persona_fallback(self, from_persona: str, to_persona: str) -> None:
-        """Incrémente persona_fallback_total{from,to} — Sprint 4 P1.C2.
-
-        Posé quand `personality.get('hermes_public')` échoue et tombe sur
-        le fallback `shugu`. Détecte les déploiements sans le fichier persona.
-        """
-        ...
-
     def record_memory_recall_failed(self, error_kind: str) -> None:
         """Incrémente memory_recall_failed_total{error_kind} — Sprint 4 P1.C6.
 
@@ -164,9 +155,6 @@ class NullMetricsRecorder:
         pass
 
     def record_event_bus_drop(self, topic: str) -> None:
-        pass
-
-    def record_persona_fallback(self, from_persona: str, to_persona: str) -> None:
         pass
 
     def record_memory_recall_failed(self, error_kind: str) -> None:
@@ -262,12 +250,6 @@ class PrometheusMetricsRecorder:
             ["topic"],
             registry=self.registry,
         )
-        self._persona_fallback = Counter(
-            "persona_fallback_total",
-            "Nombre de fallbacks persona (ex: hermes_public → shugu) (audit C2).",
-            ["from_persona", "to_persona"],
-            registry=self.registry,
-        )
         self._memory_recall_failed = Counter(
             "memory_recall_failed_total",
             "Nombre d'échecs MemoryAgent.recall (deadlock pgvector, OOM, etc.) (audit C6).",
@@ -315,12 +297,6 @@ class PrometheusMetricsRecorder:
     def record_event_bus_drop(self, topic: str) -> None:
         """Incrémente event_bus_drop_total{topic}."""
         self._event_bus_drop.labels(topic=topic).inc()
-
-    def record_persona_fallback(self, from_persona: str, to_persona: str) -> None:
-        """Incrémente persona_fallback_total{from,to}."""
-        self._persona_fallback.labels(
-            from_persona=from_persona, to_persona=to_persona,
-        ).inc()
 
     def record_memory_recall_failed(self, error_kind: str) -> None:
         """Incrémente memory_recall_failed_total{error_kind}."""

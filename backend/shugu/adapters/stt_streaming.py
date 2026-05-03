@@ -1,9 +1,7 @@
 """Streaming STT via faster-whisper + webrtcvad.
 
-Operator voice duplex flow:
-  client mic → 16kHz mono PCM frames (20ms each) → WebSocket → this module
-  → webrtcvad (voice activity detector) → accumulate speech → run Whisper
-  → final transcript (fed to HermesEmbodiedBrain)
+Provides FasterWhisperSTT for real-time PCM-16 transcription.
+Used by stt_livekit_adapter (LiveKit VIP-agent path) and vip_agent.py.
 
 MiniMax has no open ASR, so we run Whisper locally. `small` is the default
 because it handles French well (WER ~8-10%) while staying CPU-friendly for
@@ -12,7 +10,6 @@ cached for the process lifetime.
 
 VAD is used for turn segmentation (when is the operator done speaking?) and
 for barge-in detection (is the operator starting to speak while Shugu talks?).
-We keep the two uses separate — see voice_duplex.py for the state machine.
 """
 
 from __future__ import annotations

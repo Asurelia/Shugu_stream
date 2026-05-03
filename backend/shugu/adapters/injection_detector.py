@@ -28,7 +28,7 @@ _PATTERNS: tuple[tuple[str, re.Pattern[str], int], ...] = (
     ("role_play_attacker_fr", re.compile(r"\btu\s+es\s+(maintenant\s+)?(un\s+)?(shell|terminal|admin|root|sudo)", re.I), 5),
     ("act_as", re.compile(r"\bact\s+as\s+(a\s+)?(shell|terminal|sudo|root|hacker|jailbreak)", re.I), 4),
     ("system_prompt_leak", re.compile(r"\b(show|print|display|reveal|tell)\s+(me\s+)?(your|the)\s+(system\s+prompt|initial\s+instructions|training)", re.I), 4),
-    ("hermes_invocation", re.compile(r"\b(hermes|agent)\s+(run|execute|exécute|lance|launch)", re.I), 3),
+    ("agent_invocation", re.compile(r"\b(hermes|agent)\s+(run|execute|exécute|lance|launch)", re.I), 3),
     ("exec_keywords", re.compile(r"\b(rm\s+-rf|curl\s+.+\|.+sh|wget\s+.+\|.+sh|eval\s*\(|exec\s*\(|sudo\s+)", re.I), 4),
     ("tool_invocation", re.compile(r"</?(tool_use|function_call|execute|bash|shell)\b", re.I), 3),
     ("prompt_termination", re.compile(r"(\[\s*system\s*\]|<\s*system\s*>|\|endoftext\||<\|im_end\|>|<\|im_start\|>)", re.I), 4),

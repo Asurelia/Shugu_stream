@@ -7,8 +7,7 @@ un message texte. Appele en fallback quand `RegexFactExtractor` ne matche rien
 NB : cette classe **n'implemente pas** le `BrainAdapter` Protocol (`respond()`
 qui `yield BrainDelta` pour du streaming de texte). Le contrat ici est **strict
 JSON via tool_calls** — on force OpenAI-function-calling avec `tool_choice` fixe,
-et on lit `tool_calls[0].function.arguments`. Pattern inspire de
-`brain_hermes_tools.py:150-186`.
+et on lit `tool_calls[0].function.arguments`.
 
 Le plan appelle ce module "BrainAdapter dedie" par analogie (meme dossier
 `adapters/`, meme stack MiniMax, meme style de code), mais l'API publique

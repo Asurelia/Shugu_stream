@@ -32,9 +32,6 @@ class TestNullRecorderNewMethods:
     def test_record_event_bus_drop(self) -> None:
         get_null_recorder().record_event_bus_drop("stage")
 
-    def test_record_persona_fallback(self) -> None:
-        get_null_recorder().record_persona_fallback("hermes_public", "shugu")
-
     def test_record_memory_recall_failed(self) -> None:
         get_null_recorder().record_memory_recall_failed("RecallTimeout")
 
@@ -67,19 +64,6 @@ class TestEventBusDropCounter:
         text = recorder.generate_latest().decode()
         assert 'event_bus_drop_total{topic="stage"} 2' in text
         assert 'event_bus_drop_total{topic="world.delta"} 1' in text
-
-
-class TestPersonaFallbackCounter:
-    def test_increments_per_persona_pair(
-        self, recorder: PrometheusMetricsRecorder
-    ) -> None:
-        recorder.record_persona_fallback("hermes_public", "shugu")
-
-        text = recorder.generate_latest().decode()
-        assert (
-            'persona_fallback_total{from_persona="hermes_public",'
-            'to_persona="shugu"} 1'
-        ) in text
 
 
 class TestMemoryRecallFailedCounter:

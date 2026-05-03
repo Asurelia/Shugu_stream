@@ -1,6 +1,6 @@
-"""Body control schemas — the typed vocabulary Hermes uses to drive Shugu.
+"""Body control schemas — the typed vocabulary an LLM agent uses to drive Shugu.
 
-These are the ONLY tool calls Hermes can emit in embodied mode. Anything
+These are the ONLY tool calls the LLM can emit in embodied mode. Anything
 outside these names is treated as a hallucination and silently dropped +
 logged. Whitelists for clip/scene/expression values live right here so the
 schema is self-describing (Pydantic `Literal` constraints are enforced by
@@ -8,11 +8,11 @@ the model at parse time, before we even touch the event bus).
 
 Design rules:
   • Single responsibility per call. `body.say` only speaks; it doesn't move.
-    If Hermes wants to wave while speaking, it emits `body.say` AND
+    If the LLM wants to wave while speaking, it emits `body.say` AND
     `body.gesture` as separate calls — the router dispatches them in the
     order received, the picker serializes them, the client plays in order.
   • Every arg is validated (length, enum, bounds). Invalid → 422-style
-    rejection surfaced back to Hermes as the tool_result so it can correct.
+    rejection surfaced back to the LLM as the tool_result so it can correct.
   • No free-form params. Avoids injection via cleverly-crafted strings.
 """
 
@@ -171,165 +171,6 @@ class BodyShotCall(BaseModel):
         return _validate_slug(v, "shot")
 
 
-# ─── Desktop (virtual surface) calls ─────────────────────────────────────────
-
-WINDOW_KINDS: frozenset[str] = frozenset({"text", "markdown", "code", "image", "note"})
-DESKTOP_LAYOUTS: frozenset[str] = frozenset({"grid", "focus", "minimize_all", "tile_right"})
-HERMES_HUD_TABS: frozenset[str] = frozenset({
-    "overview", "memory", "skills", "tools", "projects",
-    "health", "growth", "corrections", "cron",
-})
-# Keep window names tame: alphanumeric + a few separators, no paths or weird chars.
-_WINDOW_NAME_RE = re.compile(r"^[A-Za-z0-9 _.\-]{1,64}$")
-
-# Substrings that should never appear in a public-facing window name. Matched
-# case-insensitively on the full string. Deliberately conservative — we'd
-# rather reject a few harmless names than leak one sensitive filename on
-# the public stage.
-_SENSITIVE_NAME_TOKENS: tuple[str, ...] = (
-    ".env", "credentials", "secret", "password", "passwd",
-    "private_key", "privatekey", "id_rsa", "id_ed25519", "id_ecdsa",
-    "api_key", "apikey", "access_key", "access-key", "authkey",
-    "token", "bearer", ".pem", ".key", ".pfx", ".p12", ".kdbx",
-    "wallet", "seed_phrase", "seedphrase", "mnemonic",
-    ".git", "shadow", "htpasswd", "kubeconfig", ".ssh",
-)
-
-
-def _check_public_safe_name(v: str) -> str:
-    """Reject file_names that would leak sensitive paths to the public stage.
-
-    Rules (all must pass):
-      1. Length 1..64, ASCII-only subset via `_WINDOW_NAME_RE`.
-      2. Does not contain any blacklisted substring (case-insensitive).
-      3. Does not start with a dot (hidden-file convention).
-      4. Does not contain ".." (path traversal via relative paths).
-      5. Does not contain a forward slash — the regex already covers this,
-         but we assert explicitly for defence-in-depth.
-    """
-    if not _WINDOW_NAME_RE.match(v):
-        raise ValueError(
-            "file_name must be 1-64 chars (letters, digits, space, underscore, dot, dash)"
-        )
-    if v.startswith("."):
-        raise ValueError(f"file_name '{v}' starts with '.' — hidden/sensitive names rejected")
-    if ".." in v:
-        raise ValueError(f"file_name '{v}' contains '..' — traversal-style names rejected")
-    if "/" in v or "\\" in v:
-        raise ValueError(f"file_name '{v}' contains path separator")
-    low = v.lower()
-    for bad in _SENSITIVE_NAME_TOKENS:
-        if bad in low:
-            raise ValueError(f"file_name '{v}' looks sensitive — public path rejected")
-    return v
-
-
-class DesktopOpenFileCall(BaseModel):
-    """Open (or re-focus) a window with the given name/content."""
-    name: Literal["desktop.open_file"] = "desktop.open_file"
-    file_name: str = Field(min_length=1, max_length=64)
-    kind: str = "text"
-    initial_content: Optional[str] = Field(default=None, max_length=20_000)
-    language: Optional[str] = Field(default=None, max_length=32)   # for code kind
-
-    @field_validator("file_name")
-    @classmethod
-    def _valid_name(cls, v: str) -> str:
-        return _check_public_safe_name(v)
-
-    @field_validator("kind")
-    @classmethod
-    def _valid_kind(cls, v: str) -> str:
-        if v not in WINDOW_KINDS:
-            raise ValueError(f"kind '{v}' not in {sorted(WINDOW_KINDS)}")
-        return v
-
-
-class DesktopEditFileCall(BaseModel):
-    """Patch a window's content: either find/replace or append-at-end."""
-    name: Literal["desktop.edit_file"] = "desktop.edit_file"
-    file_name: str = Field(min_length=1, max_length=64)
-    find: Optional[str] = Field(default=None, max_length=2000)
-    replace: Optional[str] = Field(default=None, max_length=10_000)
-    append: Optional[str] = Field(default=None, max_length=10_000)
-
-    @field_validator("file_name")
-    @classmethod
-    def _valid_name(cls, v: str) -> str:
-        return _check_public_safe_name(v)
-
-
-class DesktopCloseFileCall(BaseModel):
-    name: Literal["desktop.close_file"] = "desktop.close_file"
-    file_name: str = Field(min_length=1, max_length=64)
-
-
-class DesktopShowImageCall(BaseModel):
-    """Display an image by URL (must be HTTPS or a relative public path)."""
-    name: Literal["desktop.show_image"] = "desktop.show_image"
-    url: str = Field(min_length=1, max_length=500)
-    fit: str = "contain"
-    caption: Optional[str] = Field(default=None, max_length=200)
-
-    @field_validator("url")
-    @classmethod
-    def _valid_url(cls, v: str) -> str:
-        v = v.strip()
-        if v.startswith("http://"):
-            raise ValueError("url must be https:// or a relative public path")
-        if not (v.startswith("https://") or v.startswith("/")):
-            raise ValueError("url must be https:// or a relative public path")
-        return v
-
-    @field_validator("fit")
-    @classmethod
-    def _valid_fit(cls, v: str) -> str:
-        if v not in {"contain", "cover", "fullscreen"}:
-            raise ValueError(f"fit '{v}' must be contain|cover|fullscreen")
-        return v
-
-
-class DesktopArrangeCall(BaseModel):
-    name: Literal["desktop.arrange"] = "desktop.arrange"
-    layout: str
-
-    @field_validator("layout")
-    @classmethod
-    def _valid_layout(cls, v: str) -> str:
-        if v not in DESKTOP_LAYOUTS:
-            raise ValueError(f"layout '{v}' not in {sorted(DESKTOP_LAYOUTS)}")
-        return v
-
-
-class DesktopShowHermesStateCall(BaseModel):
-    """Open the Hermes consciousness HUD window."""
-    name: Literal["desktop.show_hermes_state"] = "desktop.show_hermes_state"
-    tab: Optional[str] = None
-    view: Optional[str] = "native"
-
-    @field_validator("tab")
-    @classmethod
-    def _valid_tab(cls, v: Optional[str]) -> Optional[str]:
-        if v is None:
-            return v
-        if v not in HERMES_HUD_TABS:
-            raise ValueError(f"tab '{v}' not in {sorted(HERMES_HUD_TABS)}")
-        return v
-
-    @field_validator("view")
-    @classmethod
-    def _valid_view(cls, v: Optional[str]) -> Optional[str]:
-        if v is None:
-            return v
-        if v not in {"native", "terminal"}:
-            raise ValueError("view must be native|terminal")
-        return v
-
-
-class DesktopHideHermesStateCall(BaseModel):
-    name: Literal["desktop.hide_hermes_state"] = "desktop.hide_hermes_state"
-
-
 # ─── Chat (texte curé v4 Phase 1) ────────────────────────────────────────────
 # Shugu appelle chat.post() uniquement quand elle veut afficher un message
 # TEXTE dans le chat visiteur : rappels, liens, sponsors. Pas pour sous-titrer
@@ -357,13 +198,6 @@ BodyControlCall = Annotated[
         BodyMoodCall,
         BodyEmoteCall,
         BodyShotCall,
-        DesktopOpenFileCall,
-        DesktopEditFileCall,
-        DesktopCloseFileCall,
-        DesktopShowImageCall,
-        DesktopArrangeCall,
-        DesktopShowHermesStateCall,
-        DesktopHideHermesStateCall,
         ChatPostCall,
     ],
     Field(discriminator="name"),
@@ -373,9 +207,6 @@ BodyControlCall = Annotated[
 KNOWN_NAMES: frozenset[str] = frozenset({
     "body.say", "body.gesture", "body.scene", "body.look_at",
     "body.expression", "body.mood", "body.emote", "body.shot",
-    "desktop.open_file", "desktop.edit_file", "desktop.close_file",
-    "desktop.show_image", "desktop.arrange",
-    "desktop.show_hermes_state", "desktop.hide_hermes_state",
     "chat.post",
 })
 
@@ -401,14 +232,7 @@ def parse_call(name: str, args: dict) -> BodyControlCall:
         "body.mood":       BodyMoodCall,
         "body.emote":      BodyEmoteCall,
         "body.shot":       BodyShotCall,
-        "desktop.open_file":         DesktopOpenFileCall,
-        "desktop.edit_file":         DesktopEditFileCall,
-        "desktop.close_file":        DesktopCloseFileCall,
-        "desktop.show_image":        DesktopShowImageCall,
-        "desktop.arrange":           DesktopArrangeCall,
-        "desktop.show_hermes_state": DesktopShowHermesStateCall,
-        "desktop.hide_hermes_state": DesktopHideHermesStateCall,
-        "chat.post":                 ChatPostCall,
+        "chat.post":       ChatPostCall,
     }
     return mapping[name].model_validate(payload)
 
@@ -466,7 +290,7 @@ async def openai_tools_schema(
 
     `registry` optionnel : si fourni, les enums dynamiques (gesture) sont
     construits depuis la DB `asset_registry` au lieu du frozenset fallback.
-    Permet d'ajouter un gesture via l'admin UI et Hermes le verra au prochain
+    Permet d'ajouter un gesture via l'admin UI et le LLM le verra au prochain
     appel, sans redéploiement.
 
     `allowed_names` optionnel (v4 Phase 3a) : si fourni, la liste retournée
@@ -606,114 +430,6 @@ async def openai_tools_schema(
                     "properties": {"shot": {"type": "string", "enum": shot_enum}},
                     "required": ["shot"],
                 },
-            },
-        },
-        # ─── Desktop / virtual surface tools ─────────────────────────────────
-        {
-            "type": "function",
-            "function": {
-                "name": "desktop.open_file",
-                "description": (
-                    "Open (or re-focus) a window on the virtual desktop with a file. "
-                    "Use this to show code, a poem, a note, a snippet — anything textual you "
-                    "want the audience to SEE in addition to hearing. No paths, no sensitive names."
-                ),
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "file_name": {"type": "string", "description": "Short safe name (1-64 chars)."},
-                        "kind": {"type": "string", "enum": sorted(WINDOW_KINDS)},
-                        "initial_content": {"type": "string"},
-                        "language": {"type": "string", "description": "For kind=code, e.g. 'python', 'markdown'."},
-                    },
-                    "required": ["file_name"],
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "desktop.edit_file",
-                "description": (
-                    "Edit an open window's content. Provide either {find, replace} for a "
-                    "targeted patch, or {append} to add text at the end."
-                ),
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "file_name": {"type": "string"},
-                        "find": {"type": "string"},
-                        "replace": {"type": "string"},
-                        "append": {"type": "string"},
-                    },
-                    "required": ["file_name"],
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "desktop.close_file",
-                "description": "Close a window on the virtual desktop.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {"file_name": {"type": "string"}},
-                    "required": ["file_name"],
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "desktop.show_image",
-                "description": "Show an image on the virtual desktop. URL must be https or a relative public path.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "url": {"type": "string"},
-                        "fit": {"type": "string", "enum": ["contain", "cover", "fullscreen"]},
-                        "caption": {"type": "string"},
-                    },
-                    "required": ["url"],
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "desktop.arrange",
-                "description": "Apply a layout preset to the virtual desktop.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {"layout": {"type": "string", "enum": sorted(DESKTOP_LAYOUTS)}},
-                    "required": ["layout"],
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "desktop.show_hermes_state",
-                "description": (
-                    "Open the Hermes consciousness HUD window — shows memory, skills, "
-                    "tools, projects. Useful to give the audience a peek at what's "
-                    "happening inside the agent."
-                ),
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "tab": {"type": "string", "enum": sorted(HERMES_HUD_TABS)},
-                        "view": {"type": "string", "enum": ["native", "terminal"]},
-                    },
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "desktop.hide_hermes_state",
-                "description": "Close the Hermes HUD window.",
-                "parameters": {"type": "object", "properties": {}},
             },
         },
         {

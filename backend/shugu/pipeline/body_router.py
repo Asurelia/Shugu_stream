@@ -1,6 +1,6 @@
 """Body tool-call dispatcher.
 
-Takes validated `BodyControlCall` instances from HermesEmbodiedBrain and
+Takes validated `BodyControlCall` instances from the LLM agent brain and
 routes each one to the right subsystem:
 
   body.say        → enqueue QueuedMessage on the ready queue (picker streams TTS)
@@ -18,9 +18,9 @@ additive/overrides, not performances. Only `body.say`, `body.gesture` and
 `body.emote` occupy the serial Picker stage because they produce a visible/
 audible event that needs to be sequenced against chat.
 
-Every dispatch returns a dict suitable for feeding back to Hermes as the
+Every dispatch returns a dict suitable for feeding back to the LLM as the
 tool_result (MiniMax expects `role=tool` with content=[{name,type,text}]).
-The caller (brain_hermes_tools) wraps it accordingly.
+The caller (brain tools layer) wraps it accordingly.
 """
 
 from __future__ import annotations
@@ -43,13 +43,6 @@ from ..core.body_control import (
     BodySceneCall,
     BodyShotCall,
     ChatPostCall,
-    DesktopArrangeCall,
-    DesktopCloseFileCall,
-    DesktopEditFileCall,
-    DesktopHideHermesStateCall,
-    DesktopOpenFileCall,
-    DesktopShowHermesStateCall,
-    DesktopShowImageCall,
 )
 from ..core.identity import Identity, OperatorIdentity
 from ..core.protocols import EventBus
@@ -107,7 +100,7 @@ class BodyRouter:
                 "hint": "VIP sessions use a reduced toolset (no public-stage tools).",
             }
 
-        # Rate limit — surface rejections back to Hermes as a tool_result so
+        # Rate limit — surface rejections back to the LLM as a tool_result so
         # the model can back off without crashing the stream.
         rl = self._deps.rate_limiter
         if rl is not None:
@@ -122,10 +115,7 @@ class BodyRouter:
                 }
         metrics = self._deps.metrics
         if metrics is not None:
-            if name.startswith("desktop."):
-                metrics.record_desktop()
-            else:
-                metrics.record_body()
+            metrics.record_body()
 
         try:
             if isinstance(call, BodySayCall):
@@ -144,21 +134,6 @@ class BodyRouter:
                 return await self._shot(call)
             if isinstance(call, BodyMoodCall):
                 return self._mood(call)
-            # Desktop — all broadcast direct on the stage topic, state lives on the client.
-            if isinstance(call, DesktopOpenFileCall):
-                return await self._desktop_open(call)
-            if isinstance(call, DesktopEditFileCall):
-                return await self._desktop_edit(call)
-            if isinstance(call, DesktopCloseFileCall):
-                return await self._desktop_close(call)
-            if isinstance(call, DesktopShowImageCall):
-                return await self._desktop_show_image(call)
-            if isinstance(call, DesktopArrangeCall):
-                return await self._desktop_arrange(call)
-            if isinstance(call, DesktopShowHermesStateCall):
-                return await self._desktop_show_hermes_state(call)
-            if isinstance(call, DesktopHideHermesStateCall):
-                return await self._desktop_hide_hermes_state(call)
             # Chat texte — publie sur le topic `stage` directement (pas de queue).
             if isinstance(call, ChatPostCall):
                 return await self._chat_post(call)
@@ -175,8 +150,8 @@ class BodyRouter:
         identity: Identity,
         priority_tier: int,
     ) -> dict:
-        # Allow Hermes to include inline [emotion] and [scene=X] tags in the
-        # text — we extract them so they don't leak into TTS. Explicit call
+        # Allow the LLM agent to include inline [emotion] and [scene=X] tags in
+        # the text — we extract them so they don't leak into TTS. Explicit call
         # fields win over inline tags on conflict.
         emotion, after_emotion = extract_emotion(call.text)
         clean_text, inline_tags = extract_tags(after_emotion)
@@ -295,77 +270,6 @@ class BodyRouter:
         task.add_done_callback(self._mood_tasks.discard)  # type: ignore[attr-defined]
         log.info("body.mood", mood=call.mood)
         return {"ok": True, "effect": "mood set", "mood": call.mood}
-
-    # ─── Desktop (virtual surface) — direct stage events, state on client ───
-
-    async def _desktop_open(self, call: DesktopOpenFileCall) -> dict:
-        await self._deps.event_bus.publish("stage", {
-            "type": "desktop.window_open",
-            "file_name": call.file_name,
-            "kind": call.kind,
-            "initial_content": call.initial_content or "",
-            "language": call.language or "",
-        })
-        log.info("desktop.open_file", file_name=call.file_name, kind=call.kind,
-                 chars=len(call.initial_content or ""))
-        return {"ok": True, "effect": "window opened", "file_name": call.file_name}
-
-    async def _desktop_edit(self, call: DesktopEditFileCall) -> dict:
-        # At least one of (find/replace pair) or append must be provided.
-        if call.append is None and (call.find is None or call.replace is None):
-            return {"ok": False, "error": "edit_file needs {find, replace} or {append}"}
-        await self._deps.event_bus.publish("stage", {
-            "type": "desktop.file_edit",
-            "file_name": call.file_name,
-            "find": call.find,
-            "replace": call.replace,
-            "append": call.append,
-        })
-        log.info("desktop.edit_file", file_name=call.file_name,
-                 mode="append" if call.append is not None else "patch")
-        return {"ok": True, "effect": "edit broadcast"}
-
-    async def _desktop_close(self, call: DesktopCloseFileCall) -> dict:
-        await self._deps.event_bus.publish("stage", {
-            "type": "desktop.window_close",
-            "file_name": call.file_name,
-        })
-        log.info("desktop.close_file", file_name=call.file_name)
-        return {"ok": True, "effect": "window closed"}
-
-    async def _desktop_show_image(self, call: DesktopShowImageCall) -> dict:
-        await self._deps.event_bus.publish("stage", {
-            "type": "desktop.image_show",
-            "url": call.url,
-            "fit": call.fit,
-            "caption": call.caption or "",
-        })
-        log.info("desktop.show_image", url=call.url, fit=call.fit)
-        return {"ok": True, "effect": "image broadcast"}
-
-    async def _desktop_arrange(self, call: DesktopArrangeCall) -> dict:
-        await self._deps.event_bus.publish("stage", {
-            "type": "desktop.arrange",
-            "layout": call.layout,
-        })
-        log.info("desktop.arrange", layout=call.layout)
-        return {"ok": True, "effect": "layout applied"}
-
-    async def _desktop_show_hermes_state(self, call: DesktopShowHermesStateCall) -> dict:
-        await self._deps.event_bus.publish("stage", {
-            "type": "hermes_state.window_open",
-            "tab": call.tab or "overview",
-            "view": call.view or "native",
-        })
-        log.info("desktop.show_hermes_state", tab=call.tab, view=call.view)
-        return {"ok": True, "effect": "hermes hud broadcast", "tab": call.tab}
-
-    async def _desktop_hide_hermes_state(self, call: DesktopHideHermesStateCall) -> dict:
-        await self._deps.event_bus.publish("stage", {
-            "type": "hermes_state.window_close",
-        })
-        log.info("desktop.hide_hermes_state")
-        return {"ok": True, "effect": "hermes hud closed"}
 
     # ─── Chat (texte curé v4 Phase 1) ───────────────────────────────────────
 

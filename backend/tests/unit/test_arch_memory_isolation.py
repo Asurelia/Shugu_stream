@@ -32,7 +32,6 @@ import pathlib
 _SCOPED_BRAIN_PREFIXES = (
     "brain_shugu",
     "brain_filter",
-    "brain_hermes",
     "brain_director",
 )
 
