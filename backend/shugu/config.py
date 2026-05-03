@@ -79,7 +79,7 @@ class Settings(BaseSettings):
     livekit_api_key: str = ""       # LK API key (dashboard LiveKit/self-hosted)
     livekit_api_secret: str = ""    # LK API secret
 
-    # LLM (Shugu + FilterBrain share the MiniMax account; can diverge later)
+    # LLM (Shugu shares the MiniMax account; can diverge later)
     minimax_api_key: str = ""
     minimax_base_url: str = "https://api.minimax.io/v1"
     minimax_model: str = "minimax-m2.7"
@@ -100,20 +100,8 @@ class Settings(BaseSettings):
     tts_primary: str = "minimax"   # minimax | elevenlabs | edge
     # When True, the Picker streams chunks directly from the primary TTS
     # while broadcasting (lowers first-audio latency from ~4s to ~800ms).
-    # PrepWorker skips pre-synthesis and enqueues the text instead. The blob
-    # path is still available for legacy callers (hermes_task ACK) that want
-    # the audio ready before enqueue.
+    # PrepWorker skips pre-synthesis and enqueues the text instead.
     tts_streaming: bool = True
-
-    # Hermes bridge
-    hermes_api_key: str = ""
-    hermes_base_url: str = "http://127.0.0.1:8642"
-    hermes_task_timeout_s: int = 300
-    # When True, operator 'hermes' mode runs the embodied-tool loop (Hermes
-    # controls Shugu's body directly via body.* tool_calls over MiniMax M2.7).
-    # When False, falls back to the legacy delegation flow (Hermes produces
-    # raw output → FilterBrain summarizes → Shugu narrates).
-    hermes_embodied: bool = True
 
     # Storage
     shugu_postgres_dsn: str = "postgresql+asyncpg://openclaw@localhost/shugu"
@@ -248,8 +236,6 @@ class Settings(BaseSettings):
     personality_dir: str = "/home/openclaw/shugu/backend/shugu/personalities"
     personality_reload_poll_s: int = 5
 
-    # Voice duplex (phase 5) — operator mic → STT → Hermes → TTS → operator + viewers
-    voice_duplex_enabled: bool = True
     # faster-whisper model: tiny | base | small | medium | large-v3.
     #
     # Default `base` is tuned for Hostinger KVM 2 (2 vCPU, 8 GB RAM):

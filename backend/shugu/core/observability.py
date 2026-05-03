@@ -25,7 +25,7 @@ class RateRule:
     window_s: float
 
 
-# Default rules per body.*/desktop.* tool. Conservative — Hermes can still do
+# Default rules per body.* tool. Conservative — the LLM agent can still do
 # plenty of work per minute, just not 50 scene changes in 3s.
 DEFAULT_RULES: dict[str, RateRule] = {
     "body.say":                  RateRule(max_calls=30, window_s=60),
@@ -36,13 +36,6 @@ DEFAULT_RULES: dict[str, RateRule] = {
     "body.mood":                 RateRule(max_calls=10, window_s=60),
     "body.emote":                RateRule(max_calls=25, window_s=60),
     "body.shot":                 RateRule(max_calls=10, window_s=60),
-    "desktop.open_file":         RateRule(max_calls=15, window_s=60),
-    "desktop.edit_file":         RateRule(max_calls=80, window_s=60),  # char-by-char appends add up
-    "desktop.close_file":        RateRule(max_calls=15, window_s=60),
-    "desktop.show_image":        RateRule(max_calls=8,  window_s=60),
-    "desktop.arrange":           RateRule(max_calls=6,  window_s=60),
-    "desktop.show_hermes_state": RateRule(max_calls=6,  window_s=60),
-    "desktop.hide_hermes_state": RateRule(max_calls=6,  window_s=60),
 }
 
 

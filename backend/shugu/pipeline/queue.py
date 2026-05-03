@@ -16,7 +16,7 @@ from ulid import ULID
 @dataclass(slots=True)
 class QueuedMessage:
     msg_id: str
-    route: Literal["shugu_persona", "shugu_filtered", "hermes_delegation"]
+    route: Literal["shugu_persona", "shugu_filtered"]
     text: str
     author_role: Literal["visitor", "operator", "system"]
     author_ip_hash: Optional[str]
@@ -25,7 +25,7 @@ class QueuedMessage:
     received_ns: int
     priority_tier: int = 1                 # 0=operator, 1=visitor
     # For `shugu_filtered` messages the original command is replaced by the filter
-    # output; the raw Hermes output lives in Redis temporarily but is NOT carried here.
+    # output; the raw upstream LLM output lives in Redis temporarily but is NOT carried here.
     precomputed_audio: bytes = field(default=b"")
     precomputed_emotion: str = "neutral"
     precomputed_duration_ms: int = 0

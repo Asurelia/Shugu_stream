@@ -11,15 +11,11 @@ import redis.asyncio as aioredis
 import structlog
 from fastapi import FastAPI
 
-from .adapters.brain_filter import FilterBrain
-
 # Phase 8.2 — observability foundation (Prometheus metrics + structlog JSON)
-from .adapters.brain_hermes_tools import HermesEmbodiedBrain
 from .adapters.brain_shugu import ShuguPersonaBrain
 from .adapters.moderation_basic import BasicModeration
 from .adapters.personality_loader import MarkdownPersonalityLoader
 from .adapters.smtp_resend import EmailSender, NullSender, ResendSender
-from .adapters.stt_streaming import FasterWhisperSTT, STTSettings
 from .adapters.tts_edge import EdgeTTS
 from .adapters.tts_elevenlabs import ElevenLabsTTS
 from .adapters.tts_fallback import FallbackTTS
@@ -52,10 +48,8 @@ from .routes import (
     auth,
     editor_ws,
     health,
-    hermes_state_api,
     internal_vip,
     livekit_api,
-    operator_voice_ws,
     operator_ws,
     registry_api,
     scene_composer_api,
@@ -242,8 +236,6 @@ async def lifespan(app: FastAPI):
         # au moment de chaque call (hot-reload sans restart possible).
         persona_state_provider=lambda: getattr(app.state, "persona_state", None),
     )
-    filter_brain = FilterBrain(settings, personality_loader, http)
-
     # TTS with automatic fallback. Primary configurable via TTS_PRIMARY.
     # Quota tracker wired to MiniMax so a depleted daily budget triggers
     # fallback to Edge-TTS instead of silently killing the stream.
@@ -350,16 +342,6 @@ async def lifespan(app: FastAPI):
         queue=queue, event_bus=event_bus, settings=settings, ambient=ambient,
         rate_limiter=_rate_limiter, metrics=_metrics,
     ))
-    hermes_embodied = HermesEmbodiedBrain(
-        settings, http, personality_loader, body_router,
-        metrics=_prom_recorder,
-    )
-    stt = FasterWhisperSTT(STTSettings(
-        model_name=settings.stt_model,
-        compute_type=settings.stt_compute_type,
-        device=settings.stt_device,
-        language=settings.stt_language,
-    )) if settings.voice_duplex_enabled else None
 
     # VIP bridge — Phase 1 Brique 1.2. Le router /internal/vip/* permet au
     # process vip_agent (Worker LiveKit Agents séparé) d'émettre des events et
@@ -375,9 +357,9 @@ async def lifespan(app: FastAPI):
     ))
     operator_ws.set_deps(operator_ws.OpWSDeps(
         event_bus=event_bus, moderation=moderation, queue=queue, settings=settings,
-        redis=_redis, http=http, tts=tts, filter_brain=filter_brain,
+        redis=_redis, http=http, tts=tts,
         viewer_counter=viewer_counter, ambient=ambient,
-        body_router=body_router, hermes_embodied=hermes_embodied,
+        body_router=body_router,
     ))
     # Scene Editor WS — Phase D. Broadcast-only collab (pas de persistence
     # nouvelle : les drafts passent toujours par `/api/scene-editor/scenes/
@@ -394,14 +376,6 @@ async def lifespan(app: FastAPI):
         event_bus=event_bus, settings=settings, redis=_redis,
         world_store=None,
     ))
-    if stt is not None:
-        operator_voice_ws.set_deps(operator_voice_ws.VoiceWSDeps(
-            settings=settings, redis=_redis, picker=picker,
-            stt=stt, hermes_embodied=hermes_embodied, metrics=_metrics,
-            # Mémoire PR 2 — bus pour publier sense.raw sur le transcript STT.
-            event_bus=event_bus,
-        ))
-
     # Director workers (Phase E3) — registry tag_name -> Worker injecté avec le bus.
     # Utilisé par l'orchestrator E2 pour dispatcher les tags inline vers les workers
     # déterministes (outfit, vfx, anim, face, say_emotion, camera, scene).
@@ -657,7 +631,6 @@ def create_app() -> FastAPI:
     app.include_router(scene_editor_api.router)  # /api/scene-editor/* — Phase C drafts/patterns/layouts/timeline
     app.include_router(scene_composer_api.router)  # /api/scene-composer/* — Phase E5.1 authored scenes + play
     app.include_router(assets_catalog_api.router)  # /api/assets/catalog — Phase E5.1 unified catalog
-    app.include_router(hermes_state_api.router)
     app.include_router(visitor_ws.router)
     app.include_router(operator_ws.router)
     app.include_router(editor_ws.router)   # /ws/editor — Phase D collab
@@ -667,12 +640,7 @@ def create_app() -> FastAPI:
     # pas de risque de surface d'attaque en prod. L'inclusion inconditionnelle
     # permet au processus de démarrer sans connaître le flag au boot.
     app.include_router(test_director_api.router)
-    # Only mount the voice-duplex route when the feature is enabled, otherwise
-    # the route would accept WS upgrades but the handler's `_deps` would still
-    # be None → assertion crash on first connect. Cleaner to 404 the upgrade.
     settings = get_settings()
-    if settings.voice_duplex_enabled:
-        app.include_router(operator_voice_ws.router)
 
     # ── Phase 8.2 — observability ──────────────────────────────────────────
     # Endpoint GET /metrics exposant les métriques Prometheus (texte 0.0.4).

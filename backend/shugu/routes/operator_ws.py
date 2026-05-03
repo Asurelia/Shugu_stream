@@ -1,9 +1,8 @@
 """Operator WebSocket endpoint.
 
-Accepts visitor chat.send format with an optional `target: "shugu"|"hermes"`.
-- target="shugu" (default): same flow as visitor, but priority=0 (jumps queue).
-- target="hermes": spawns a detached delegation task. The operator's message is
-  NOT broadcast; only Shugu's ACK + filtered output are broadcast.
+Accepts chat.send frames. Operator messages jump the queue (priority=0).
+The `target` field is accepted but only "shugu" is active; the hermes
+delegation path has been removed.
 """
 from __future__ import annotations
 
@@ -33,16 +32,6 @@ from ..senses.types import SenseEvent
 router = APIRouter()
 log = structlog.get_logger(__name__)
 
-# Strong refs on fire-and-forget tasks so CPython's weak-ref GC doesn't drop
-# them mid-execution (hermes delegation / embodied run can take seconds).
-_bg_tasks: set["asyncio.Task"] = set()
-
-
-def _spawn_bg(coro, *, name: str) -> None:
-    task = asyncio.create_task(coro, name=name)
-    _bg_tasks.add(task)
-    task.add_done_callback(_bg_tasks.discard)
-
 
 @dataclass(slots=True)
 class OpWSDeps:
@@ -53,11 +42,9 @@ class OpWSDeps:
     redis: "object"
     http: "object"
     tts: "object"
-    filter_brain: "object"
     viewer_counter: "object" = None
     ambient: "object" = None          # AmbientDaemon
     body_router: "object" = None      # BodyRouter
-    hermes_embodied: "object" = None  # HermesEmbodiedBrain
 
 
 _deps: Optional[OpWSDeps] = None
@@ -99,7 +86,6 @@ async def operator_ws(
     )
     log.info("operator.connect", username=identity.username, session_id=identity.session_id)
 
-    import asyncio
     stage_task = asyncio.create_task(_stream_stage(ws))
     if _deps.viewer_counter:
         await _deps.viewer_counter.inc()
@@ -167,7 +153,7 @@ async def _handle_operator_message(
         _deps.ambient.mark_human_input()
 
     # Mémoire PR 2 — publish sense.raw pour l'opérateur, indépendamment du
-    # target (shugu ou hermes). L'input texte est un sens, peu importe son
+    # target. L'input texte est un sens, peu importe son
     # routing aval. Subject normalisé en lowercase via make_operator_subject
     # (cohérent avec wiring.py publish_chat_trigger qui lowercase aussi le
     # sender). No-op si memory_enabled=False. Choix await (cf. retour
@@ -186,8 +172,8 @@ async def _handle_operator_message(
     )
 
     # L1.3 — publie aussi sur sense.chat pour l'AgentRunner (streamer IA).
-    # Appelé avant le branch target=hermes/shugu : le sens (ce que dit l'opérateur)
-    # est capturé indépendamment de la destination aval. Inconditionnnel : pas
+    # Le sens (ce que dit l'opérateur) est capturé indépendamment du routing
+    # aval. Inconditionnel : pas
     # de gate sur streamer_agent_enabled côté publisher (anti-pattern).
     await publish_sense_event(
         bus=_deps.event_bus,
@@ -199,89 +185,7 @@ async def _handle_operator_message(
         ),
     )
 
-    if target == "hermes":
-        # Embodied path: Hermes drives Shugu's body directly via tool_calls.
-        if _deps.settings.hermes_embodied and _deps.hermes_embodied is not None:
-            # Audit Pass 2 review (Sprint 5 follow-up) : `run_once` raise
-            # désormais BrainError sur LLM failure (P1.B5). Lancée via
-            # `_spawn_bg` (asyncio.create_task fire-and-forget), une exception
-            # non gérée crash silencieusement la task et l'opérateur ne reçoit
-            # que l'ACK initial. On wrap dans une coro locale qui catch +
-            # envoie un event `hermes_task.failed` au client pour qu'il puisse
-            # afficher "Hermes en panne" plutôt qu'attendre indéfiniment.
-            from ..core.errors import BrainError as _BrainError
-
-            async def _run_with_failure_event() -> None:
-                try:
-                    await _deps.hermes_embodied.run_once(  # type: ignore[union-attr]
-                        text, identity=identity, priority_tier=0,
-                    )
-                except _BrainError as exc:
-                    log.warning(
-                        "operator.hermes_embodied_brain_error",
-                        username=identity.username, error=str(exc),
-                    )
-                    try:
-                        await ws.send_text(json.dumps({
-                            "type": "hermes_task.failed",
-                            "nonce": nonce,
-                            "reason": "brain_failed",
-                            "detail": str(exc),
-                        }))
-                    except Exception as send_exc:
-                        log.debug(
-                            "operator.hermes_failure_event_send_failed",
-                            error=str(send_exc),
-                        )
-                except Exception as exc:
-                    log.exception(
-                        "operator.hermes_embodied_unexpected_error",
-                        username=identity.username, error=str(exc),
-                    )
-                    try:
-                        await ws.send_text(json.dumps({
-                            "type": "hermes_task.failed",
-                            "nonce": nonce,
-                            "reason": "hermes_unexpected",
-                            "detail": str(exc),
-                        }))
-                    except Exception:
-                        pass
-
-            _spawn_bg(
-                _run_with_failure_event(),
-                name=f"hermes_embodied:{identity.username}",
-            )
-            await ws.send_text(json.dumps({
-                "type": "hermes_task.acknowledged",
-                "nonce": nonce,
-                "eta_estimate_s": 3,
-                "mode": "embodied",
-            }))
-            log.info("operator.hermes_embodied", username=identity.username, text_len=len(text))
-            return
-
-        # Legacy delegation path: Hermes produces raw, FilterBrain summarizes.
-        from ..pipeline.hermes_task import delegate_to_hermes
-        _spawn_bg(delegate_to_hermes(
-            settings=_deps.settings,
-            http=_deps.http,
-            identity=identity,
-            instruction=text,
-            tts=_deps.tts,
-            filter_brain=_deps.filter_brain,
-            queue=_deps.queue,
-        ), name=f"hermes_task:{identity.username}")
-        await ws.send_text(json.dumps({
-            "type": "hermes_task.acknowledged",
-            "nonce": nonce,
-            "eta_estimate_s": 10,
-            "mode": "delegation",
-        }))
-        log.info("operator.hermes_delegation", username=identity.username, text_len=len(text))
-        return
-
-    # target == "shugu" — same flow as visitor, priority=0
+    # Route to shugu — same flow as visitor, priority=0
     msg = QueuedMessage(
         msg_id=new_msg_id(),
         route="shugu_persona",
