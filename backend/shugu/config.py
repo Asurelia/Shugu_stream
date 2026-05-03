@@ -91,10 +91,40 @@ class Settings(BaseSettings):
     llm_n_gpu_layers: int = 99  # full GPU offload (Vulkan AMD 7800 XT)
     llm_n_ctx: int = 8192  # context window (8k default, model supports 262k)
     llm_flash_attn: bool = True  # flash attention (reduces VRAM ~10%)
-    whisper_bin: str = ""  # path to whisper-cli.exe (or main.exe for older builds)
-    whisper_model: str = ""  # path to ggml-small.bin
-    piper_bin: str = ""  # path to piper.exe
-    piper_voice: str = ""  # path to fr_FR-siwis-medium.onnx
+    # Voice realtime Sprint B -- local binary paths (DUR-5 decisions).
+    # Defaults = dev machine paths (Windows user). Never hardcoded in prod -- always .env.
+    # AliasChoices accepts both env var names for retro-compat.
+    whisper_bin: str = Field(
+        default="E:/ai/tools/whisper.cpp/build/bin/whisper-cli.exe",
+        validation_alias=AliasChoices("WHISPER_BIN", "WHISPER_CLI_PATH"),
+        description="Path to whisper-cli.exe (Vulkan AMD build). "
+                    "Env: WHISPER_BIN or WHISPER_CLI_PATH.",
+    )
+    whisper_model: str = Field(
+        default="E:/ai/models/whisper/ggml-base.bin",
+        validation_alias=AliasChoices("WHISPER_MODEL", "WHISPER_MODEL_PATH"),
+        description="Path to ggml whisper model (.bin). "
+                    "Env: WHISPER_MODEL or WHISPER_MODEL_PATH.",
+    )
+    piper_bin: str = Field(
+        default="E:/ai/tools/piper/piper.exe",
+        validation_alias=AliasChoices("PIPER_BIN", "PIPER_BIN_PATH"),
+        description="Path to piper.exe (ONNX CPU). "
+                    "Env: PIPER_BIN or PIPER_BIN_PATH.",
+    )
+    piper_voice: str = Field(
+        default="E:/ai/models/piper/fr_FR-siwis-medium.onnx",
+        validation_alias=AliasChoices("PIPER_VOICE", "PIPER_VOICE_PATH"),
+        description="Path to Piper ONNX voice model (.onnx). "
+                    "Env: PIPER_VOICE or PIPER_VOICE_PATH.",
+    )
+    voice_agent_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("VOICE_AGENT_ENABLED", "SHUGU_VOICE_AGENT_ENABLED"),
+        description="Enables the LiveKit Agent voice worker in the FastAPI lifespan (DUR-1). "
+                    "OFF by default. Opt-in via SHUGU_VOICE_AGENT_ENABLED=true. "
+                    "If False: LocalLLM voice not instantiated (zero VRAM impact).",
+    )
     voice_recordings_dir: str = "data/voice_recordings"
 
     # LLM (Shugu shares the MiniMax account; can diverge later)
