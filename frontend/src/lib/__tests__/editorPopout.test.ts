@@ -438,9 +438,9 @@ describe("editorPopout — openPanelWindow", () => {
 
   it("retourne null si BroadcastChannel est indisponible (fallback gracieux)", async () => {
     // Retire BroadcastChannel global AVANT de loader le helper.
-    // eslint-disable-next-line
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const saved = (globalThis as any).BroadcastChannel;
-    // eslint-disable-next-line
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (globalThis as any).BroadcastChannel = undefined;
 
     try {
@@ -453,7 +453,7 @@ describe("editorPopout — openPanelWindow", () => {
       expect(openSpy).not.toHaveBeenCalled();
       openSpy.mockRestore();
     } finally {
-      // eslint-disable-next-line
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (globalThis as any).BroadcastChannel = saved;
     }
   });

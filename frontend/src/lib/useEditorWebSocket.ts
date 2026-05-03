@@ -138,7 +138,6 @@ export function useEditorWebSocket(
           break;
         case "error":
           // Log uniquement — Phase D ne surfaces pas d'UI d'erreur WS.
-          // eslint-disable-next-line no-console
           console.warn("[editor_ws] error:", event.code, event.message);
           break;
         // hello, ping, pong : no-op (gérés par EditorWebSocket directement

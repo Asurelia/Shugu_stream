@@ -121,7 +121,7 @@ export function attachTransformControls(
     }
     onDraggingChanged(dragging);
   };
-  // eslint-disable-next-line
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   controls.addEventListener("dragging-changed", onDraggingChanged_ as any);
 
   // Listener change : déclenché à chaque frame pendant drag.
@@ -132,7 +132,7 @@ export function attachTransformControls(
       onChange(attached);
     }
   };
-  // eslint-disable-next-line
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   controls.addEventListener("change", onChange_ as any);
 
   // Sans ajouter le helper à la scène, le gizmo ne rendrait pas et le
@@ -160,9 +160,9 @@ export function attachTransformControls(
       // pas `controls` directement.
       controls.detach();
       scene.remove(helper);
-      // eslint-disable-next-line
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       controls.removeEventListener("dragging-changed", onDraggingChanged_ as any);
-      // eslint-disable-next-line
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       controls.removeEventListener("change", onChange_ as any);
       controls.dispose();
     },
