@@ -44,7 +44,6 @@ class OpWSDeps:
     tts: "object"
     viewer_counter: "object" = None
     ambient: "object" = None          # AmbientDaemon
-    body_router: "object" = None      # BodyRouter
 
 
 _deps: Optional[OpWSDeps] = None
