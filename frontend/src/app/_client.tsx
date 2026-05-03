@@ -21,15 +21,11 @@ import { ChatFeed } from "@/components/ChatFeed";
 import { EmoteOverlay, EmoteOverlayHandle } from "@/components/EmoteOverlay";
 import { LiquidGlassFilter } from "@/components/LiquidGlassRail";
 import { LoadingScreen } from "@/components/LoadingScreen";
-import { OperatorVoicePanel } from "@/components/OperatorVoicePanel";
 import { SpeakingRing } from "@/components/SpeakingRing";
 import { VisitorLogin } from "@/components/VisitorLogin";
-import { ViewerStage, type ChatMsg, type Target as StageTarget } from "@/components/ViewerStage";
+import { ViewerStage, type ChatMsg } from "@/components/ViewerStage";
 import VrmViewer from "@/components/vrmViewer";
-import { Mode } from "@/components/OperatorPanel";
 import { ACTION_CLIPS, getActionClips, invalidateActionClipsCache } from "@/features/animations/animationPack";
-import { VirtualDesktop } from "@/features/desktop/VirtualDesktop";
-import { useDesktopState, WindowKind } from "@/features/desktop/desktopState";
 import {
   StreamingAudioPlayer,
   base64ChunkToUint8,
@@ -58,12 +54,9 @@ const MAX_CHAT_LOG = 80;
 
 export function HomeClient() {
   const { viewer } = useContext(ViewerContext);
-  const { dispatch: desktopDispatch } = useDesktopState();
 
   const [operator, setOperator] = useState<{ username: string } | null>(null);
   const [authLoaded, setAuthLoaded] = useState(false);
-  const [mode, setMode] = useState<Mode>("shugu");
-  const [pendingHermes, setPendingHermes] = useState(false);
 
   // Override le fond body.shugu-body (dégradé rose) par un nebula radial sombre
   // pour matcher le mockup Stitch. SceneManager peut encore réécrire
@@ -104,8 +97,6 @@ export function HomeClient() {
   }, [connStatus]);
 
   const clientRef = useRef<ShuguClient | null>(null);
-  const modeRef = useRef<Mode>(mode);
-  useEffect(() => { modeRef.current = mode; }, [mode]);
 
   const viewerRef = useRef(viewer);
   useEffect(() => { viewerRef.current = viewer; }, [viewer]);
@@ -161,11 +152,9 @@ export function HomeClient() {
     onFinal: (text) => {
       const trimmed = text.trim();
       if (!trimmed) return;
-      const target: Mode = modeRef.current;
-      const ok = clientRef.current?.sendChat(trimmed, target);
+      const ok = clientRef.current?.sendChat(trimmed);
       if (!ok) { setNotice("déconnecté"); return; }
-      appendLog({ role: "user", content: (target === "hermes" ? "🎙️⚡ " : "🎙️ ") + trimmed });
-      if (target === "hermes") setPendingHermes(true);
+      appendLog({ role: "user", content: "🎙️ " + trimmed });
     },
   });
 
@@ -372,44 +361,6 @@ export function HomeClient() {
           // now; proper FOV/dolly control will land in phase 7 with the
           // Celestial Veil camera system.
           console.debug(`[shot] ${ev.shot}`);
-        } else if (ev.type === "desktop.window_open") {
-          desktopDispatch({
-            type: "window.open",
-            fileName: ev.file_name,
-            kind: (ev.kind as WindowKind) || "text",
-            content: ev.initial_content || "",
-            language: ev.language || undefined,
-          });
-        } else if (ev.type === "desktop.file_edit") {
-          desktopDispatch({
-            type: "window.edit",
-            fileName: ev.file_name,
-            find: ev.find,
-            replace: ev.replace,
-            append: ev.append,
-          });
-        } else if (ev.type === "desktop.window_close") {
-          desktopDispatch({ type: "window.close", fileName: ev.file_name });
-        } else if (ev.type === "desktop.image_show") {
-          desktopDispatch({
-            type: "image.show",
-            url: ev.url,
-            fit: (ev.fit as any) || "contain",
-            caption: ev.caption || "",
-          });
-        } else if (ev.type === "desktop.arrange") {
-          desktopDispatch({ type: "layout.apply", layout: ev.layout as any });
-        } else if (ev.type === "hermes_state.window_open") {
-          desktopDispatch({
-            type: "hermesHud.open",
-            tab: ev.tab || "overview",
-            view: (ev.view as any) || "native",
-          });
-        } else if (ev.type === "hermes_state.window_close") {
-          desktopDispatch({ type: "hermesHud.close" });
-        } else if (ev.type === "hermes_task.acknowledged") {
-          setPendingHermes(true);
-          setTimeout(() => setPendingHermes(false), (ev.eta_estimate_s + 120) * 1000);
         } else if (ev.type === "registry.invalidated") {
           // Le backend a modifié le registry : on flush TOUS les caches
           // locaux + on re-fetch les kinds consommés par la page visiteur
@@ -431,18 +382,6 @@ export function HomeClient() {
     return () => client.close();
   }, [authLoaded, operator]);
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    const text = inputValue.trim();
-    if (!text) return;
-    const target: Mode = operator ? mode : "shugu";
-    const ok = clientRef.current?.sendChat(text, target);
-    if (!ok) { setNotice("déconnecté, reconnexion…"); return; }
-    appendLog({ role: "user", content: (target === "hermes" ? "⚡ " : "") + text });
-    setInputValue("");
-    if (target === "hermes") setPendingHermes(true);
-  };
-
   // Mapping chatLog → ChatMsg[] pour ViewerStage. Les messages assistant
   // sont marqués `stream: true` uniquement quand ils sont le DERNIER message
   // (simule l'arrivée live). Les historiques ne streament pas.
@@ -452,13 +391,11 @@ export function HomeClient() {
       return { kind: "system", text: m.content };
     }
     if (m.role === "assistant") {
-      const isHermes = mode === "hermes";
       return {
         kind: "assistant",
-        who: isHermes ? "Hermes" : "Shugu",
+        who: "Shugu",
         text: m.content,
         stream: isLast,
-        hermes: isHermes,
       };
     }
     // role === "user"
@@ -474,12 +411,10 @@ export function HomeClient() {
   const handleStageSend = (text: string) => {
     const trimmed = text.trim();
     if (!trimmed) return;
-    const target: Mode = operator ? mode : "shugu";
-    const ok = clientRef.current?.sendChat(trimmed, target);
+    const ok = clientRef.current?.sendChat(trimmed);
     if (!ok) { setNotice("déconnecté, reconnexion…"); return; }
-    appendLog({ role: "user", content: (target === "hermes" ? "⚡ " : "") + trimmed });
+    appendLog({ role: "user", content: trimmed });
     setInputValue("");
-    if (target === "hermes") setPendingHermes(true);
   };
 
   return (
@@ -521,8 +456,6 @@ export function HomeClient() {
         onInputChange={setInputValue}
         onSend={handleStageSend}
         inputDisabled={connStatus !== "open"}
-        target={mode as StageTarget}
-        setTarget={(t) => setMode(t as Mode)}
         reactionSeed={reactionSeed}
         onLogin={() => { void router.push("/login"); }}
         onSignup={() => { void router.push("/login"); }}
@@ -545,12 +478,10 @@ export function HomeClient() {
         } : undefined}
       />
 
-      {/* VisitorLogin + OperatorVoicePanel — retirés du viewer (absents du
-          proto). Le login est maintenant accessible via le menu déployable du
-          brand pill (HudTop → "Log in" / "Sign up"). Décommenter pour réactiver. */}
+      {/* VisitorLogin — retirée du viewer (absente du proto). Le login est
+          maintenant accessible via le menu déployable du brand pill (HudTop →
+          "Log in" / "Sign up"). Décommenter pour réactiver. */}
       {/* {!operator && <VisitorLogin />} */}
-      {/* <OperatorVoicePanel enabled={!!operator} /> */}
-      <VirtualDesktop />
 
       {notice && (
         <div className="fixed top-[5.5rem] sm:top-24 right-[380px] z-20 animate-fade-up bg-shugu-live/90 text-white px-4 py-2 rounded-full text-xs sm:text-sm shadow-lg max-w-xs font-semibold">

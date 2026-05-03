@@ -37,8 +37,8 @@ type Props = {
   onInputChange: (v: string) => void;
   onSend: (text: string) => void;
   inputDisabled: boolean;
-  target: Target;
-  setTarget: (t: Target) => void;
+  target?: Target;
+  setTarget?: (t: Target) => void;
   reactionSeed: number;
   /** Handlers brand-menu (proto HudTop). */
   onLogin?: () => void;
@@ -507,8 +507,8 @@ export function ViewerStage({
   onInputChange,
   onSend,
   inputDisabled,
-  target,
-  setTarget,
+  target = "shugu",
+  setTarget = () => {},
   reactionSeed,
   onLogin,
   onSignup,
