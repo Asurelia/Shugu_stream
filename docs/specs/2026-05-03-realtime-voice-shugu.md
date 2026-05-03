@@ -85,7 +85,7 @@ Le `Audio Bridge` est un nouveau worker qui souscrit en SUBSCRIBE-only à la roo
 | Audio room | **LiveKit self-hosted Docker** (container local) | LiveKit Cloud (KO — coût), Daily.co | Docker Desktop déjà installé, full control, $0/mois |
 | Agent framework | **livekit-agents** (Python, déjà installé) | Pipecat, custom | VAD / turn / barge-in / tool_calls out of the box |
 | STT streaming | **whisper.cpp + Vulkan** (`small.en` ou `small` multilingue) | faster-whisper CUDA (KO sur AMD), Deepgram (KO budget) | Build natif Vulkan AMD, latence ~80-150 ms, modèles `.bin` locaux dans `models/whisper/` |
-| **LLM** | llama.cpp + llama-server + Gemma 4 26B-A4B IQ4_XS GGUF | Ollama supporté en fallback (même API OpenAI sur port 11434) | Sortie 2026-04-02, pensé pour edge inference, TTFB ~150-200 ms sur 7800 XT Vulkan |
+| **LLM** | **llama-cpp-python 0.3.22** (Voie A — embedded Python, pas HTTP) + Gemma 4 26B-A4B IQ4_XS GGUF (Vulkan AMD) | Ollama supporté en fallback (même API OpenAI sur port 11434) | Sortie 2026-04-02, pensé pour edge inference, TTFB ~150-200 ms sur 7800 XT Vulkan |
 | TTS streaming | **Piper TTS** (CPU/ONNX, voix française `fr_FR-siwis-medium`) | Coqui XTTS v2 (voice cloning post-MVP), ElevenLabs (KO budget) | TTFB ~80 ms sur i5 12600k, $0, offline, open source |
 | VAD | **Silero VAD** (`livekit-plugins-silero`, déjà utilisé) | webrtcvad (présent pour `stt_streaming.py`) | ML, robuste fond bruyant, embedded LiveKit Agents |
 | Turn detection | **LiveKit End-of-Utterance** (`livekit-plugins-turn-detector` alpha 2025-2026) | VAD-only timeout fallback | Réduit faux-positif interruption sur pauses naturelles |
@@ -95,6 +95,8 @@ Le `Audio Bridge` est un nouveau worker qui souscrit en SUBSCRIBE-only à la roo
 > **Pivot backend LLM (2026-05-03)** : llama.cpp natif au lieu d'Ollama wrapper. Raisons : latence (~5-10% gain), contrôle fin des paramètres GPU (`--ngl`, `--batch-size`, `--ubatch-size`, `--cache-type-k/v`, `--flash-attn`), API HTTP identique (OpenAI-compat `/v1/chat/completions`) → zéro impact sur le code Python `llm_local.py`.
 >
 > Découverte quant : Q5_K_M (21.2 GB) ne tient pas dans 16GB VRAM. Le sweet spot est **IQ4_XS (13.4 GB)** : marge 2GB pour KV cache + Whisper concurrent, qualité 4-bit Unsloth Dynamic 2.0 quasi-équivalente Q5.
+
+> **Voie A retenue (Voie B abandonnée)** : llama-cpp-python embed le moteur llama.cpp directement dans le process Python. Pas d'overhead HTTP localhost. Bug router de llama-server master b9011 contourné. Build avec `CMAKE_ARGS=-DGGML_VULKAN=on` requis pour activer Vulkan AMD (vérification : log au load doit afficher `register_backend: registered backend Vulkan` + `using device Vulkan0`). Sinon le pip wheel par défaut est CPU-only (1 tok/s observé en CPU pure).
 
 ### Variables d'environnement llama-server (Option A — default)
 
@@ -110,13 +112,27 @@ OLLAMA_KV_CACHE_TYPE=q8_0  # économise VRAM, perte qualité négligeable
 
 Sans ces variables, Ollama peut fallback CPU et ruiner la latence. Attention : conflit port 11434 avec llama-server — un seul peut tourner à la fois.
 
-### Benchmarks attendus 7800 XT (TTFB par leg, P50)
+### Benchmarks mesurés 7800 XT (chiffres réels — bench 2026-05-03)
+
+| Métrique | Valeur mesurée |
+|---|---|
+| Modèle | Gemma 4 26B-A4B IQ4_XS (4B actifs / 26B total, MoE) |
+| Taille fichier | 12.48 GiB |
+| Quant | IQ4_XS Unsloth Dynamic 2.0 |
+| VRAM utilisée | ~12.5 GB (model) + ~0.5 GB (KV cache 8k context f16) |
+| Cold load | ~14.6s |
+| TTFB chaud | **187ms** |
+| Gen tok/s | **43-50 tok/s** |
+| Prompt eval tok/s | **288 tok/s** |
+| Contexte natif | 262 144 tokens |
+
+### Benchmarks end-to-end 7800 XT (TTFB par leg, P50)
 
 | Étape | Cible 7800 XT Vulkan | Backend | Notes |
 |---|---|---|---|
 | End-of-utterance detect | 50-100 ms | Silero VAD (CPU) | LiveKit turn-detector |
 | STT first interim | 80-150 ms | whisper.cpp Vulkan (`small`) | bench dans Sprint A |
-| LLM first token (TTFT) | 150-200 ms | llama-server Gemma 4 26B-A4B IQ4_XS Vulkan | Avantage MoE 4B actifs |
+| LLM first token (TTFT) | **187ms mesuré** | llama-cpp-python Gemma 4 26B-A4B IQ4_XS Vulkan | Avantage MoE 4B actifs |
 | Chunker → 1er segment | +100-200 ms | Pure Python | Frontière prosodique |
 | TTS TTFB (1er chunk) | ~80 ms | Piper CPU/ONNX | i5 12600k 4-6 threads |
 | Network → client | 5-20 ms | LiveKit Docker localhost | Boucle locale |
@@ -172,10 +188,75 @@ Pour atteindre ~330-450 ms end-to-end (réaliste sur stack 100 % local Vulkan), 
 
 Latence target voir tableau §3 — récap : **~330-450 ms total**, vs ~200-300 ms cloud (perte assumée pour gagner $0/mois et zéro dépendance externe).
 
+> Gemma 4 thinking mode (Q4_K filter `<|think|>`) doit être désactivé pour TTFB voice realtime (ajoute 5-10s par tour). Désactivation via `chat_template_kwargs={"enable_thinking": false}` dans l'appel `create_chat_completion`. Mode thinking gardé optionnel pour les questions complexes (régie route).
+
 Le ressenti sub-300 ms est atteint via **fillers acoustiques joués immédiatement** à la transition `LISTENING → THINKING`. Deux stratégies combinées :
 
 - **Acoustic-side (priorité v1)** : 30-50 fillers **audio clips pré-enregistrés** (générés une fois via Piper au build, stockés dans `models/piper/fillers/<mood>/*.wav`), choix aléatoire selon mood. Latence de jeu = 0. **Note** : Piper ne génère pas de fillers expressifs aussi naturels que Cartesia/ElevenLabs ; on compense en élargissant la banque (50+ clips variés "euh", "hm", "alors...", "attends une seconde", "ouais...") et on ré-enregistre offline si la qualité ne passe pas en écoute streamer.
 - **Prompt-side** : `Commence ta réponse par un filler court (euh, hm, alors, attends...)` dans le system prompt — moins fiable, sert la cohérence de la suite.
+
+## 5.bis — Régie pré-LLM (pattern critique)
+
+Le LLM seul ne déclenche pas fiablement les tools (test T4 PIB 2026 : 0/3 modèles n'ont appelé web_search). La régie est une couche Python qui intercepte la query AVANT le LLM, pré-route les tools déterministes, et augmente le system prompt avec le résultat.
+
+### Architecture
+
+```
+User audio (LiveKit)
+    │ STT
+    ▼
+┌──────────────────────────────────────────────────────┐
+│  RÉGIE (`backend/shugu/voice/regie/`)                │
+│                                                       │
+│  1. Intent classifier (rules + small LLM gate)       │
+│     - "météo|temps|news|qui est|combien|PIB" → web   │
+│     - "j'ai gagné|wow|incroyable|surprise" → emo+    │
+│     - "salut|bonjour|hi|coucou" → emote wave         │
+│     - default → chat                                 │
+│                                                       │
+│  2. Pre-fetch tools en parallèle si besoin           │
+│     - web_search.run() ─→ context augmenté           │
+│     - user_history.lookup()                          │
+│                                                       │
+│  3. Build augmented system prompt                    │
+│     "Persona Shugu... Contexte: <web>... Émotion: ⭐" │
+│                                                       │
+│  4. LLM single call (llama-cpp-python create_chat)   │
+│                                                       │
+│  5. Post-process output:                             │
+│     - Custom parser tool_call format Gemma           │
+│       `<|tool_call>call:NAME{...}<tool_call|>`       │
+│     - Sentiment analysis post-output → emotion       │
+│     - Filter Shugu safe (injection_detector réutilisé)│
+└──────────────────────────────────────────────────────┘
+    │ TTS streaming (Piper)
+    ▼
+LiveKit publish → bridge visitor_ws
+```
+
+### Modules à créer (Sprint B+C)
+
+| Module | Path | Rôle |
+|---|---|---|
+| `intent_classifier.py` | `backend/shugu/voice/regie/intent_classifier.py` | Détecte intent (chat / web / emotion / emote) via rules |
+| `tool_call_parser.py` | `backend/shugu/voice/regie/tool_call_parser.py` | Parse format Gemma `<|tool_call>...<tool_call|>` → JSON OpenAI |
+| `web_search_tool.py` | `backend/shugu/voice/regie/web_search_tool.py` | Tavily/Brave API |
+| `avatar_control.py` | `backend/shugu/voice/regie/avatar_control.py` | Sentiment + keyword → emotion/emote |
+| `prompt_builder.py` | `backend/shugu/voice/regie/prompt_builder.py` | System prompt augmenté avec contexte web + persona |
+| `safety_filter.py` | `backend/shugu/voice/regie/safety_filter.py` | Filter output (réutilise `injection_detector`) |
+
+### Bénéfice
+
+| Sans régie (LLM tool-calls direct) | **Avec régie** |
+|---|---|
+| Latence 800ms-1.2s (round-trip tool) | **Latence 300-450ms** |
+| Triggering 60-70% fiable (T4 raté) | **100% déterministe sur intents covered** |
+| LLM doit gérer JSON OpenAI | LLM fait juste sa job (chat) |
+| Custom parser XML/Gemma needed | Parser fait dans la régie |
+
+### Effort estimé Sprint régie
+
+~9-13h cumulé pour les 6 modules + tests intégration.
 
 ## 6. Bridge audio LiveKit → visitor_ws
 
@@ -279,6 +360,13 @@ Liste sous l'hypothèse §15 question 4 = option (b) — `voice/livekit_agent.py
 | `models/piper/fr_FR-siwis-medium.onnx.json` | Config voix Piper (phonemizer, sample rate, etc) |
 | `infra/llama/start-llama-server.ps1` | ✅ (déjà créé) PowerShell launcher llama-server avec flags Vulkan optimisés 7800 XT |
 | `infra/llama/README.md` | Ops doc LLM backend (sera créé en sprint A.bis) |
+| `backend/shugu/voice/regie/__init__.py` | Package régie pré-LLM |
+| `backend/shugu/voice/regie/intent_classifier.py` | Détecte intent (chat / web / emotion / emote) via rules |
+| `backend/shugu/voice/regie/tool_call_parser.py` | Parse format Gemma `<|tool_call>call:NAME{...}<tool_call|>` → JSON OpenAI |
+| `backend/shugu/voice/regie/web_search_tool.py` | Tavily/Brave API (Sprint C) |
+| `backend/shugu/voice/regie/avatar_control.py` | Sentiment + keyword → emotion/emote events |
+| `backend/shugu/voice/regie/prompt_builder.py` | System prompt augmenté avec contexte web + persona |
+| `backend/shugu/voice/regie/safety_filter.py` | Filter output (réutilise `injection_detector`) |
 
 ## 12. Fichiers à modifier
 
@@ -324,15 +412,15 @@ Le `recording_path` pointe vers un fichier sous `data/voice_recordings/<session_
 
 8 sprints adaptés au stack 100 % local Vulkan, chacun = livrable testable :
 
-- **Sprint A — Local infra setup (~1 j)** ✅ **Mergé PR #97** : install composants locaux, smoke test CLI, `infra/livekit/docker-compose.yml` + `livekit.yaml`, `infra/llama/start-llama-server.ps1`, `backend/scripts/voice_smoke_test.py`. Latences documentées.
-- **Sprint A.bis (PR ouverte le 2026-05-03) — pivot vers llama.cpp + lancement infra reproductible** : pivot LLM backend Ollama → llama.cpp natif. Mise à jour docs/specs/config : `llm_base_url` / `llm_model` au lieu de `ollama_base_url` / `ollama_model`. `infra/llama/README.md` créé. Build instructions Vulkan SDK + Ninja + VS2022 dans setup doc. Gemma 4 IQ4_XS (13.4 GB) verrouillé comme sweet spot 16GB VRAM.
-- **Sprint B — LiveKit Agent worker (~1 j)** : `voice/livekit_agent.py` squelette qui rejoint la room Docker locale, écoute audio operator, transcrit (whisper non-streaming), répond text simple via llama-server (non-streaming), synthétise réponse Piper one-shot. End-to-end naïf, latence assumée ~700 ms. Test : poser une question au mic → entendre Shugu répondre dans la room.
-- **Sprint C — Streaming pipeline (~1 j)** : passer llama-server en `stream=true`, brancher `chunker.py` (frontières prosodiques), Piper en streaming chunks via subprocess pipe, mesurer P50/P95 par leg. Cible latence chute à ~330-450 ms. Test : bench TTFB par leg, comparer Sprint B vs C.
-- **Sprint D — Barge-in FSM + turn detection (~1 j)** : `fsm.py` (IDLE → LISTENING → THINKING → SPEAKING → INTERRUPTED → YIELDING / STUBBORN_SPEAKING), VAD interrupt + cancel TTS in-flight (kill subprocess Piper en cours), plugin turn-detector. Test unit FSM (toutes transitions) + E2E 3 scénarios (stop / pivot / stubborn).
-- **Sprint E — Audio Bridge → visitor_ws (~1 j)** : `audio_bridge.py` worker subscribe-only LiveKit → audio mixé → `EventBus.publish("stage", ...)` → fanout `visitor_ws`, toggle live/private via Redis flag, frontend `AudioStageReceiver`. Test : viewers Chrome+Firefox entendent live, bench CPU bridge sous 50 viewers simulés (single-PC, scale réaliste).
-- **Sprint F — Raise-hand UX + admin moderation (~1 j)** : `voice_public.py` (POST raise-hand + injection_detector) + `voice_admin.py` (queue, accept/deny, mute, kick) + frontend `RaiseHandButton` + `AdminPanel`. Test : E2E Playwright "raise hand → accept → guest parle → kick".
-- **Sprint G — Recording local FS + cron purge (~0.5 j)** : LiveKit Egress vers `data/voice_recordings/<session_id>/`, table `voice_sessions`, APScheduler purge 30j wirée dans lifespan FastAPI, route GDPR `DELETE /api/account/voice-recordings`. Test : session 2 min → fichier + row DB, faux-clock test purge.
-- **Sprint H — Web search tool + bench Qwen3.6-35B-A3B (~0.5 j)** : `voice/web_search.py` Tavily/Brave free tier + tool_call exposé au LLM ; télécharger `Qwen3.6-35B-A3B GGUF` ; bench latence offload CPU/GPU vs Gemma 4 26B-A4B IQ4_XS (TTFT, qualité réponse FR/EN, hallucinations) ; documenter le winner et figer le default dans config.
+- **Sprint A** ✅ (déjà mergé en PR #97 — infra setup) : install composants locaux, smoke test CLI, `infra/livekit/docker-compose.yml` + `livekit.yaml`, `infra/llama/start-llama-server.ps1`, `backend/scripts/voice_smoke_test.py`. Latences documentées.
+- **Sprint A.bis** : pivot LLM (PR #98 mergée) + pivot final 26B-A4B (cette PR) : pivot LLM backend Ollama → llama.cpp natif puis llama-cpp-python (Voie A). Mise à jour docs/specs/config + régie pré-LLM modules. Gemma 4 26B-A4B IQ4_XS (12.48 GiB) verrouillé TTFB 187ms mesuré.
+- **Sprint B** : LiveKit Agent worker + intégration llama-cpp-python embed (~1.5j) : `voice/livekit_agent.py` squelette qui rejoint la room Docker locale, écoute audio operator, transcrit (whisper non-streaming), répond text simple via `LocalLLM` (non-streaming), synthétise réponse Piper one-shot. End-to-end naïf, latence assumée ~700 ms.
+- **Sprint C** : Régie pré-LLM (intent_classifier + tool_call_parser + web_search) (~1.5j) : `regie/` câblée dans le Worker, `chunker.py` (frontières prosodiques), Piper en streaming chunks via subprocess pipe, mesurer P50/P95 par leg. Cible latence chute à ~330-450 ms.
+- **Sprint D** : Streaming TTS + fillers + barge-in state machine (~1.5j) : `fsm.py` (IDLE → LISTENING → THINKING → SPEAKING → INTERRUPTED → YIELDING / STUBBORN_SPEAKING), VAD interrupt + cancel TTS in-flight (kill subprocess Piper en cours), plugin turn-detector.
+- **Sprint E** : Audio bridge → visitor_ws (mode "live") (~1j) : `audio_bridge.py` worker subscribe-only LiveKit → audio mixé → `EventBus.publish("stage", ...)` → fanout `visitor_ws`, toggle live/private via Redis flag, frontend `AudioStageReceiver`.
+- **Sprint F** : Raise-hand UX + admin moderation (~1j) : `voice_public.py` (POST raise-hand + injection_detector) + `voice_admin.py` (queue, accept/deny, mute, kick) + frontend `RaiseHandButton` + `AdminPanel`.
+- **Sprint G** : Recording local FS + cron purge 30j (~0.5j) : LiveKit Egress vers `data/voice_recordings/<session_id>/`, table `voice_sessions`, APScheduler purge 30j wirée dans lifespan FastAPI, route GDPR `DELETE /api/account/voice-recordings`.
+- **Sprint H** : Polish + bench Qwen3.5-9B comparatif (~0.5j) : `voice/web_search.py` Tavily/Brave free tier + tool_call exposé au LLM ; bench latence vs Gemma 4 26B-A4B IQ4_XS (TTFT, qualité réponse FR/EN, hallucinations) ; documenter le winner.
 
 Total ~7-8 j + contingency 30 % → **viser 2 semaines** pour v1 complète.
 

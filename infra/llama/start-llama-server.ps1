@@ -17,12 +17,12 @@
 # API exposée sur http://localhost:11434 (port Ollama-compat)
 # Endpoint OpenAI-compat : POST /v1/chat/completions
 #
-# IMPORTANT : ce serveur charge ~5.5 GB en VRAM tant qu'il tourne (modèle
+# IMPORTANT : ce serveur charge ~12.5 GB en VRAM tant qu'il tourne (modèle
 # résident pour latence top). Lance UNIQUEMENT pendant les sessions voice.
 # Kill avec stop-llama-server.ps1 ou Ctrl+C dans le terminal.
 
 $LlamaServer = "E:\ai\tools\llama.cpp\build\bin\llama-server.exe"
-$Model       = "E:\ai\models\gemma4-e4b\gemma-4-E4B-it-Q5_K_M.gguf"
+$Model       = "E:\ai\models\gemma4-26b\gemma-4-26B-A4B-it-UD-IQ4_XS.gguf"
 
 if (-not (Test-Path $LlamaServer)) {
     Write-Host "ERROR: llama-server.exe not found at $LlamaServer" -ForegroundColor Red
@@ -32,11 +32,11 @@ if (-not (Test-Path $LlamaServer)) {
 
 if (-not (Test-Path $Model)) {
     Write-Host "ERROR: model not found at $Model" -ForegroundColor Red
-    Write-Host "Run: huggingface-cli download unsloth/gemma-4-E4B-it-GGUF gemma-4-E4B-it-Q5_K_M.gguf --local-dir E:\ai\models\gemma4-e4b" -ForegroundColor Yellow
+    Write-Host "Run: huggingface-cli download unsloth/gemma-4-26B-A4B-it-GGUF gemma-4-26B-A4B-it-UD-IQ4_XS.gguf --local-dir E:\ai\models\gemma4-26b" -ForegroundColor Yellow
     exit 1
 }
 
-Write-Host "Starting llama-server with Gemma 4 E4B Q5_K_M on Vulkan (7800 XT)..." -ForegroundColor Cyan
+Write-Host "Starting llama-server with Gemma 4 26B-A4B IQ4_XS on Vulkan (7800 XT)..." -ForegroundColor Cyan
 
 # Config boost (E4B = ~5.5GB VRAM → ~10GB libre pour KV + batch buffers):
 #   -b 4096 / -ub 1024  : prompt processing rapide (input long)

@@ -86,7 +86,11 @@ class Settings(BaseSettings):
     # All fields default to empty — the smoke test / agent worker use CLI args
     # or env overrides. extra="ignore" keeps stale .env files safe.
     llm_base_url: str = "http://localhost:11434"
-    llm_model: str = "gemma-4-26b-a4b-iq4_xs"  # cosmetic; llama-server uses -m flag, not this field
+    llm_model: str = "gemma4-26b-a4b-iq4_xs"  # cosmetic; llama-server uses -m flag, not this field
+    llm_model_path: str = "E:/ai/models/gemma4-26b/gemma-4-26B-A4B-it-UD-IQ4_XS.gguf"  # Voie A: llama-cpp-python embed
+    llm_n_gpu_layers: int = 99  # full GPU offload (Vulkan AMD 7800 XT)
+    llm_n_ctx: int = 8192  # context window (8k default, model supports 262k)
+    llm_flash_attn: bool = True  # flash attention (reduces VRAM ~10%)
     whisper_bin: str = ""  # path to whisper-cli.exe (or main.exe for older builds)
     whisper_model: str = ""  # path to ggml-small.bin
     piper_bin: str = ""  # path to piper.exe
