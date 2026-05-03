@@ -4,7 +4,7 @@
 > qui travaille sur ce repo. Lis-moi en premier avant toute modification.
 
 **Stack** : FastAPI + asyncio + Redis + Postgres (pgvector) + **Next.js 16 (App Router)** + React 18 + Three.js
-**Mission** : VTuber AI live multi-visiteurs, opérateur Hermes (MiniMax M2.7) pilote avatar VRM via tool_calls, streaming TTS MiniMax/ElevenLabs/Edge, STT faster-whisper, scène 3D temps réel.
+**Mission** : VTuber AI live multi-visiteurs, avatar VRM piloté par LLM via tool_calls, streaming TTS MiniMax/ElevenLabs/Edge, scène 3D temps réel.
 **Branche principale** : `main`
 **Date d'écriture** : 2026-05-01 (post-audit Pass 2 Sprint 5) — màj migration Next.js 13→16 + App Router (2026-05-02)
 
@@ -30,9 +30,9 @@ core/             # L0 — types, errors, identity, event_bus, protocols (Protoc
 senses/           # L1 — bus, types, adapters chat/voice/event/vision
 agent/            # L2 — runner, loop, llm_thinker, action_parser, handlers, tools
 world/            # L3 — types, reducers, state_store, publisher
-adapters/         # External services : MiniMax, ElevenLabs, Edge-TTS, Whisper, Hermes, etc.
+adapters/         # External services : MiniMax, ElevenLabs, Edge-TTS, Whisper, etc.
 auth/             # JWT operator + user (member/vip), dependencies FastAPI, rate_limit
-routes/           # FastAPI endpoints (auth, account, admin_users, livekit, WS visitor/operator/world/voice/editor)
+routes/           # FastAPI endpoints (auth, account, admin_users, livekit, WS visitor/operator/world/editor)
 middleware/       # SecurityHeadersMiddleware (Helmet-style)
 observability/   # MetricsRecorder Protocol + Null/Prometheus impls + structlog config
 db/              # SQLAlchemy 2.0 async + Alembic migrations
@@ -77,7 +77,7 @@ components/      # Composants atomic + composés
 |---|---|---|
 | `tts_fallback_total{from_provider, to_provider}` | `FallbackTTS` | Bascule TTS primary → secondary |
 | `event_bus_drop_total{topic}` | `InProcessEventBus` | Drop-oldest sur slow consumer |
-| `persona_fallback_total{from_persona, to_persona}` | `HermesEmbodiedBrain` | Persona fallback `hermes_public` → `shugu` |
+| `persona_fallback_total{from_persona, to_persona}` | `PersonaBrain` | Persona fallback |
 | `memory_recall_failed_total{error_kind}` | `Orchestrator` | Crash recall pgvector/embedder |
 | `moderation_ban_check_failed_total{error_kind}` | `BasicModeration` | Ban check Postgres fail-open |
 
