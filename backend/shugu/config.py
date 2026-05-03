@@ -79,6 +79,18 @@ class Settings(BaseSettings):
     livekit_api_key: str = ""       # LK API key (dashboard LiveKit/self-hosted)
     livekit_api_secret: str = ""    # LK API secret
 
+    # Voice realtime — Sprint A+ (see docs/setup/voice-realtime-windows-amd.md)
+    # Local inference stack: Ollama (Gemma 4) + whisper.cpp Vulkan + Piper TTS.
+    # All fields default to empty — the smoke test / agent worker use CLI args
+    # or env overrides. extra="ignore" keeps stale .env files safe.
+    ollama_base_url: str = "http://localhost:11434"
+    ollama_model: str = "gemma4:26b-a4b-q5_K_M"
+    whisper_bin: str = ""  # path to whisper-cli.exe (or main.exe for older builds)
+    whisper_model: str = ""  # path to ggml-small.bin
+    piper_bin: str = ""  # path to piper.exe
+    piper_voice: str = ""  # path to fr_FR-siwis-medium.onnx
+    voice_recordings_dir: str = "data/voice_recordings"
+
     # LLM (Shugu shares the MiniMax account; can diverge later)
     minimax_api_key: str = ""
     minimax_base_url: str = "https://api.minimax.io/v1"
