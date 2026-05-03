@@ -1,8 +1,9 @@
 ---
 date: 2026-05-03
-status: open
+status: fixed
 severity: medium
 discovered_during: PR1 backend Hermes removal validation
+fixed_by: PR fix/test-world-ws-asyncio-20260503-001
 related_files:
   - backend/tests/unit/test_world_ws.py
 ---
@@ -60,6 +61,39 @@ async def test_valid_token_connect_and_receive_world_delta(
 ```
 
 Alternative : utiliser `anyio.from_thread.run_sync` pour bridger le test sync vers la boucle pytest-asyncio.
+
+## Fix appliqué (PR6)
+
+Approche B retenue (bridge sync/async via portal anyio) plutôt qu'approche A
+(httpx-ws + async natif) pour les raisons suivantes :
+
+1. `httpx-ws` ne supporte pas `ASGITransport` pour les WebSockets — il envoie
+   une requête HTTP standard et attend un `101 Switching Protocols`, que
+   `ASGITransport` ne peut pas produire (scope ASGI `websocket` vs `http`).
+2. Le `portal` anyio exposé par `TestClient` (quand utilisé comme context
+   manager avec `with TestClient(app) as client`) donne accès à la même event
+   loop que l'app ASGI — exactement ce qu'il faut pour que les
+   `asyncio.Queue` de `InProcessEventBus` soient réveillées correctement.
+
+Pattern de remplacement :
+```python
+# AVANT (hang Py3.13) :
+asyncio.get_event_loop().run_until_complete(
+    event_bus.publish("world.delta", {"avatar_pose": "wave"})
+)
+
+# APRÈS (correct, zéro dépendance supplémentaire) :
+client.portal.call(event_bus.publish, "world.delta", {"avatar_pose": "wave"})
+```
+
+Correction supplémentaire dans `test_multi_client_both_receive_world_delta` :
+les deux WS doivent être ouvertes depuis le MÊME `TestClient` (et non deux
+instances séparées). Deux `TestClient` ont des portals distincts (deux loops
+distinctes) — `portal.call()` ne réveillerait que les subscribers de la loop
+qui a fait l'appel.
+
+Résultat : 9/9 tests passent en 1.86 s. 1103 tests unit au total : zéro
+régression.
 
 ## Pourquoi pas dans le PR1 Hermes-removal
 
