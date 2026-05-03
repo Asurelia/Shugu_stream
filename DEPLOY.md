@@ -22,7 +22,6 @@
   - Plus : 4 500 req LLM / 5h, 9 000 chars TTS / jour
   - **Max (défaut) : 15 000 req / 5h, 19 000 chars / jour**
   - Ultra : 30 000 req / 5h, 50 000 chars / jour
-- **Hermes agent** accessible HTTP OpenAI-compat sur `127.0.0.1:8642` (ou override).
 - (Optionnel) ElevenLabs API key pour voix secondaire plus fine qu'Edge-TTS.
 
 ## 2. Fichier `.env`
@@ -56,12 +55,6 @@ ELEVENLABS_API_KEY=            # optional — secondary blob-only
 SHUGU_VOICE_ID=OhWejZm6c7D8CIm5epRM
 ELEVENLABS_MODEL_ID=eleven_multilingual_v2
 EDGE_TTS_VOICE=fr-FR-VivienneMultilingualNeural
-
-# ─── Hermes bridge ─────────────────────────────────────────────────────────
-HERMES_API_KEY=local_token_or_empty
-HERMES_BASE_URL=http://127.0.0.1:8642
-HERMES_TASK_TIMEOUT_S=300
-HERMES_EMBODIED=true           # true = tool_call loop ; false = legacy delegation
 
 # ─── Storage ───────────────────────────────────────────────────────────────
 SHUGU_POSTGRES_DSN=postgresql+asyncpg://openclaw@localhost/shugu
@@ -212,12 +205,10 @@ Budget RAM total KVM 2 :
 | node next start prod | ~300 MB |
 | Redis | ~50 MB |
 | Postgres | ~150 MB |
-| Hermes agent (si colocalisé) | ~500 MB |
 | OS + buffers | ~500 MB |
-| **Total** | **~3.3 GB utilisés sur 8 GB** |
+| **Total** | **~2.8 GB utilisés sur 8 GB** |
 
-Confortable. Si Hermes tourne ailleurs, on a ~5 GB de marge pour upgrade à
-`small` sans pression.
+Confortable. On a ~5 GB de marge pour upgrade à `small` sans pression.
 
 Pour basculer à `small` : `STT_MODEL=small` dans `.env` + redémarrer.
 
@@ -282,13 +273,6 @@ Download du modèle en cours. 30-90 s au premier usage. Les logs doivent
 contenir `stt.loading_model` puis `stt.model_ready`. Persistant dans
 `~/.cache/huggingface/hub/` après.
 
-### Fenêtre desktop vide / Hermes HUD "available: false"
-
-`~/.hermes/` n'existe pas sur le host. Soit installer hermes-hud upstream,
-soit set `HERMES_HOME=/autre/chemin` si le format est émulé ailleurs.
-Comportement défensif : le endpoint retourne `available: false` sans
-crasher, l'UI affiche un placeholder explicatif.
-
 ## 10. Troubleshooting rapide
 
 | Symptôme | Check |
@@ -307,6 +291,5 @@ crasher, l'UI affiche un placeholder explicatif.
 - [ ] HTTPS Let's Encrypt actif (`certbot certificates`)
 - [ ] Nginx bloque `/ws/operator` et `/api/admin/*` hors auth (déjà fait via
       cookies httpOnly)
-- [ ] `~/.hermes/` n'a pas de symlinks vers des paths sensibles
 - [ ] Logs rotation configurée (`logrotate` sur `~/.pm2/logs/`)
 - [ ] Backup DB automatique (postgres → rclone vers stockage tiers)

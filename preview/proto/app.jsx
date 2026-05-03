@@ -161,10 +161,10 @@ function ChatCard({ messages, collapsed, onToggleCollapse, unread, input, setInp
                     rank="assistant"
                     who={m.who}
                     text={m.text}
-                    glyph={hermesMode && m.who === 'Hermes' ? '⚡' : '✦'}
+                    glyph={hermesMode && m.who === 'Director' ? '⚡' : '✦'}
                     time={nowClock()}
                     stream={m.stream}
-                    hermes={hermesMode && m.who === 'Hermes'}
+                    hermes={hermesMode && m.who === 'Director'}
                   />;
                 }
                 // visitor
@@ -186,7 +186,7 @@ function ChatCard({ messages, collapsed, onToggleCollapse, unread, input, setInp
                 <input
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
-                  placeholder={listening ? '✦ écoute…' : (hermesMode ? '⚡ commande Hermes…' : 'Send a message…')}
+                  placeholder={listening ? '✦ écoute…' : (hermesMode ? '⚡ commande directeur…' : 'Send a message…')}
                   disabled={listening}
                   aria-label="message"
                 />
@@ -301,7 +301,7 @@ const HudBottom = () => (
     <div className="title-card lg">
       <LiquidLayers />
       <div style={{ position:'relative', zIndex:1 }}>
-        <div className="title">✦ Hermes ⇢ velvet void — lofi & quiet talk</div>
+        <div className="title">✦ velvet void — lofi & quiet talk</div>
         <div className="tags">
           <span>Virtual · VRM</span><span>FR</span><span>SFW</span><span>chill</span>
         </div>
@@ -368,7 +368,7 @@ function TargetSelector({ target, setTarget }) {
           onClick={() => setTarget('hermes')}
           aria-pressed={target === 'hermes'}
         >
-          <span className="ts-glyph">⚡</span> Hermes
+          <span className="ts-glyph">⚡</span> Director
         </button>
       </div>
     </div>
@@ -435,7 +435,7 @@ function App() {
     }]);
     setTimeout(() => {
       const useHermes = isAdmin && target === 'hermes';
-      const who = useHermes ? 'Hermes' : 'Shugu';
+      const who = useHermes ? 'Director' : 'Shugu';
       const replyText = useHermes
         ? 'Reçu. Je décompose ta requête en tool_calls.'
         : 'Hey ! j\'entends ça. on en parle.';

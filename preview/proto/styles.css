@@ -3,7 +3,7 @@
    - Minimal blur (3–5%)
    - Collapsible chat (bubble ↔ full)
    - Bubbles for ALL messages, styled by rank (guest/sub/vip/mod/king/admin)
-   - Tweaks gated by role: Guest (none) · VIP (chat side) · Admin (+ hermes mode)
+   - Tweaks gated by role: Guest (none) · VIP (chat side) · Admin (+ director mode)
    ======================================================================== */
 
 :root {
@@ -479,7 +479,7 @@ body {
 .rank-admin .who .glyph { color: var(--danger); }
 .rank-admin .who .name  { color: #ff6a8a; }
 
-/* ── Rank: ASSISTANT (Shugu / Hermes) ── */
+/* ── Rank: ASSISTANT (Shugu / Director) ── */
 .bubble.rank-assistant .lg-tint {
   background-image: linear-gradient(135deg, rgba(181,133,255,0.22) 0%, rgba(232,121,249,0.14) 50%, rgba(129,236,255,0.10) 100%);
 }
@@ -494,7 +494,7 @@ body {
   background: linear-gradient(120deg, #e08efe 0%, #fd6c9c 100%);
   -webkit-background-clip: text; background-clip: text; color: transparent;
 }
-/* Hermes variant (admin tweak) */
+/* Director variant (admin tweak) */
 .bubble.rank-assistant.hermes .lg-tint {
   background-image: linear-gradient(135deg, rgba(129,236,255,0.26) 0%, rgba(181,133,255,0.18) 60%, rgba(232,121,249,0.10) 100%);
 }
@@ -914,7 +914,7 @@ body {
 
 /* ═══════════════════ ADMIN INLINE TARGET SELECTOR ═══════════════════ */
 /* Small pill above the chat input, visible ONLY for admin. Lets the streamer
-   pick which brain the next prompt addresses: Shugu persona vs Hermes (tool-calls). */
+   pick which brain the next prompt addresses: Shugu persona vs Director (tool-calls). */
 
 .target-selector {
   display: flex;

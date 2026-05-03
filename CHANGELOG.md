@@ -1,5 +1,14 @@
 # Changelog
 
+## v4.1 — Hermes/voice operator/desktop subsystem removal (2026-05-03)
+
+- feat: remove Hermes voice operator and virtual desktop subsystem (#91 backend, #92 frontend)
+  - Deleted `brain_hermes.py`, `brain_hermes_tools.py`, `hermes_state.py`, `hermes_task.py`, `hermes_state_api.py`
+  - Deleted `voice_duplex.py`, `operator_voice_ws.py`
+  - Replaced with multi-provider director brains: `brain_director_minimax.py`, `brain_director_anthropic.py`, `brain_director_ollama.py`, `brain_director_openai.py`
+  - Frontend: removed `HermesStateWindow.tsx`, `OperatorVoicePanel.tsx`, voice WS client
+- docs: align AGENTS.md, ARCHITECTURE.md, DEPLOY.md with Hermes-free codebase (#93)
+
 ## v4.0 — Agent incarné temps réel (2026-04)
 
 ### Vision
