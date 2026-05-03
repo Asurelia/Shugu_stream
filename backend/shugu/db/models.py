@@ -162,7 +162,7 @@ class ModerationEvent(Base):
 
 
 class AssetRegistry(Base):
-    """Registry universel des capacités Hermes (gestures, scenes, emotes…).
+    """Registry universel des assets actifs (gestures, scenes, emotes…).
 
     Remplace les frozensets Python hardcodés (body_control.GESTURE_CLIPS, etc.)
     par un registre DB que l'opérateur peut étendre via l'admin UI sans toucher
@@ -171,9 +171,8 @@ class AssetRegistry(Base):
       - scene   → {camera: {...}, background: str, idle_animation_slug: str, ...}
       - etc.
 
-    `is_active=false` = soft-delete (ne plus exposer à Hermes) sans perdre
-    l'historique. `owner_username` = opérateur qui a créé la row — utile pour
-    un futur multi-tenant.
+    `is_active=false` = soft-delete sans perdre l'historique.
+    `owner_username` = opérateur qui a créé la row — utile pour un futur multi-tenant.
     """
     __tablename__ = "asset_registry"
 

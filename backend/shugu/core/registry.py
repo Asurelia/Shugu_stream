@@ -1,4 +1,4 @@
-"""Asset Registry — DB-backed registre des capacités Hermes.
+"""Asset Registry — DB-backed registre des assets actifs.
 
 Remplace à terme les frozensets hardcoded de `body_control.py`. Le Registry :
 

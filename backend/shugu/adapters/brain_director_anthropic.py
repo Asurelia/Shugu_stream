@@ -3,7 +3,7 @@
 Migre la logique de `director/llm_client.py` (Phase E2 — à supprimer) vers
 l'interface `DirectorBrain` unifiée. Fonctionnel avec Claude Haiku / Sonnet
 via httpx pur (pas de SDK anthropic — le projet n'utilise que httpx sortant,
-cf. `brain_shugu.py`, `brain_hermes.py`).
+cf. `brain_shugu.py`).
 
 ## Sécurité
 

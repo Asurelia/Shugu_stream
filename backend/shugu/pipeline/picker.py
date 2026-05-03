@@ -51,8 +51,8 @@ class Picker:
         self._event_bus = event_bus
         self._tts = tts
         self._running = False
-        # Barge-in signal: voice_duplex flips this when the operator starts
-        # speaking during Hermes's response. The streaming path checks it
+        # Barge-in signal: barge-in handler flips this when the operator starts
+        # speaking during Shugu's response. The streaming path checks it
         # between chunks and bails out + broadcasts `performance.truncate`.
         self._interrupt_event = asyncio.Event()
         self._current_perf_id: Optional[str] = None

@@ -1,9 +1,8 @@
 """Visitor WebSocket — public anonymous chat endpoint.
 
-Invariant: this module does NOT import HermesAgentBrain (nor `brain_hermes`).
-If you need to add a visitor command that reaches Hermes, you are wrong — visitors
-can never drive Hermes, by design. Their messages have `route="shugu_persona"`
-hardcoded at enqueue time below.
+Invariant: this module does NOT import any agent brain other than shugu_persona.
+Visitors can never drive any agent directly, by design. Their messages have
+`route="shugu_persona"` hardcoded at enqueue time below.
 """
 from __future__ import annotations
 

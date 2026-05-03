@@ -109,7 +109,7 @@ def make_vip_subject(username: str) -> Subject:
 def make_operator_subject(username: str) -> Subject:
     """Compose `operator:<username_lowercased>`.
 
-    Utilisé par operator_ws / operator_voice_ws pour publier des sense.raw
+    Utilisé par operator_ws pour publier des sense.raw
     et sense.chat/voice avec un namespace distinct des viewers. L'agent
     interne (app.py L433) utilise `make_operator_subject("streamer")`.
     """

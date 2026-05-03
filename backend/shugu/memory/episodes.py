@@ -26,8 +26,8 @@ from ulid import ULID
 #
 # Sémantique :
 # - chat_in       : message texte d'un viewer ou de l'opérateur (visitor_ws,
-#                   operator_ws target=shugu, internal_vip chat.post)
-# - voice_in      : transcript STT de l'opérateur (operator_voice_ws)
+#                   operator_ws, internal_vip chat.post)
+# - voice_in      : transcript STT de l'opérateur
 # - response_out  : réponse Shugu broadcastée par le Picker (PR future, pas
 #                   encore câblé en PR 2)
 # - tool_call     : Hermes a appelé un tool (body.gesture, scene.change…)

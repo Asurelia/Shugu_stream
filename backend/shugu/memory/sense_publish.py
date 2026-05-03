@@ -1,7 +1,7 @@
 """Helper de publication `sense.raw` — Mémoire PR 2.
 
-Centralise la garde memory_enabled + le format d'event pour que les 4 senses
-(visitor_ws, operator_ws, operator_voice_ws, internal_vip) restent fins :
+Centralise la garde memory_enabled + le format d'event pour que les senses
+(visitor_ws, operator_ws, internal_vip) restent fins :
 ils appellent `publish_sense_raw(event_bus, settings, ...)` au tail du
 handler et c'est tout.
 
