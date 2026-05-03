@@ -63,7 +63,6 @@ def deps(bus, settings_stub, ws_mock, queue_stub):
         tts=AsyncMock(),
         viewer_counter=None,
         ambient=None,
-        body_router=None,
     )
     operator_ws.set_deps(d)
     return d

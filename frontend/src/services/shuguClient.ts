@@ -51,8 +51,6 @@ export type ShuguEvent =
   | { type: "pong"; t?: number }
   | { type: "error"; nonce?: string; reason: string };
 
-export type ChatTarget = "shugu";
-
 export type ShuguClientOptions = {
   operator?: boolean;
   url?: string;

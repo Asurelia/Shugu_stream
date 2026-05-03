@@ -193,20 +193,6 @@ class Settings(BaseSettings):
                     "Env: SHUGU_COMPACTOR_SUMMARY_COUNT (ou COMPACTOR_SUMMARY_COUNT)",
     )
 
-    # VIP bridge — v4 Phase 1 Brique 1.2. `vip_agent` (Worker LiveKit Agents,
-    # process séparé) communique avec le backend FastAPI via HTTP localhost
-    # signé. `vip_internal_url` est l'endpoint backend (typiquement
-    # http://127.0.0.1:<shugu_port>) ; `vip_internal_secret` est le secret
-    # partagé (header `X-Internal-Secret`, comparé via hmac.compare_digest).
-    # Si le secret est vide, toutes les requêtes /internal/vip/* retournent 401
-    # (fail closed — pas d'endpoint ouvert en prod par accident).
-    vip_internal_url: str = "http://127.0.0.1:8701"
-    vip_internal_secret: str = Field(
-        default="",
-        description="Secret HMAC partagé entre backend et process vip_agent. "
-                    "Généré via `python -c \"import secrets; print(secrets.token_hex(32))\"`.",
-    )
-
     # Environment (dev, test, production) — défaut "production" pour fail-safe en prod.
     env: str = Field(
         default="production",
@@ -235,21 +221,6 @@ class Settings(BaseSettings):
     # Personality reload
     personality_dir: str = "/home/openclaw/shugu/backend/shugu/personalities"
     personality_reload_poll_s: int = 5
-
-    # faster-whisper model: tiny | base | small | medium | large-v3.
-    #
-    # Default `base` is tuned for Hostinger KVM 2 (2 vCPU, 8 GB RAM):
-    #   tiny    → ~74 MB model, <1 GB RAM, 10x realtime on CPU, WER ~15% on FR (too rough)
-    #   base    → ~140 MB, ~1.5 GB RAM, 4-5x realtime, WER ~10% — SWEET SPOT for KVM 2
-    #   small   → ~460 MB, ~2 GB RAM, 2x realtime — workable on KVM 2 if idle, may lag mid-load
-    #   medium  → ~1.5 GB, ~5 GB RAM, 0.5x realtime on 2 vCPU — NOT for KVM 2
-    #
-    # If you have GPU (KVM 4+ or dedicated box) set stt_device=cuda + stt_compute_type=float16
-    # and jump to `small` or `medium` for noticeable quality gain.
-    stt_model: str = "base"
-    stt_compute_type: str = "int8"     # int8|int8_float16|float16|float32
-    stt_device: str = "auto"           # auto|cpu|cuda
-    stt_language: str = "fr"
 
     # Director / Embodied Shugu — Phase E1 (foundation Scene State + Trigger Bus).
     #

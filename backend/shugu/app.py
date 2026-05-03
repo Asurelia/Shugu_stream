@@ -24,7 +24,7 @@ from .agent.wiring import build_agent_components
 from .config import get_settings
 from .core.event_bus_factory import make_event_bus
 from .core.identity import OperatorIdentity
-from .core.observability import Metrics, SlidingRateLimiter
+from .core.observability import Metrics
 from .core.quota import QuotaTracker
 from .core.registry import init_registry
 from .core.viewer_count import ViewerCounter
@@ -34,7 +34,6 @@ from .memory import MemoryAgent
 from .observability.log_config import configure_logging
 from .observability.metrics import PrometheusMetricsRecorder
 from .pipeline.ambient import AmbientConfig, AmbientDaemon
-from .pipeline.body_router import BodyRouter, BodyRouterDeps
 from .pipeline.extraction_worker import ExtractionWorker
 from .pipeline.ingestion_worker import IngestionWorker
 from .pipeline.picker import Picker
@@ -48,8 +47,6 @@ from .routes import (
     auth,
     editor_ws,
     health,
-    internal_vip,
-    livekit_api,
     operator_ws,
     registry_api,
     scene_composer_api,
@@ -61,7 +58,6 @@ from .routes import (
 
 _redis: Optional[aioredis.Redis] = None
 _quota: Optional["QuotaTracker"] = None
-_rate_limiter: Optional["SlidingRateLimiter"] = None
 _metrics: Optional["Metrics"] = None
 _email_sender: Optional[EmailSender] = None
 _memory: Optional[MemoryAgent] = None
@@ -77,11 +73,6 @@ def get_quota() -> "QuotaTracker":
     """Access the process-global quota tracker (set by lifespan)."""
     assert _quota is not None, "quota not initialized"
     return _quota
-
-
-def get_rate_limiter() -> "SlidingRateLimiter":
-    assert _rate_limiter is not None, "rate_limiter not initialized"
-    return _rate_limiter
 
 
 def get_metrics() -> "Metrics":
@@ -120,10 +111,9 @@ async def lifespan(app: FastAPI):
     _setup_logging(settings.log_format)
     log = structlog.get_logger("lifespan")
 
-    global _redis, _quota, _rate_limiter, _metrics, _email_sender, _memory
+    global _redis, _quota, _metrics, _email_sender, _memory
     http = httpx.AsyncClient()
     _redis = aioredis.from_url(settings.shugu_redis_url, decode_responses=False)
-    _rate_limiter = SlidingRateLimiter()
     _metrics = Metrics()
 
     # ── Phase 8.2 — observability ──────────────────────────────────────────
@@ -338,19 +328,6 @@ async def lifespan(app: FastAPI):
             fact_extractor_enabled=settings.fact_extractor_enabled,
         )
 
-    body_router = BodyRouter(BodyRouterDeps(
-        queue=queue, event_bus=event_bus, settings=settings, ambient=ambient,
-        rate_limiter=_rate_limiter, metrics=_metrics,
-    ))
-
-    # VIP bridge — Phase 1 Brique 1.2. Le router /internal/vip/* permet au
-    # process vip_agent (Worker LiveKit Agents séparé) d'émettre des events et
-    # d'enqueue chat.post via HTTP localhost signé. Fail-closed si le secret
-    # est absent du .env (voir `internal_vip.set_deps`).
-    internal_vip.set_deps(internal_vip.InternalVipDeps(
-        event_bus=event_bus, queue=queue, settings=settings,
-    ))
-
     visitor_ws.set_deps(visitor_ws.WSDeps(
         event_bus=event_bus, moderation=moderation, queue=queue, settings=settings,
         viewer_counter=viewer_counter, ambient=ambient,
@@ -359,7 +336,6 @@ async def lifespan(app: FastAPI):
         event_bus=event_bus, moderation=moderation, queue=queue, settings=settings,
         redis=_redis, http=http, tts=tts,
         viewer_counter=viewer_counter, ambient=ambient,
-        body_router=body_router,
     ))
     # Scene Editor WS — Phase D. Broadcast-only collab (pas de persistence
     # nouvelle : les drafts passent toujours par `/api/scene-editor/scenes/
@@ -624,8 +600,6 @@ def create_app() -> FastAPI:
     app.include_router(account.router)       # /account/* — self-service user auth (v4 Phase 1)
     app.include_router(admin.router)
     app.include_router(admin_users.router)   # /api/admin/users — VIP promote/revoke
-    app.include_router(livekit_api.router)   # /api/livekit/token — VIP voice room (Phase 3a)
-    app.include_router(internal_vip.router)  # /internal/vip/* — bridge vip_agent ↔ backend (Phase 1 Brique 1.2)
     app.include_router(registry_api.public_router)
     app.include_router(registry_api.admin_router)
     app.include_router(scene_editor_api.router)  # /api/scene-editor/* — Phase C drafts/patterns/layouts/timeline

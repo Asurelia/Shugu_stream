@@ -155,14 +155,12 @@ async def quota_snapshot(_: OperatorIdentity = Depends(require_operator)):
 
 @router.get("/metrics")
 async def metrics_snapshot(_: OperatorIdentity = Depends(require_operator)):
-    """In-memory observability snapshot: rate-limit usage per tool +
-    per-minute event rates + TTS TTFB percentiles + interrupt counters."""
-    from ..app import get_metrics, get_rate_limiter, get_redis
+    """In-memory observability snapshot: TTS TTFB percentiles + interrupt counters."""
+    from ..app import get_metrics, get_redis
     redis = get_redis()
     pending = await redis.llen("shugu:queue:pending")
     ready = await redis.zcard("shugu:queue:ready")
     return {
         "queue": {"pending": pending, "ready": ready},
-        "rate_limits": get_rate_limiter().snapshot(),
         "metrics": get_metrics().snapshot(),
     }
