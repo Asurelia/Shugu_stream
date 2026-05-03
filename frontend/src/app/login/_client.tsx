@@ -11,7 +11,7 @@
  *   - Markup, classes, tabs, and stub signup() left exactly as in the
  *     original Pages Router file.
  *
- * This page is the OPERATOR login (Spoukie / Hermes / scene-editor access),
+ * This page is the OPERATOR login (Spoukie / scene-editor access),
  * distinct from `/account/login` which is user-self-service.
  */
 
@@ -128,7 +128,7 @@ export function LoginClient() {
             </h1>
             <p className="text-[12px] text-shugu-cream-dim text-center mt-1 mb-5">
               {mode === "signin"
-                ? "Accès opérateur — commandes Hermes réelles."
+                ? "Accès opérateur — commandes réelles."
                 : "Rejoins les créateurs qui streament avec Aura."}
             </p>
 

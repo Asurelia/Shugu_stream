@@ -33,16 +33,8 @@ export type ShuguEvent =
   | { type: "look.hint"; ndc: { x: number; y: number }; hold_ms?: number }
   | { type: "expression.set"; expression: string; duration_ms?: number }
   | { type: "shot.change"; shot: string }
-  | { type: "desktop.window_open"; file_name: string; kind: string; initial_content: string; language: string }
-  | { type: "desktop.file_edit"; file_name: string; find: string | null; replace: string | null; append: string | null }
-  | { type: "desktop.window_close"; file_name: string }
-  | { type: "desktop.image_show"; url: string; fit: string; caption: string }
-  | { type: "desktop.arrange"; layout: string }
-  | { type: "hermes_state.window_open"; tab: string; view: string }
-  | { type: "hermes_state.window_close" }
   | { type: "error.moderation"; nonce?: string; reason: string; detector: string }
   | { type: "queue.rejected"; nonce?: string; reason: string }
-  | { type: "hermes_task.acknowledged"; nonce?: string; eta_estimate_s: number }
   | { type: "registry.invalidated"; reason?: string }
   | {
       type: "scene.preview"; slug: string;
@@ -59,7 +51,7 @@ export type ShuguEvent =
   | { type: "pong"; t?: number }
   | { type: "error"; nonce?: string; reason: string };
 
-export type ChatTarget = "shugu" | "hermes";
+export type ChatTarget = "shugu";
 
 export type ShuguClientOptions = {
   operator?: boolean;
@@ -118,10 +110,9 @@ export class ShuguClient {
     this.reconnectDelay = Math.min(this.reconnectDelay * 2, this.maxReconnectDelay);
   }
 
-  sendChat(text: string, target: ChatTarget = "shugu"): boolean {
+  sendChat(text: string): boolean {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return false;
-    const msg: any = { type: "chat.send", text, nonce: nanoid() };
-    if (target === "hermes") msg.target = "hermes";
+    const msg: Record<string, unknown> = { type: "chat.send", text, nonce: nanoid() };
     this.ws.send(JSON.stringify(msg));
     return true;
   }

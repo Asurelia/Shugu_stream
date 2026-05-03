@@ -11,7 +11,7 @@
    - Minimal blur (3–5%)
    - Collapsible chat (bubble ↔ full)
    - Bubbles for ALL messages, styled by rank (guest/sub/vip/mod/king/admin)
-   - Tweaks gated by role: Guest (none) · VIP (chat side) · Admin (+ hermes mode)
+   - Tweaks gated by role: Guest (none) · VIP (chat side) · Admin (+ extra controls)
    ======================================================================== */
 
 .viewer-proto-root {
@@ -477,7 +477,7 @@
 .viewer-proto-root .rank-admin .who .glyph { color: var(--danger); }
 .viewer-proto-root .rank-admin .who .name { color: #ff6a8a; }
 
-/* ── Rank: ASSISTANT (Shugu / Hermes) ── */
+/* ── Rank: ASSISTANT (Shugu) ── */
 .viewer-proto-root .bubble.rank-assistant .lg-tint {
   background-image: linear-gradient(135deg, rgba(181,133,255,0.22) 0%, rgba(232,121,249,0.14) 50%, rgba(129,236,255,0.10) 100%);
 }
@@ -492,17 +492,6 @@
   background: linear-gradient(120deg, #e08efe 0%, #fd6c9c 100%);
   -webkit-background-clip: text; background-clip: text; color: transparent;
 }
-/* Hermes variant (admin tweak) */
-.viewer-proto-root .bubble.rank-assistant.hermes .lg-tint {
-  background-image: linear-gradient(135deg, rgba(129,236,255,0.26) 0%, rgba(181,133,255,0.18) 60%, rgba(232,121,249,0.10) 100%);
-}
-.viewer-proto-root .bubble.rank-assistant.hermes .lg-edge {
-  box-shadow:
-    inset 0 1px 0 0 rgba(255,255,255,0.35),
-    inset 0 0 0 1px rgba(129,236,255,0.28),
-    inset 0 -1px 0 0 rgba(10,5,20,0.45);
-}
-
 /* System */
 .viewer-proto-root .msg-system {
   display: flex; align-items: center; justify-content: center; gap: 8px;
@@ -908,75 +897,6 @@
   10%  { opacity: 1; transform: translateY(-30px) scale(1) rotate(-5deg); }
   100% { transform: translateY(-50vh) scale(1.2) rotate(var(--r, 15deg)); opacity: 0; }
 }
-
-/* ═══════════════════ ADMIN INLINE TARGET SELECTOR ═══════════════════ */
-/* Small pill above the chat input, visible ONLY for admin. Lets the streamer
-   pick which brain the next prompt addresses: Shugu persona vs Hermes (tool-calls). */
-
-.viewer-proto-root .target-selector {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  margin: 0 2px 8px;
-  padding: 4px 6px 4px 12px;
-  height: 32px;
-  border-radius: 9999px;
-  position: relative;
-  isolation: isolate;
-  overflow: hidden;
-  --lg-tint: rgba(24, 18, 38, 0.42);
-}
-.viewer-proto-root .target-selector .ts-label {
-  position: relative; z-index: 1;
-  font-family: var(--font-mono);
-  font-size: 9.5px;
-  letter-spacing: 0.22em;
-  text-transform: uppercase;
-  color: var(--on-surface-muted);
-  display: flex; align-items: center; gap: 6px;
-}
-.viewer-proto-root .target-selector .ts-label::before {
-  content: '';
-  width: 4px; height: 4px; border-radius: 50%;
-  background: var(--grad-signature);
-  box-shadow: 0 0 6px rgba(232, 121, 249, 0.7);
-}
-.viewer-proto-root .target-selector .ts-seg {
-  position: relative;
-  z-index: 1;
-  display: flex;
-  gap: 2px;
-  padding: 2px;
-  border-radius: 9999px;
-  background: rgba(0, 0, 0, 0.28);
-}
-.viewer-proto-root .target-selector .ts-seg button {
-  border: 0;
-  padding: 4px 12px;
-  height: 22px;
-  border-radius: 9999px;
-  background: transparent;
-  color: var(--on-surface-variant);
-  font-family: var(--font-display);
-  font-size: 10.5px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  cursor: pointer;
-  display: flex; align-items: center; gap: 5px;
-  transition: color 180ms, background 180ms, box-shadow 180ms;
-}
-.viewer-proto-root .target-selector .ts-seg button:hover:not(.active) { color: var(--on-surface); }
-.viewer-proto-root .target-selector .ts-seg button.active {
-  color: #1a0a24;
-  background: var(--grad-signature);
-  box-shadow: 0 4px 10px -4px rgba(232, 121, 249, 0.55), inset 0 1px 0 rgba(255,255,255,0.28);
-}
-.viewer-proto-root .target-selector .ts-seg button.hermes.active {
-  background: linear-gradient(135deg, #81ecff 0%, #b585ff 100%);
-  box-shadow: 0 4px 10px -4px rgba(129, 236, 255, 0.55), inset 0 1px 0 rgba(255,255,255,0.28);
-}
-.viewer-proto-root .target-selector .ts-seg .ts-glyph { font-size: 10px; line-height: 1; }
 
 /* ═══════════════════ ACCESSIBILITY ═══════════════════ */
 @media (prefers-reduced-motion: reduce) {

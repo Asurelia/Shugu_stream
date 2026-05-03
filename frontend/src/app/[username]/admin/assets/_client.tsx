@@ -207,7 +207,7 @@ export function AssetsClient() {
     <AdminShell
       active="assets"
       title="Asset Registry"
-      subtitle="Données-fiées : Hermes voit toute addition au prochain appel, sans redéploiement."
+      subtitle="Données-fiées : le LLM voit toute addition au prochain appel, sans redéploiement."
     >
       {/* Tabs kinds ──────────────────────────────────────────────── */}
       <div style={{ display: "flex", gap: 6, marginBottom: 20, flexWrap: "wrap" }}>
