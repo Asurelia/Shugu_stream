@@ -244,3 +244,117 @@ async def test_aclose_kills_on_terminate_timeout(tmp_path: Path) -> None:
 def test_localtts_alias_is_piper_tts() -> None:
     """LocalTTS must be the same class as PiperTTS."""
     assert LocalTTS is PiperTTS
+
+
+# ---------------------------------------------------------------------------
+# U-TTS-S1: synthesize_stream yields PCM per sentence
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_synthesize_stream_yields_pcm_per_sentence(tmp_path: Path) -> None:
+    """3 complete sentences → 3 synthesize() calls → 3 PCM chunks yielded."""
+    settings = _fake_settings(tmp_path)
+    tts = PiperTTS(settings)
+
+    sentences_input = ["Bonjour.", "Comment ça va?", "Je vais bien!"]
+    pcm_per_sentence = [b"\xAA" * 100, b"\xBB" * 200, b"\xCC" * 150]
+
+    call_count = 0
+
+    async def _mock_synthesize(text: str) -> bytes:
+        nonlocal call_count
+        idx = sentences_input.index(text)
+        call_count += 1
+        return pcm_per_sentence[idx]
+
+    tts.synthesize = _mock_synthesize  # type: ignore[method-assign]
+
+    async def _sentence_iter():
+        for s in sentences_input:
+            yield s
+
+    collected: list[bytes] = []
+    async for chunk in tts.synthesize_stream(_sentence_iter()):
+        collected.append(chunk)
+
+    assert call_count == 3, f"Expected 3 synthesize() calls, got {call_count}"
+    assert collected == pcm_per_sentence, "PCM chunks must be yielded in sentence order"
+
+
+# ---------------------------------------------------------------------------
+# U-TTS-S2: synthesize_stream skips empty and whitespace-only sentences
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_synthesize_stream_skips_only_empty_or_whitespace(tmp_path: Path) -> None:
+    """ONLY empty / whitespace-only sentences are skipped (blueprint §3.5).
+
+    Short legitimate French interjections like "Oui.", "Non.", "Ah!" must pass
+    through to Piper — dropping them on a char-length filter would silently
+    break one-syllable conversational answers.
+    """
+    settings = _fake_settings(tmp_path)
+    tts = PiperTTS(settings)
+
+    seen_inputs: list[str] = []
+
+    async def _mock_synthesize(text: str) -> bytes:
+        seen_inputs.append(text)
+        return b"\x00" * 100
+
+    tts.synthesize = _mock_synthesize  # type: ignore[method-assign]
+
+    async def _sentence_iter():
+        # Mix of legitimate short, normal, empty, whitespace
+        for s in ["Bonjour.", "", "   ", "Oui.", "Ah!", "Non.", "Merci!"]:
+            yield s
+
+    collected: list[bytes] = []
+    async for chunk in tts.synthesize_stream(_sentence_iter()):
+        collected.append(chunk)
+
+    # Skip ONLY "" and "   ". All five non-empty sentences must reach Piper —
+    # including "Oui." (4 chars) and "Ah!" (3 chars).
+    assert seen_inputs == ["Bonjour.", "Oui.", "Ah!", "Non.", "Merci!"], (
+        f"Unexpected calls to synthesize: {seen_inputs}"
+    )
+    assert len(collected) == 5
+
+
+# ---------------------------------------------------------------------------
+# U-TTS-S3: synthesize_stream propagates cancel (break after first chunk)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_synthesize_stream_propagates_cancel(tmp_path: Path) -> None:
+    """If consumer breaks after first chunk, second sentence must not be synthesized."""
+    settings = _fake_settings(tmp_path)
+    tts = PiperTTS(settings)
+
+    call_count = 0
+
+    async def _mock_synthesize(text: str) -> bytes:
+        nonlocal call_count
+        call_count += 1
+        return b"\x00" * 100
+
+    tts.synthesize = _mock_synthesize  # type: ignore[method-assign]
+
+    sentences = ["Premier.", "Deuxième.", "Troisième."]
+
+    async def _sentence_iter():
+        for s in sentences:
+            yield s
+
+    # Only consume first chunk then break
+    collected: list[bytes] = []
+    async for chunk in tts.synthesize_stream(_sentence_iter()):
+        collected.append(chunk)
+        break  # cancel after first
+
+    assert call_count == 1, (
+        f"Expected only 1 synthesize() call after break, got {call_count}"
+    )
