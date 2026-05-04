@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import asyncio
 from functools import partial
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, AsyncIterator
 
 import structlog
 from livekit import rtc
@@ -34,6 +34,7 @@ from livekit.plugins.silero import VAD
 from ..adapters.injection_detector import aggregate_weight
 from ..adapters.injection_detector import scan as _injection_scan
 from ..config import Settings, get_settings
+from .chunker import SentenceChunker
 from .llm_local import LocalLLM
 from .regie import intent_classifier, tool_call_parser
 from .regie.web_search import WebSearchAggregator, WebSearchProvider
@@ -69,6 +70,83 @@ def _neutralize_delimiters(snippet: str) -> str:
     exact literal can break out of confinement.
     """
     return snippet.replace(_WEB_CONTEXT_OPEN, "").replace(_WEB_CONTEXT_CLOSE, "")
+
+
+# Tool-call markers emitted by Gemma when it triggers a tool. The raw markers
+# must NEVER reach the TTS — Piper would try to vocalize "<|tool_call>call:..."
+# producing garbage audio AND breaking the régie contract (tool calls are handled
+# by tool_call_parser, not spoken aloud).
+_TOOL_CALL_OPEN: str = "<|tool_call>"
+_TOOL_CALL_CLOSE: str = "<tool_call|>"
+_TOOL_CALL_OPEN_LEN: int = len(_TOOL_CALL_OPEN)
+# Worst-case size of a complete <|tool_call>call:NAME{...}<tool_call|> sequence
+# observed in benches: ~200 chars. We keep a safety bound of 2048 chars so an
+# unclosed opening (LLM truncated mid-call) eventually flushes instead of
+# starving TTS forever.
+_TOOL_CALL_MAX_BUFFER: int = 2048
+
+
+async def _strip_tool_calls_streaming(
+    token_stream: AsyncIterator[str],
+) -> AsyncIterator[str]:
+    """Filter Gemma tool_call markers from a token stream before TTS.
+
+    Strategy: maintain a sliding buffer of recently received tokens. After each
+    token, run the tool_call regex on the buffer and remove any complete
+    matches. If an opening marker `<|tool_call>` is present without a matching
+    close, hold back tokens from that point onward until the close arrives or
+    the buffer exceeds `_TOOL_CALL_MAX_BUFFER` (in which case we drop the
+    unclosed sequence — preferring silence over garbled output).
+
+    A `_TOOL_CALL_OPEN_LEN`-char hold-back at the tail prevents flushing a
+    partial opening that crosses a token boundary (e.g. tokens `"<|tool"` then
+    `"_call>"`).
+
+    Same security contract as `_neutralize_delimiters` (Sprint C PR1) and
+    `_strip_tool_calls` (Sprint B): no marker reaches the TTS, regardless of
+    whether the LLM streams or returns one-shot.
+    """
+    buffer = ""
+    async for token in token_stream:
+        if not token:
+            continue
+        buffer += token
+
+        # 1) Strip any complete tool_call sequences first.
+        cleaned = tool_call_parser._TOOL_CALL_RE.sub("", buffer)
+
+        # 2) If an opening marker is still present, it must be unclosed —
+        # withhold everything from the opening onward until close or overflow.
+        open_idx = cleaned.find(_TOOL_CALL_OPEN)
+        if open_idx == -1:
+            # No pending opening: safe to flush except the tail (in case a new
+            # opening is forming across tokens).
+            if len(cleaned) > _TOOL_CALL_OPEN_LEN:
+                yield cleaned[:-_TOOL_CALL_OPEN_LEN]
+                buffer = cleaned[-_TOOL_CALL_OPEN_LEN:]
+            else:
+                buffer = cleaned
+        else:
+            # Yield the safe prefix, hold back the unclosed tool_call.
+            if open_idx > 0:
+                yield cleaned[:open_idx]
+            buffer = cleaned[open_idx:]
+            if len(buffer) > _TOOL_CALL_MAX_BUFFER:
+                log.warning(
+                    "voice.toolcall_filter.unclosed_dropped",
+                    buffer_size=len(buffer),
+                )
+                buffer = ""
+
+    # End-of-stream flush: clean any remaining complete tool_calls and drop
+    # any leftover unclosed opening (refuse to leak partial markers).
+    final = tool_call_parser._TOOL_CALL_RE.sub("", buffer)
+    open_idx = final.find(_TOOL_CALL_OPEN)
+    if open_idx != -1:
+        log.warning("voice.toolcall_filter.unclosed_at_eof", dropped=len(final) - open_idx)
+        final = final[:open_idx]
+    if final:
+        yield final
 
 
 class ShuguVoiceAgent(Agent):
@@ -185,7 +263,10 @@ class ShuguVoiceAgent(Agent):
             pcm_16k = rtc.combine_audio_frames(frames_16k)
             pcm_bytes = bytes(pcm_16k.data)
             transcript = await self._stt.transcribe(pcm_bytes, language="fr")
-            await self._handle_turn(transcript)
+            if self._settings.voice_streaming_enabled:
+                await self._handle_turn_streaming(transcript)
+            else:
+                await self._handle_turn(transcript)
         finally:
             self._processing = False
 
@@ -205,7 +286,11 @@ class ShuguVoiceAgent(Agent):
         if not transcript:
             return
 
-        self._processing = True
+        # NOTE: do NOT set self._processing = True here — _consume_vad already
+        # set it synchronously before scheduling _process_utterance. The flag
+        # lifecycle is owned by _process_utterance.finally (single owner). When
+        # PR3 introduces _AgentState enum, the second writer would corrupt the
+        # state machine. The outer finally in _process_utterance always clears.
         try:
             intent_match = intent_classifier.classify(transcript)
             log.info(
@@ -261,8 +346,96 @@ class ShuguVoiceAgent(Agent):
 
         except Exception as exc:
             log.error("voice.handle_turn.error", error=str(exc))
-        finally:
-            self._processing = False
+        # No finally here — _processing is cleared by _process_utterance's outer
+        # finally. Removing the duplicate write avoids racing with the future
+        # _AgentState enum (PR3).
+
+    async def _handle_turn_streaming(self, transcript: str) -> None:
+        """Pipeline streaming Sprint C (activé par voice_streaming_enabled=True).
+
+        Flow :
+          1. Classify intent
+          2. WEB_SEARCH → web_search.search() → snippets sanitisés → prompt augmenté
+          3. LocalLLM.stream() → tokens → SentenceChunker → phrases
+          4. PiperTTS.synthesize_stream(phrases) → PCM chunks → _resample_and_publish
+
+        Barge-in hooks (PR3) :
+          cancel_speaking() is exposed but not yet wired to START_OF_SPEECH.
+          The _processing flag continues to guard backpressure (bool, not enum — PR3).
+
+        Note WEB_SEARCH latency : Tavily adds ~300-600ms RTT — TTFB ~700-1000ms.
+        Budget depassé vs CHAT path (330-450ms). Filler acoustique Sprint D.
+        """
+        if not transcript:
+            return
+
+        try:
+            intent_match = intent_classifier.classify(transcript)
+            log.info(
+                "voice.regie.intent",
+                intent=intent_match.intent.value,
+                matched_terms=intent_match.matched_terms,
+                pipeline="streaming",
+            )
+
+            # Step 1 — Web search pre-fetch + 3-layer sanitization (identical to _handle_turn)
+            web_snippets: list[str] = []
+            if intent_match.intent == intent_classifier.Intent.WEB_SEARCH:
+                raw_results = await self._web_search.search(transcript)
+                threshold = self._settings.voice_web_injection_threshold
+                for result in raw_results:
+                    signals = _injection_scan(result.snippet)
+                    score = min(aggregate_weight(signals) / 5.0, 1.0)
+                    if score > threshold:
+                        log.warning(
+                            "voice.websearch.snippet_dropped",
+                            score=score,
+                            threshold=threshold,
+                            pipeline="streaming",
+                        )
+                    else:
+                        web_snippets.append(_neutralize_delimiters(result.snippet))
+
+            # Step 2 — Build augmented system prompt (same as one-shot path)
+            system = self._build_system_prompt(intent_match, web_snippets)
+            messages: list[dict[str, str]] = [{"role": "user", "content": transcript}]
+
+            # Step 3+4 — LLM stream → tool_call filter → chunker → TTS stream → publish.
+            # The tool_call filter is non-negotiable: without it, Gemma's raw
+            # <|tool_call>...<tool_call|> markers would arrive at Piper and be
+            # vocalized as garbage. Same protection contract as the Sprint B
+            # `_handle_turn` path (which calls `_strip_tool_calls` post-hoc).
+            chunker = SentenceChunker()
+            token_stream = self._llm.stream(
+                system,
+                messages,
+                max_tokens=300,
+                enable_thinking=False,
+            )
+            filtered_stream = _strip_tool_calls_streaming(token_stream)
+            sentence_stream = chunker.feed_stream(filtered_stream)
+
+            async for pcm_chunk in self._tts.synthesize_stream(sentence_stream):
+                await self._resample_and_publish(pcm_chunk)
+
+            log.info("voice.handle_turn_streaming.done")
+
+        except Exception as exc:
+            log.error("voice.handle_turn_streaming.error", error=str(exc))
+
+    async def cancel_speaking(self) -> None:
+        """Cancel safe : stop LLM streaming + terminate active TTS subprocess.
+
+        Cooperative — does not brutally kill the executor thread.
+        The asyncio.Lock is released by stream() finally block when the thread exits.
+
+        This is a PR3 hook: exposed here but not yet wired to START_OF_SPEECH
+        in _drain_and_transcribe. The full barge-in state machine (_AgentState enum,
+        SPEAKING guard, START_OF_SPEECH handler) ships in PR3.
+        """
+        log.info("voice.bargein.cancelling")
+        self._llm.cancel()
+        await self._tts.aclose()
 
     async def _resample_and_publish(self, pcm_22050: bytes) -> None:
         """Resample 22050 -> 48000 Hz (ratio ~2.177) and publish via AudioSource.

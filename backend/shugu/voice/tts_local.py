@@ -110,11 +110,29 @@ class PiperTTS:
 
     async def synthesize_stream(
         self,
-        text_chunks: AsyncIterator[str],
+        sentences: AsyncIterator[str],
     ) -> AsyncIterator[bytes]:
-        """Sprint C."""
-        raise NotImplementedError("Sprint C")
-        yield  # type: ignore[misc]
+        """Streaming synthesis via Voie B: one Piper subprocess per sentence.
+
+        Yields raw PCM s16le 22050 Hz mono for each complete sentence as soon
+        as the subprocess finishes. No persistent subprocess is held.
+
+        Args:
+            sentences: async iterator of complete sentences (from SentenceChunker)
+
+        Yields:
+            bytes: PCM s16le 22050 Hz mono, one chunk per sentence
+        """
+        async for sentence in sentences:
+            # Skip ONLY empty/whitespace per blueprint §3.5. Short legitimate
+            # interjections like "Oui.", "Non.", "Ah!", "Hey!" must reach Piper —
+            # they're natural French speech, not noise. A char-length filter would
+            # silently drop these one-syllable answers, breaking conversational UX.
+            if not sentence.strip():
+                continue
+            pcm = await self.synthesize(sentence.strip())
+            if pcm:
+                yield pcm
 
 
 # Retro-compat alias -- existing code that imports LocalTTS continues to work.
