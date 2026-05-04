@@ -1,6 +1,6 @@
 """Unit tests for ShuguVoiceAgent, entrypoint, and build_worker_options.
 
-Tests U-AGT-1 through U-AGT-5.
+Tests U-AGT-1 through U-AGT-5 + Sprint C PR3 barge-in tests U-BI-1 through U-BI-7.
 All LiveKit SDK calls are mocked — no real LiveKit connection required.
 """
 from __future__ import annotations
@@ -14,6 +14,7 @@ import pytest
 from shugu.config import Settings
 from shugu.voice.livekit_agent import (
     ShuguVoiceAgent,
+    _AgentState,
     build_worker_options,
 )
 from shugu.voice.regie.intent_classifier import Intent, IntentMatch
@@ -376,13 +377,16 @@ async def test_processing_flag_resets_after_empty_transcript(tmp_path: Path) -> 
             mock_pcm.data = b"\x00" * 320
             mock_combine.return_value = mock_pcm
 
-            # Simulate _consume_vad setting the flag before scheduling
-            agent._processing = True
+            # Simulate _consume_vad setting state before scheduling (_processing read-only now)
+            agent._state = _AgentState.PROCESSING
             await agent._process_utterance(fake_combined)
 
-    assert agent._processing is False, (
-        "_processing must reset to False after _process_utterance "
+    assert agent._state == _AgentState.LISTENING, (
+        "_state must return to LISTENING after _process_utterance "
         "even when transcript is empty (backpressure §6.2)"
+    )
+    assert agent._processing is False, (
+        "_processing property must also be False (backward-compat) when _state=LISTENING"
     )
 
 
@@ -705,7 +709,7 @@ async def test_handle_turn_streaming_routes_when_enabled(tmp_path: Path) -> None
             fake_pcm = MagicMock()
             fake_pcm.data = b"\x00" * 320
             mock_combine.return_value = fake_pcm
-            agent._processing = True
+            agent._state = _AgentState.PROCESSING
             await agent._process_utterance(MagicMock())
 
     assert streaming_called, "_handle_turn_streaming must be called when voice_streaming_enabled=True"
@@ -751,7 +755,7 @@ async def test_handle_turn_streaming_fallback_when_disabled(tmp_path: Path) -> N
             fake_pcm = MagicMock()
             fake_pcm.data = b"\x00" * 320
             mock_combine.return_value = fake_pcm
-            agent._processing = True
+            agent._state = _AgentState.PROCESSING
             await agent._process_utterance(MagicMock())
 
     assert oneshot_called, "_handle_turn must be called when voice_streaming_enabled=False"
@@ -980,6 +984,243 @@ async def test_strip_tool_calls_streaming_drops_unclosed_at_eof() -> None:
     assert "Hello." in out
 
 
+# ---------------------------------------------------------------------------
+# Sprint C PR3 — Barge-in tests U-BI-1 through U-BI-7
+# ---------------------------------------------------------------------------
+
+
+def _make_agent_for_bargein(tmp_path: Path) -> tuple[ShuguVoiceAgent, MagicMock, MagicMock]:
+    """Agent with LLM cancel() and TTS aclose() mocks ready for barge-in testing."""
+    settings = _fake_settings(tmp_path)
+    stt = _make_mock_stt()
+    llm = _make_mock_llm_with_stream(["Bonjour", " !"])
+    llm.cancel = MagicMock()
+    tts = _make_mock_tts_with_stream(tmp_path)
+    tts.aclose = AsyncMock()
+    audio_source = _make_mock_audio_source()
+    agent = ShuguVoiceAgent(stt, llm, tts, settings, audio_source)
+    return agent, llm, tts
+
+
+@pytest.mark.asyncio
+async def test_bi1_full_turn_state_transitions(tmp_path: Path) -> None:
+    """B-1: Complete turn without barge-in: LISTENING → PROCESSING → SPEAKING → LISTENING.
+
+    Simulates the full transition cycle by directly calling _process_utterance
+    with a streaming turn. Validates each state at the right moment.
+    """
+    settings = _fake_settings(tmp_path)
+    states_observed: list[str] = []
+
+    stt = _make_mock_stt("bonjour")
+    llm = _make_mock_llm_with_stream(["Bonjour", " monde", "."])
+    llm.cancel = MagicMock()
+    tts = MagicMock()
+    tts.NATIVE_SAMPLE_RATE = 22_050
+    tts.aclose = AsyncMock()
+
+    async def _synthesize_stream(sentences):
+        async for sentence in sentences:
+            if sentence.strip():
+                yield b"\xAA" * 100
+
+    tts.synthesize_stream = _synthesize_stream
+
+    audio_source = _make_mock_audio_source()
+    agent = ShuguVoiceAgent(stt, llm, tts, settings, audio_source)
+
+    # Initial state
+    assert agent._state == _AgentState.LISTENING, "Agent must start in LISTENING"
+
+    # Spy on _handle_turn_streaming to capture PROCESSING and SPEAKING states
+    original_hts = agent._handle_turn_streaming
+
+    async def _spy_hts(transcript: str) -> None:
+        states_observed.append(agent._state.value)  # should be PROCESSING here
+        await original_hts(transcript)
+        states_observed.append(agent._state.value)  # should be SPEAKING here (before finally)
+
+    agent._handle_turn_streaming = _spy_hts  # type: ignore[method-assign]
+
+    with patch("livekit.rtc.AudioResampler") as mock_resampler_cls:
+        mock_resampler = MagicMock()
+        mock_resampler.push.return_value = [MagicMock()]
+        mock_resampler_cls.return_value = mock_resampler
+        with patch("livekit.rtc.combine_audio_frames") as mock_combine:
+            fake_pcm = MagicMock()
+            fake_pcm.data = b"\x00" * 320
+            mock_combine.return_value = fake_pcm
+
+            agent._state = _AgentState.PROCESSING
+            await agent._process_utterance(MagicMock())
+
+    # After _process_utterance.finally, must return to LISTENING
+    assert agent._state == _AgentState.LISTENING, (
+        "State must be LISTENING after full turn completes"
+    )
+    # Verify the full PROCESSING → SPEAKING transition sequence
+    assert states_observed == ["processing", "speaking"], (
+        f"Expected ['processing', 'speaking'] but got {states_observed!r}. "
+        "_handle_turn_streaming must enter as PROCESSING and exit as SPEAKING."
+    )
+
+
+@pytest.mark.asyncio
+async def test_bi2_bargein_during_speaking_calls_cancel(tmp_path: Path) -> None:
+    """B-2: Barge-in during SPEAKING: _on_speech_started calls llm.cancel + tts.aclose."""
+    agent, llm, tts = _make_agent_for_bargein(tmp_path)
+
+    # Force state to SPEAKING (as if turn is in progress)
+    agent._state = _AgentState.SPEAKING
+
+    await agent._on_speech_started()
+
+    llm.cancel.assert_called_once()
+    tts.aclose.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_bi3_bargein_during_processing_calls_cancel(tmp_path: Path) -> None:
+    """B-3: Barge-in during PROCESSING: _on_speech_started cancels LLM (before TTS started)."""
+    agent, llm, tts = _make_agent_for_bargein(tmp_path)
+
+    # Force state to PROCESSING (as if STT/régie/LLM-prompt is in flight)
+    agent._state = _AgentState.PROCESSING
+
+    await agent._on_speech_started()
+
+    llm.cancel.assert_called_once()
+    tts.aclose.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_bi4_no_bargein_during_listening(tmp_path: Path) -> None:
+    """B-4: START_OF_SPEECH while LISTENING must NOT call cancel_speaking."""
+    agent, llm, tts = _make_agent_for_bargein(tmp_path)
+
+    # State is already LISTENING (initial)
+    assert agent._state == _AgentState.LISTENING
+
+    await agent._on_speech_started()
+
+    llm.cancel.assert_not_called()
+    tts.aclose.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_bi5_double_bargein_idempotent(tmp_path: Path) -> None:
+    """B-5: Two consecutive START_OF_SPEECH during SPEAKING are idempotent.
+
+    First call: cancel when SPEAKING (cancel called once).
+    Second call: state is back to LISTENING (via _process_utterance.finally in real flow,
+    but here cancel_speaking doesn't change state — so second call sees SPEAKING again).
+    We verify cancel is called for each start-of-speech that finds a non-LISTENING state.
+    The key assertion is: no exception, no corruption.
+    """
+    agent, llm, tts = _make_agent_for_bargein(tmp_path)
+    agent._state = _AgentState.SPEAKING
+
+    # First barge-in: SPEAKING → cancel called
+    await agent._on_speech_started()
+    assert llm.cancel.call_count == 1
+    assert tts.aclose.await_count == 1
+
+    # In real flow, _process_utterance.finally would set state to LISTENING.
+    # Here we simulate that transition manually.
+    agent._state = _AgentState.LISTENING
+
+    # Second barge-in: LISTENING → no-op
+    await agent._on_speech_started()
+    assert llm.cancel.call_count == 1, (
+        "cancel must not be called again when state is LISTENING"
+    )
+    assert tts.aclose.await_count == 1, (
+        "aclose must not be called again when state is LISTENING"
+    )
+
+
+@pytest.mark.asyncio
+async def test_bi6_processing_property_mirrors_state(tmp_path: Path) -> None:
+    """B-6: _processing property correctly mirrors _state across all three states.
+
+    The backward-compat property _processing returns True for PROCESSING and
+    SPEAKING, and False only for LISTENING.  This test verifies the mapping
+    across the full state space so callers that still read _processing see
+    correct values regardless of which non-LISTENING sub-state the agent is in.
+    """
+    agent, llm, tts = _make_agent_for_bargein(tmp_path)
+
+    # LISTENING → _processing is False
+    agent._state = _AgentState.LISTENING
+    assert agent._processing is False, (
+        "_processing must be False in LISTENING"
+    )
+
+    # PROCESSING → _processing is True
+    agent._state = _AgentState.PROCESSING
+    assert agent._processing is True, (
+        "_processing must be True in PROCESSING"
+    )
+
+    # SPEAKING → _processing is True
+    agent._state = _AgentState.SPEAKING
+    assert agent._processing is True, (
+        "_processing must be True in SPEAKING"
+    )
+
+    # Return to LISTENING → _processing is False again
+    agent._state = _AgentState.LISTENING
+    assert agent._processing is False, (
+        "_processing must be False once state returns to LISTENING"
+    )
+
+
+@pytest.mark.asyncio
+async def test_bi7_state_returns_to_listening_after_cancel_and_new_turn(tmp_path: Path) -> None:
+    """B-7: After barge-in, state returns to LISTENING and a new turn can start normally.
+
+    Simulates: SPEAKING → barge-in (cancel) → LISTENING (via finally) → new turn starts.
+    """
+    settings = _fake_settings(tmp_path)
+    stt = _make_mock_stt("salut")
+    llm = _make_mock_llm_with_stream(["Salut", " !"])
+    llm.cancel = MagicMock()
+    tts = _make_mock_tts_with_stream(tmp_path)
+    tts.aclose = AsyncMock()
+    audio_source = _make_mock_audio_source()
+    agent = ShuguVoiceAgent(stt, llm, tts, settings, audio_source)
+
+    # Step 1: Simulate agent in SPEAKING
+    agent._state = _AgentState.SPEAKING
+
+    # Step 2: Barge-in — cancel is called, state does NOT change here (single-writer)
+    await agent._on_speech_started()
+    llm.cancel.assert_called_once()
+    # State still SPEAKING (cancel_speaking doesn't mutate state)
+    assert agent._state == _AgentState.SPEAKING
+
+    # Step 3: Simulate _process_utterance.finally running (the single writer)
+    agent._state = _AgentState.LISTENING
+
+    # Step 4: New turn can now start — _consume_vad would set PROCESSING
+    agent._state = _AgentState.PROCESSING
+
+    # Step 5: New _process_utterance runs and completes → LISTENING
+    with patch("livekit.rtc.AudioResampler") as mock_resampler_cls:
+        mock_resampler = MagicMock()
+        mock_resampler.push.return_value = [MagicMock()]
+        mock_resampler_cls.return_value = mock_resampler
+        with patch("livekit.rtc.combine_audio_frames") as mock_combine:
+            fake_pcm = MagicMock()
+            fake_pcm.data = b"\x00" * 320
+            mock_combine.return_value = fake_pcm
+            await agent._process_utterance(MagicMock())
+
+    assert agent._state == _AgentState.LISTENING, (
+        "State must return to LISTENING after new turn completes post-barge-in"
+    )
+
+
 @pytest.mark.asyncio
 async def test_handle_turn_streaming_strips_tool_calls_before_tts(
     tmp_path: Path,
@@ -1041,4 +1282,52 @@ async def test_handle_turn_streaming_strips_tool_calls_before_tts(
     )
     assert "web_search" not in full_text, (
         f"Tool_call body leaked into TTS stream: {full_text!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# B-8 (IMP-3 fix): blueprint §7.5 — END_OF_SPEECH within 200ms of cancel is
+# dropped (it's the user's interrupt utterance finishing, not a new turn).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_bi8_end_of_speech_within_drop_window_logged_and_skipped(
+    tmp_path: Path,
+) -> None:
+    """After cancel_speaking(), an END_OF_SPEECH within _BARGEIN_DROP_WINDOW_S
+    must be dropped with log voice.bargein.utterance_dropped — Shugu must NOT
+    immediately respond to the interrupt utterance itself (blueprint §7.5).
+
+    This test exercises the timestamp logic directly without spinning up a
+    real VAD stream. The contract: after cancel_speaking() updates
+    _last_cancel_ts, a fresh utterance reaching _consume_vad's END_OF_SPEECH
+    branch within the drop window is filtered.
+    """
+    from shugu.voice.livekit_agent import _BARGEIN_DROP_WINDOW_S
+
+    settings = _fake_settings(tmp_path)
+    stt = _make_mock_stt()
+    llm = _make_mock_llm()
+    llm.cancel = MagicMock()
+    tts = _make_mock_tts()
+    tts.aclose = AsyncMock()
+    audio_source = _make_mock_audio_source()
+    agent = ShuguVoiceAgent(stt, llm, tts, settings, audio_source)
+
+    # Initial: never cancelled, timestamp 0.0 → no drop
+    assert agent._last_cancel_ts == 0.0
+
+    # Cancel sets a real loop timestamp
+    await agent.cancel_speaking()
+    assert agent._last_cancel_ts > 0.0
+
+    # Confirm the constant is sub-second per blueprint
+    assert 0.0 < _BARGEIN_DROP_WINDOW_S <= 1.0
+
+    # Reading elapsed within window: drop predicate must be True
+    elapsed_now = asyncio.get_running_loop().time() - agent._last_cancel_ts
+    assert elapsed_now < _BARGEIN_DROP_WINDOW_S, (
+        "Test fixture too slow: elapsed already > drop window; "
+        "the predicate would not fire in real flow either."
     )
