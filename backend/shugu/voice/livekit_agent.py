@@ -33,9 +33,7 @@ from typing import TYPE_CHECKING, AsyncIterator
 import structlog
 from livekit import rtc
 from livekit.agents import Agent, AutoSubscribe, JobContext, WorkerOptions
-from livekit.agents import vad as agents_vad
 from livekit.agents.worker import AgentServer
-from livekit.plugins.silero import VAD
 
 from ..adapters.injection_detector import aggregate_weight
 from ..adapters.injection_detector import scan as _injection_scan
@@ -61,6 +59,7 @@ from .regie import intent_classifier, tool_call_parser
 from .regie.web_search import WebSearchAggregator, WebSearchProvider
 from .stt_local import WhisperSTT
 from .tts_local import PiperTTS
+from .vad_driver import VADDriver
 
 if TYPE_CHECKING:
     pass
@@ -268,68 +267,56 @@ class ShuguVoiceAgent(Agent):
         log.info("voice.session.ready")
 
     async def _drain_and_transcribe(self, track: rtc.RemoteAudioTrack) -> None:
-        """Drive VADStream on incoming audio; launch _handle_turn on END_OF_SPEECH.
+        """Sprint D PR2 refacto: delegates to VADDriver.
 
-        Uses VADStream.push_frame() per frame and listens for END_OF_SPEECH which
-        contains the full utterance in event.frames. This avoids any manual buffer
-        accumulation and delegates end-of-utterance detection to Silero.
+        The handlers wire VAD events back to the agent state machine:
+        - speech_started → _on_speech_started (barge-in detection)
+        - speech_ended  → _handle_end_of_speech (drop window + state guard +
+          LISTENING→PROCESSING transition + create_task(_process_utterance))
         """
-        vad_instance = VAD.load()
-        vad_stream = vad_instance.stream()
-
-        audio_stream = rtc.AudioStream(
-            track,
-            sample_rate=_LIVEKIT_SAMPLE_RATE,
-            num_channels=1,
-        )
-
-        async def _feed_frames() -> None:
-            async for event in audio_stream:
-                vad_stream.push_frame(event.frame)
-
-        async def _consume_vad() -> None:
-            async for vad_event in vad_stream:
-                if vad_event.type == agents_vad.VADEventType.START_OF_SPEECH:
-                    await self._on_speech_started()
-                elif vad_event.type == agents_vad.VADEventType.END_OF_SPEECH:
-                    # Blueprint §7.5: drop END_OF_SPEECH tails arriving within
-                    # 200ms of a barge-in cancel — that's the user's interrupt
-                    # finishing, not a new turn to answer.
-                    elapsed = asyncio.get_running_loop().time() - self._last_cancel_ts
-                    if self._last_cancel_ts > 0 and elapsed < _BARGEIN_DROP_WINDOW_S:
-                        log.info(
-                            "voice.bargein.utterance_dropped",
-                            elapsed_ms=int(elapsed * 1000),
-                            window_ms=int(_BARGEIN_DROP_WINDOW_S * 1000),
-                        )
-                        continue
-                    if self._state != _AgentState.LISTENING:
-                        log.info(
-                            "voice.audio.dropped",
-                            reason="not in LISTENING state",
-                            state=self._state.value,
-                        )
-                        continue
-                    if not vad_event.frames:
-                        continue
-                    combined = rtc.combine_audio_frames(vad_event.frames)
-                    # Transition LISTENING → PROCESSING synchronously BEFORE scheduling
-                    # so a second END_OF_SPEECH event cannot pass the guard above
-                    # while the first utterance is still being processed (§6.2 backpressure).
-                    self._state = _AgentState.PROCESSING
-                    asyncio.create_task(self._process_utterance(combined))
-
-        feed_task = asyncio.create_task(_feed_frames())
-        consume_task = asyncio.create_task(_consume_vad())
+        driver = VADDriver(track, sample_rate=_LIVEKIT_SAMPLE_RATE, num_channels=1)
         try:
-            await asyncio.gather(feed_task, consume_task)
-        except Exception as exc:
-            log.error("voice.drain.error", error=str(exc))
-            feed_task.cancel()
-            consume_task.cancel()
+            await driver.run(
+                on_speech_started=self._on_speech_started,
+                on_speech_ended=self._handle_end_of_speech,
+            )
         finally:
-            vad_stream.end_input()
-            await vad_stream.aclose()
+            await driver.aclose()
+
+    async def _handle_end_of_speech(self, frames: list) -> None:
+        """END_OF_SPEECH branch extracted from former _consume_vad inner fn.
+
+        Handles:
+        - drop window check (200ms post-cancel — blueprint §7.5)
+        - state guard (must be LISTENING)
+        - empty frames skip
+        - LISTENING → PROCESSING transition + scheduling _process_utterance
+        """
+        # Blueprint §7.5: drop END_OF_SPEECH tails arriving within 200ms of a
+        # barge-in cancel — that's the user's interrupt finishing, not a new turn.
+        elapsed = asyncio.get_running_loop().time() - self._last_cancel_ts
+        if self._last_cancel_ts > 0 and elapsed < _BARGEIN_DROP_WINDOW_S:
+            log.info(
+                "voice.bargein.utterance_dropped",
+                elapsed_ms=int(elapsed * 1000),
+                window_ms=int(_BARGEIN_DROP_WINDOW_S * 1000),
+            )
+            return
+        if self._state != _AgentState.LISTENING:
+            log.info(
+                "voice.audio.dropped",
+                reason="not in LISTENING state",
+                state=self._state.value,
+            )
+            return
+        if not frames:
+            return
+        combined = rtc.combine_audio_frames(frames)
+        # Transition LISTENING → PROCESSING synchronously BEFORE scheduling
+        # so a second END_OF_SPEECH event cannot pass the guard above
+        # while the first utterance is still being processed (§6.2 backpressure).
+        self._state = _AgentState.PROCESSING
+        asyncio.create_task(self._process_utterance(combined))
 
     async def _process_utterance(self, combined: rtc.AudioFrame) -> None:
         """Resample 48 kHz -> 16 kHz, transcribe, then handle turn.

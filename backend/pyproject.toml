@@ -112,6 +112,7 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 markers = [
     "integration: requires real Redis/Postgres services",
+    "race: asyncio race condition tests (Sprint D PR2 D-S5)",
 ]
 filterwarnings = [
     # Pydantic v2 + third-party deps logent beaucoup de DeprecationWarning hors
