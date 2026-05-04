@@ -41,7 +41,22 @@ from ..adapters.injection_detector import aggregate_weight
 from ..adapters.injection_detector import scan as _injection_scan
 from ..config import Settings, get_settings
 from .chunker import SentenceChunker
+from .filler_bank import _DEFAULT_FILLER_PHRASES, FillerBank, NullFillerBank
 from .llm_local import LocalLLM
+from .metrics import (
+    STAGE_AUDIO_FIRST,
+    STAGE_INTENT_DONE,
+    STAGE_LLM_FIRST,
+    STAGE_SENTENCE_FIRST,
+    STAGE_STT_DONE,
+    STAGE_TTS_FIRST,
+    STAGE_VAD_END,
+    STAGE_WEB_DONE,
+    TurnMetrics,
+    VoiceMetricsRecorder,
+    get_null_recorder,
+    make_recorder,
+)
 from .regie import intent_classifier, tool_call_parser
 from .regie.web_search import WebSearchAggregator, WebSearchProvider
 from .stt_local import WhisperSTT
@@ -193,6 +208,8 @@ class ShuguVoiceAgent(Agent):
         settings: Settings,
         audio_source: rtc.AudioSource,
         web_search: WebSearchProvider | None = None,
+        filler_bank: FillerBank | NullFillerBank | None = None,   # Sprint D PR1
+        metrics: VoiceMetricsRecorder | None = None,               # Sprint D PR1
     ) -> None:
         # Agent.instructions is required by livekit-agents 1.5.5.
         # We pass a placeholder — the actual prompt is built per-turn in
@@ -225,6 +242,16 @@ class ShuguVoiceAgent(Agent):
             web_search if web_search is not None
             else WebSearchAggregator.from_settings(settings)
         )
+        # Sprint D PR1 — Filler bank (NullFillerBank if not provided — backward-compat).
+        self._filler_bank: FillerBank | NullFillerBank = (
+            filler_bank if filler_bank is not None else NullFillerBank()
+        )
+        # Sprint D PR1 — Voice metrics recorder (NullVoiceMetricsRecorder if not provided).
+        self._metrics: VoiceMetricsRecorder = (
+            metrics if metrics is not None else get_null_recorder()
+        )
+        # Sprint D PR3 — AgentSession Voie A. Built lazily via _handle_turn_agentsession().
+        self._agent_session: object | None = None  # type: AgentSession | None
 
     @property
     def _processing(self) -> bool:
@@ -313,6 +340,9 @@ class ShuguVoiceAgent(Agent):
             so the agent is never permanently bricked by empty transcripts, resampler
             no-ops, STT errors, or barge-in cancels (§6.2 backpressure contract).
 
+        Sprint D PR1: creates TurnMetrics at utterance start (t0 proxy = just before STT).
+        Passes turn_metrics= to _handle_turn_streaming for per-stage stamps.
+
         State invariant: when this finally runs, _state is one of three values:
           - PROCESSING : the inner pipeline returned before reaching SPEAKING
             (empty transcript, resampler no-op, STT empty, LLM error pre-TTS).
@@ -324,6 +354,12 @@ class ShuguVoiceAgent(Agent):
             only writer to LISTENING is this finally itself).
         Unconditional reset to LISTENING below covers every path.
         """
+        # Sprint D PR1 — TurnMetrics created here; t0 is the closest proxy to VAD END_OF_SPEECH.
+        turn_metrics = TurnMetrics(
+            pipeline="streaming" if self._settings.voice_streaming_enabled else "oneshot"
+        )
+        turn_metrics.stamp(STAGE_VAD_END)  # t0 approximation
+
         try:
             resampler_down = rtc.AudioResampler(
                 input_rate=_LIVEKIT_SAMPLE_RATE,
@@ -337,8 +373,10 @@ class ShuguVoiceAgent(Agent):
             pcm_16k = rtc.combine_audio_frames(frames_16k)
             pcm_bytes = bytes(pcm_16k.data)
             transcript = await self._stt.transcribe(pcm_bytes, language="fr")
+            turn_metrics.stamp(STAGE_STT_DONE)  # t1
+
             if self._settings.voice_streaming_enabled:
-                await self._handle_turn_streaming(transcript)
+                await self._handle_turn_streaming(transcript, turn_metrics=turn_metrics)
             else:
                 await self._handle_turn(transcript)
         finally:
@@ -428,28 +466,43 @@ class ShuguVoiceAgent(Agent):
         # No finally here — _state is restored to LISTENING by _process_utterance's outer
         # finally (single-writer pattern, PR3).
 
-    async def _handle_turn_streaming(self, transcript: str) -> None:
-        """Pipeline streaming Sprint C (activé par voice_streaming_enabled=True).
+    async def _handle_turn_streaming(
+        self,
+        transcript: str,
+        turn_metrics: TurnMetrics | None = None,
+    ) -> None:
+        """Pipeline streaming Sprint C + Sprint D (filler + metrics).
 
-        Flow :
-          1. Classify intent
-          2. WEB_SEARCH → web_search.search() → snippets sanitisés → prompt augmenté
-          3. LocalLLM.stream() → tokens → SentenceChunker → phrases
-          4. PiperTTS.synthesize_stream(phrases) → PCM chunks → _resample_and_publish
+        Sprint D additions:
+          - turn_metrics: TurnMetrics | None — if provided, stamps are collected per stage.
+            Legacy callers (103 existing tests) pass no turn_metrics → all stamp ops are
+            no-ops via `if m:` guards. Backward-compatible.
+          - Filler bank: for WEB_SEARCH intent, if voice_filler_enabled and FillerBank
+            is loaded, launches filler playback concurrently with web search RTT.
+            Awaits filler completion before real TTS (policy D-S1 sequential).
 
-        Barge-in (PR3):
-          cancel_speaking() wired via _on_speech_started() in _consume_vad.
-          PROCESSING → SPEAKING transition just before first TTS frame.
-          Backpressure guard uses _state != _AgentState.LISTENING check.
-
-        Note WEB_SEARCH latency : Tavily adds ~300-600ms RTT — TTFB ~700-1000ms.
-        Budget depassé vs CHAT path (330-450ms). Filler acoustique Sprint D.
+        Flow with timestamps:
+          t0  VAD END_OF_SPEECH stamp — set in _process_utterance before calling this
+          t1  Whisper STT done — set in _process_utterance after transcribe()
+          t2  intent_classifier done
+          [t3] WEB_SEARCH only: launch filler task + await web_search.search()
+          [t3] WEB_SEARCH only: await filler_task (D-S1 sequential, before TTS)
+          t4  LLM first token
+          t5  SentenceChunker first sentence
+          t6  Piper first PCM frame
+          t7  AudioSource first frame published (TTFB) — stamped in _resample_and_publish
+          fin turn_metrics.record_turn() via self._metrics
         """
         if not transcript:
             return
 
+        m = turn_metrics  # alias; None in legacy tests → all `if m:` guards no-op
+
         try:
             intent_match = intent_classifier.classify(transcript)
+            if m:
+                m.intent = intent_match.intent.value
+                m.stamp(STAGE_INTENT_DONE)  # t2
             log.info(
                 "voice.regie.intent",
                 intent=intent_match.intent.value,
@@ -457,10 +510,31 @@ class ShuguVoiceAgent(Agent):
                 pipeline="streaming",
             )
 
-            # Step 1 — Web search pre-fetch + 3-layer sanitization (identical to _handle_turn)
+            # Step 1 — WEB_SEARCH: launch filler concurrently + web search
+            filler_task: asyncio.Task[None] | None = None
             web_snippets: list[str] = []
+
             if intent_match.intent == intent_classifier.Intent.WEB_SEARCH:
+                # Launch filler immediately — plays concurrently with Tavily RTT.
+                # Tracked in FillerBank._active_task so cancel_speaking() can abort it.
+                if self._settings.voice_filler_enabled:
+                    filler_task = asyncio.create_task(
+                        self._filler_bank.play_random(self._audio_source)
+                    )
+
                 raw_results = await self._web_search.search(transcript)
+                if m:
+                    m.stamp(STAGE_WEB_DONE)  # t3
+
+                # Policy D-S1: await filler before any real TTS frame.
+                # Barge-in during web search will have cancelled filler_task via cancel_speaking().
+                if filler_task is not None:
+                    try:
+                        await filler_task
+                    except asyncio.CancelledError:
+                        pass  # barge-in cancelled filler — normal path
+
+                # Snippet sanitization — identical to one-shot path
                 threshold = self._settings.voice_web_injection_threshold
                 for result in raw_results:
                     signals = _injection_scan(result.snippet)
@@ -479,11 +553,10 @@ class ShuguVoiceAgent(Agent):
             system = self._build_system_prompt(intent_match, web_snippets)
             messages: list[dict[str, str]] = [{"role": "user", "content": transcript}]
 
-            # Step 3+4 — LLM stream → tool_call filter → chunker → TTS stream → publish.
+            # Step 3 — LLM stream → tool_call filter → chunker → TTS stream → publish.
             # The tool_call filter is non-negotiable: without it, Gemma's raw
             # <|tool_call>...<tool_call|> markers would arrive at Piper and be
-            # vocalized as garbage. Same protection contract as the Sprint B
-            # `_handle_turn` path (which calls `_strip_tool_calls` post-hoc).
+            # vocalized as garbage.
             chunker = SentenceChunker()
             token_stream = self._llm.stream(
                 system,
@@ -492,22 +565,49 @@ class ShuguVoiceAgent(Agent):
                 enable_thinking=False,
             )
             filtered_stream = _strip_tool_calls_streaming(token_stream)
-            sentence_stream = chunker.feed_stream(filtered_stream)
+
+            # Wrap filtered_stream to stamp t4 on first token
+            async def _stamped_tokens() -> AsyncIterator[str]:
+                first = True
+                async for token in filtered_stream:
+                    if first and m:
+                        m.stamp(STAGE_LLM_FIRST)  # t4
+                        first = False
+                    yield token
+
+            sentence_stream = chunker.feed_stream(_stamped_tokens())
+
+            # Wrap sentence_stream to stamp t5 on first sentence
+            async def _stamped_sentences() -> AsyncIterator[str]:
+                first = True
+                async for sentence in sentence_stream:
+                    if first and m:
+                        m.stamp(STAGE_SENTENCE_FIRST)  # t5
+                        first = False
+                    yield sentence
 
             # Transition PROCESSING → SPEAKING just before first TTS frame.
             # The finally of _process_utterance restores LISTENING unconditionally.
             self._state = _AgentState.SPEAKING
 
-            async for pcm_chunk in self._tts.synthesize_stream(sentence_stream):
-                await self._resample_and_publish(pcm_chunk)
+            first_tts = True
+            async for pcm_chunk in self._tts.synthesize_stream(_stamped_sentences()):
+                if first_tts and m:
+                    m.stamp(STAGE_TTS_FIRST)  # t6
+                    first_tts = False
+                await self._resample_and_publish(pcm_chunk, turn_metrics=m)
 
             log.info("voice.handle_turn_streaming.done")
 
         except Exception as exc:
             log.error("voice.handle_turn_streaming.error", error=str(exc))
+        finally:
+            # Record turn metrics regardless of success/error (no-op for NullRecorder)
+            if m:
+                self._metrics.record_turn(m)
 
     async def cancel_speaking(self) -> None:
-        """Cancel safe : stop LLM streaming + terminate active TTS subprocess.
+        """Cancel safe : stop LLM streaming + terminate active TTS + cancel active filler.
 
         Cooperative — does not brutally kill the executor thread.
         The asyncio.Lock is released by stream() finally block when the thread exits.
@@ -516,6 +616,9 @@ class ShuguVoiceAgent(Agent):
         in _process_utterance is the sole writer of _state → LISTENING. This ensures
         no race between barge-in cancel and the normal turn-end path.
 
+        Sprint D PR1 addition: also calls self._filler_bank.cancel() to abort active
+        filler playback. NullFillerBank.cancel() is a no-op, so backward-compatible.
+
         Called from _on_speech_started() when user speaks while agent is
         SPEAKING or PROCESSING (barge-in detection).
         """
@@ -523,6 +626,7 @@ class ShuguVoiceAgent(Agent):
         log.info("voice.bargein.cancelling", from_state=from_state)
         self._llm.cancel()
         await self._tts.aclose()
+        await self._filler_bank.cancel()  # Sprint D PR1 — cancel filler if playing
         # Mark the cancel time so _consume_vad can drop the tail END_OF_SPEECH
         # (the interrupt utterance itself) per blueprint §7.5.
         self._last_cancel_ts = asyncio.get_running_loop().time()
@@ -543,10 +647,17 @@ class ShuguVoiceAgent(Agent):
             await self.cancel_speaking()
         # LISTENING: user starting a new utterance — normal path, no cancel needed
 
-    async def _resample_and_publish(self, pcm_22050: bytes) -> None:
+    async def _resample_and_publish(
+        self,
+        pcm_22050: bytes,
+        turn_metrics: TurnMetrics | None = None,
+    ) -> None:
         """Resample 22050 -> 48000 Hz (ratio ~2.177) and publish via AudioSource.
 
         Chunks 10 ms = 220 samples = 440 bytes to feed AudioResampler.
+
+        Sprint D PR1: stamps STAGE_AUDIO_FIRST (t7 = TTFB voice) on the first frame
+        published to AudioSource. Backward-compatible — turn_metrics defaults to None.
         """
         resampler_up = rtc.AudioResampler(
             input_rate=_PIPER_SAMPLE_RATE,
@@ -569,7 +680,11 @@ class ShuguVoiceAgent(Agent):
             )
             frames_48k.extend(resampler_up.push(frame_in))
 
+        first_frame = True
         for frame in frames_48k:
+            if first_frame and turn_metrics is not None:
+                turn_metrics.stamp(STAGE_AUDIO_FIRST)  # t7 — TTFB voice
+                first_frame = False
             await self._audio_source.capture_frame(frame)
 
         log.info("voice.tts.published", frames=len(frames_48k))
@@ -645,24 +760,56 @@ class ShuguVoiceAgent(Agent):
         return _TOOL_CALL_RE.sub("", text).strip()
 
 
-async def entrypoint(ctx: JobContext, llm: LocalLLM) -> None:
+async def entrypoint(
+    ctx: JobContext,
+    llm: LocalLLM,
+    prom_registry: object | None = None,
+) -> None:
     """Registered in WorkerOptions.entrypoint_fnc via partial(entrypoint, llm=llm).
+
+    Sprint D PR1 additions:
+    - Filler bank preloaded in parallel (asyncio.gather) if voice_filler_enabled.
+    - Voice metrics recorder created from voice_metrics_enabled setting.
+    - voice_use_agentsession flag routing (default=False = Sprint C path preserved).
 
     Initialization sequence:
     1. get_settings()
     2. WhisperSTT(settings) — FileNotFoundError if bin missing
     3. PiperTTS(settings) — FileNotFoundError if bin missing
-    4. AudioSource(48000, 1) + LocalAudioTrack.create_audio_track
-    5. publish_track
-    6. ShuguVoiceAgent constructed with injected dependencies
-    7. Connect to room with AUDIO_ONLY auto-subscribe
-    8. track_subscribed event -> _drain_and_transcribe task
-    9. add_shutdown_callback
+    4. FillerBank preload (if voice_filler_enabled) — parallel asyncio.gather
+    5. make_recorder (voice_metrics_enabled)
+    6. AudioSource(48000, 1) + LocalAudioTrack.create_audio_track
+    7. publish_track
+    8. ShuguVoiceAgent constructed with injected dependencies
+    9. Connect to room with AUDIO_ONLY auto-subscribe
+    10. track_subscribed event -> _drain_and_transcribe task (or AgentSession for Voie A)
+    11. add_shutdown_callback
     """
     settings = get_settings()
 
     stt = WhisperSTT(settings)
     tts = PiperTTS(settings)
+
+    # Sprint D PR1 — filler bank preload (parallel, ~max(piper_latency) wall-clock)
+    filler_bank: FillerBank | NullFillerBank
+    if settings.voice_filler_enabled:
+        filler_bank = FillerBank(tts=tts)
+        phrase_count = await filler_bank.preload(
+            _DEFAULT_FILLER_PHRASES[: settings.voice_filler_count]
+        )
+        log.info("voice.filler.ready", loaded=phrase_count)
+    else:
+        filler_bank = NullFillerBank()
+
+    # Sprint D PR1 — voice metrics recorder (NullVoiceMetricsRecorder when disabled).
+    # Production: app.py lifespan injects app.state.prom_recorder.registry via
+    # build_worker_options(prom_registry=...) so voice histograms appear in
+    # GET /metrics alongside agent-loop counters. If None (dev/standalone smoke
+    # test), a fresh isolated registry is created — metrics still record but are
+    # not exposed (no /metrics endpoint in standalone mode).
+    voice_metrics = make_recorder(
+        settings.voice_metrics_enabled, registry=prom_registry,
+    )
 
     audio_source = rtc.AudioSource(sample_rate=_LIVEKIT_SAMPLE_RATE, num_channels=1)
     track = rtc.LocalAudioTrack.create_audio_track("shugu-voice", audio_source)
@@ -670,33 +817,53 @@ async def entrypoint(ctx: JobContext, llm: LocalLLM) -> None:
     await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
     await ctx.room.local_participant.publish_track(track, rtc.TrackPublishOptions())
 
-    agent = ShuguVoiceAgent(stt, llm, tts, settings, audio_source)
+    agent = ShuguVoiceAgent(
+        stt, llm, tts, settings, audio_source,
+        filler_bank=filler_bank,
+        metrics=voice_metrics,
+    )
     await agent.on_enter()
 
-    async def _on_track_subscribed(
-        remote_track: rtc.Track,
-        publication: rtc.RemoteTrackPublication,
-        participant: rtc.RemoteParticipant,
-    ) -> None:
-        if remote_track.kind == rtc.TrackKind.KIND_AUDIO:
-            asyncio.create_task(
-                agent._drain_and_transcribe(remote_track)  # type: ignore[arg-type]
-            )
+    if settings.voice_use_agentsession:
+        # Sprint D PR3 Voie A path — AgentSession owns VAD+STT+LLM+TTS (adapters not in PR D1)
+        ctx.add_shutdown_callback(agent._on_shutdown)
+        log.info("voice.session.start", room=ctx.room.name, pipeline="agentsession")
+    else:
+        # Sprint C path (default) — manual VAD + _handle_turn_streaming
+        async def _on_track_subscribed(
+            remote_track: rtc.Track,
+            publication: rtc.RemoteTrackPublication,
+            participant: rtc.RemoteParticipant,
+        ) -> None:
+            if remote_track.kind == rtc.TrackKind.KIND_AUDIO:
+                asyncio.create_task(
+                    agent._drain_and_transcribe(remote_track)  # type: ignore[arg-type]
+                )
 
-    ctx.room.on("track_subscribed", _on_track_subscribed)
-    ctx.add_shutdown_callback(agent._on_shutdown)
+        ctx.room.on("track_subscribed", _on_track_subscribed)
+        ctx.add_shutdown_callback(agent._on_shutdown)
+        log.info("voice.session.start", room=ctx.room.name, pipeline="manual")
 
-    log.info("voice.session.start", room=ctx.room.name)
 
-
-def build_worker_options(settings: Settings, llm: LocalLLM) -> WorkerOptions:
+def build_worker_options(
+    settings: Settings,
+    llm: LocalLLM,
+    prom_registry: object | None = None,
+) -> WorkerOptions:
     """Factory called from app.py lifespan.
+
+    Args:
+        settings: Settings instance
+        llm: LocalLLM instance (shared singleton in-process)
+        prom_registry: shared CollectorRegistry from app.state.prom_recorder so
+            voice_turn_latency_seconds histograms appear in GET /metrics.
+            None for dev/standalone smoke test (creates isolated registry).
 
     Returns WorkerOptions configured with entrypoint, ws_url, api_key, api_secret.
     Use AgentServer.from_server_options(opts) to create the runnable worker.
     """
     return WorkerOptions(
-        entrypoint_fnc=partial(entrypoint, llm=llm),
+        entrypoint_fnc=partial(entrypoint, llm=llm, prom_registry=prom_registry),
         ws_url=settings.livekit_url,
         api_key=settings.livekit_api_key,
         api_secret=settings.livekit_api_secret,

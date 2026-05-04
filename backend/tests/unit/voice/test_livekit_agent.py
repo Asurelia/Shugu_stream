@@ -690,11 +690,11 @@ async def test_handle_turn_streaming_routes_when_enabled(tmp_path: Path) -> None
 
     agent = ShuguVoiceAgent(stt, llm, tts, settings, audio_source)
 
-    async def _spy_streaming(t: str) -> None:
+    async def _spy_streaming(t: str, **kwargs: object) -> None:
         nonlocal streaming_called
         streaming_called = True
 
-    async def _spy_oneshot(t: str) -> None:
+    async def _spy_oneshot(t: str, **kwargs: object) -> None:
         nonlocal oneshot_called
         oneshot_called = True
 
@@ -735,11 +735,11 @@ async def test_handle_turn_streaming_fallback_when_disabled(tmp_path: Path) -> N
 
     original_oneshot = agent._handle_turn
 
-    async def _spy_streaming(t: str) -> None:
+    async def _spy_streaming(t: str, **kwargs: object) -> None:
         nonlocal streaming_called
         streaming_called = True
 
-    async def _spy_oneshot(t: str) -> None:
+    async def _spy_oneshot(t: str, **kwargs: object) -> None:
         nonlocal oneshot_called
         oneshot_called = True
         await original_oneshot(t)
@@ -1035,9 +1035,9 @@ async def test_bi1_full_turn_state_transitions(tmp_path: Path) -> None:
     # Spy on _handle_turn_streaming to capture PROCESSING and SPEAKING states
     original_hts = agent._handle_turn_streaming
 
-    async def _spy_hts(transcript: str) -> None:
+    async def _spy_hts(transcript: str, **kwargs: object) -> None:
         states_observed.append(agent._state.value)  # should be PROCESSING here
-        await original_hts(transcript)
+        await original_hts(transcript, **kwargs)
         states_observed.append(agent._state.value)  # should be SPEAKING here (before finally)
 
     agent._handle_turn_streaming = _spy_hts  # type: ignore[method-assign]
@@ -1330,4 +1330,271 @@ async def test_bi8_end_of_speech_within_drop_window_logged_and_skipped(
     assert elapsed_now < _BARGEIN_DROP_WINDOW_S, (
         "Test fixture too slow: elapsed already > drop window; "
         "the predicate would not fire in real flow either."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Sprint D PR1 — Filler + Metrics integration tests
+# ---------------------------------------------------------------------------
+
+
+def _make_agent_with_filler_and_metrics(
+    tmp_path: Path,
+    filler_bank: object | None = None,
+    metrics: object | None = None,
+) -> tuple[ShuguVoiceAgent, MagicMock, MagicMock, MagicMock]:
+    """Build a ShuguVoiceAgent with optional filler_bank and metrics recorder."""
+    settings = _fake_settings(tmp_path)
+    stt = _make_mock_stt("quelle est la météo à Paris ?")
+    llm = _make_mock_llm_with_stream(["Il", " fait", " beau."])
+    llm.cancel = MagicMock()
+    tts = _make_mock_tts_with_stream(tmp_path)
+    tts.aclose = AsyncMock()
+    audio_source = _make_mock_audio_source()
+
+    agent = ShuguVoiceAgent(
+        stt, llm, tts, settings, audio_source,
+        filler_bank=filler_bank,
+        metrics=metrics,
+    )
+    return agent, stt, llm, tts
+
+
+@pytest.mark.asyncio
+async def test_filler_played_on_websearch_intent(tmp_path: Path) -> None:
+    """Filler bank must be called when intent=WEB_SEARCH and voice_filler_enabled=True.
+
+    Uses a SpyFillerBank that records play_random() invocations.
+    """
+    from shugu.voice.regie.web_search import WebSearchResult
+
+    play_calls: list[object] = []
+
+    class _SpyFillerBank:
+        async def preload(self, phrases: list[str]) -> int:
+            return len(phrases)
+
+        async def play_random(self, audio_source: object) -> None:
+            play_calls.append(audio_source)
+
+        async def cancel(self) -> None:
+            pass
+
+    class _FakeAggregator:
+        async def search(self, query: str) -> list[WebSearchResult]:
+            return []
+
+    settings = _fake_settings(tmp_path)
+    # voice_filler_enabled is True by default (D-F1)
+    stt = _make_mock_stt("quelle est la météo ?")
+    llm = _make_mock_llm_with_stream(["Il fait beau."])
+    llm.cancel = MagicMock()
+    tts = _make_mock_tts_with_stream(tmp_path)
+    tts.aclose = AsyncMock()
+    audio_source = _make_mock_audio_source()
+
+    agent = ShuguVoiceAgent(
+        stt, llm, tts, settings, audio_source,
+        filler_bank=_SpyFillerBank(),
+        web_search=_FakeAggregator(),
+    )
+
+    with patch("livekit.rtc.AudioResampler") as mock_resampler_cls:
+        mock_resampler = MagicMock()
+        mock_resampler.push.return_value = [MagicMock()]
+        mock_resampler_cls.return_value = mock_resampler
+
+        await agent._handle_turn_streaming("quelle est la météo ?")
+
+    assert len(play_calls) == 1, (
+        f"FillerBank.play_random must be called once for WEB_SEARCH, got {len(play_calls)}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_filler_awaited_before_real_tts(tmp_path: Path) -> None:
+    """Filler must complete BEFORE the first TTS frame is published (policy D-S1 sequential).
+
+    Event-based coordination per blueprint §D-S5 (no sleep). The filler task waits
+    on `release_filler` before clearing is_playing — this gives the test full control
+    over WHEN the filler ends. The web_search await yields the scheduler so the filler
+    task gets to set is_playing=True before TTS starts. If `await filler_task` were
+    removed in production, TTS would observe is_playing=True and the assertion fails.
+    """
+    from shugu.voice.regie.web_search import WebSearchResult
+
+    release_filler = asyncio.Event()
+    filler_started = asyncio.Event()
+
+    class _SpyFillerBank:
+        def __init__(self) -> None:
+            self.is_playing = False
+
+        async def preload(self, phrases: list[str]) -> int:
+            return 0
+
+        async def play_random(self, audio_source: object) -> None:
+            self.is_playing = True
+            filler_started.set()
+            try:
+                await release_filler.wait()
+            finally:
+                self.is_playing = False
+
+        async def cancel(self) -> None:
+            release_filler.set()  # unblock if cancel hits during play
+
+    class _FakeAggregator:
+        async def search(self, query: str) -> list[WebSearchResult]:
+            # Wait until the filler task is observably running before web_search
+            # returns — guarantees the discrimination window without timing-based
+            # sleep (CI-stable per D-S5).
+            await filler_started.wait()
+            # Schedule filler release on next tick — the production code MUST
+            # await filler_task before TTS, so it will block here until release.
+            asyncio.get_running_loop().call_later(0.0, release_filler.set)
+            return []
+
+    settings = _fake_settings(tmp_path)
+    stt = _make_mock_stt("quelle est la météo ?")
+    llm = _make_mock_llm_with_stream(["Il fait beau."])
+    llm.cancel = MagicMock()
+    tts = _make_mock_tts_with_stream(tmp_path)
+    tts.aclose = AsyncMock()
+
+    spy_filler_bank = _SpyFillerBank()
+    tts_started_while_filler_running = False
+
+    async def _spy_synth_stream(sentences):
+        nonlocal tts_started_while_filler_running
+        # If filler is_playing here, await filler_task was not enforced
+        if spy_filler_bank.is_playing:
+            tts_started_while_filler_running = True
+        async for sentence in sentences:
+            if sentence.strip():
+                yield b"\xAA" * 100
+
+    tts.synthesize_stream = _spy_synth_stream
+    audio_source = _make_mock_audio_source()
+
+    agent = ShuguVoiceAgent(
+        stt, llm, tts, settings, audio_source,
+        filler_bank=spy_filler_bank,
+        web_search=_FakeAggregator(),
+    )
+
+    with patch("livekit.rtc.AudioResampler") as mock_resampler_cls:
+        mock_resampler = MagicMock()
+        mock_resampler.push.return_value = [MagicMock()]
+        mock_resampler_cls.return_value = mock_resampler
+        await agent._handle_turn_streaming("quelle est la météo ?")
+
+    assert not tts_started_while_filler_running, (
+        "TTS synthesize_stream must NOT start while filler is_playing=True (policy D-S1 sequential)."
+    )
+
+
+@pytest.mark.asyncio
+async def test_metrics_finalized_at_turn_end_with_intent_label(tmp_path: Path) -> None:
+    """metrics.record_turn() must be called with the correct TurnMetrics after turn completion.
+
+    Verifies that intent is stamped from intent_classifier result, and record_turn is called.
+    """
+    record_calls: list[object] = []
+
+    class _SpyMetrics:
+        def record_turn(self, metrics: object) -> None:
+            record_calls.append(metrics)
+
+    settings = _fake_settings(tmp_path)
+    stt = _make_mock_stt("bonjour")
+    llm = _make_mock_llm_with_stream(["Salut !"])
+    llm.cancel = MagicMock()
+    tts = _make_mock_tts_with_stream(tmp_path)
+    tts.aclose = AsyncMock()
+    audio_source = _make_mock_audio_source()
+
+    spy_metrics = _SpyMetrics()
+    agent = ShuguVoiceAgent(stt, llm, tts, settings, audio_source, metrics=spy_metrics)
+
+    # Create a TurnMetrics and pass it to the streaming handler
+    from shugu.voice.metrics import STAGE_VAD_END, TurnMetrics
+
+    turn_metrics = TurnMetrics(pipeline="streaming")
+    turn_metrics.stamp(STAGE_VAD_END)
+
+    with patch("livekit.rtc.AudioResampler") as mock_resampler_cls:
+        mock_resampler = MagicMock()
+        mock_resampler.push.return_value = [MagicMock()]
+        mock_resampler_cls.return_value = mock_resampler
+
+        await agent._handle_turn_streaming("bonjour", turn_metrics=turn_metrics)
+
+    assert len(record_calls) == 1, (
+        f"record_turn() must be called exactly once at turn end, got {len(record_calls)}"
+    )
+    recorded = record_calls[0]
+    assert hasattr(recorded, "intent"), "Recorded TurnMetrics must have intent field"
+    # CHAT intent for "bonjour"
+    assert recorded.intent in ("chat", "emote"), (
+        f"Expected 'chat' or 'emote' intent for 'bonjour', got {recorded.intent!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_cancel_speaking_cancels_filler(tmp_path: Path) -> None:
+    """cancel_speaking() must call filler_bank.cancel() to abort active filler playback.
+
+    Regression test for barge-in during filler. If filler is playing when user speaks,
+    cancel_speaking() must stop it to prevent audio overlap.
+    """
+    # Shared call log records the relative ordering of llm.cancel / tts.aclose / filler.cancel.
+    # The contract documented in cancel_speaking() is: llm.cancel() (sync), then await
+    # tts.aclose(), then await filler_bank.cancel(). Inverting the order would let an
+    # in-flight Piper subprocess produce frames that overlap with cancel signaling.
+    call_log: list[str] = []
+
+    class _SpyFillerBank:
+        async def preload(self, phrases: list[str]) -> int:
+            return 0
+
+        async def play_random(self, audio_source: object) -> None:
+            pass
+
+        async def cancel(self) -> None:
+            call_log.append("filler.cancel")
+
+    def _llm_cancel_recording() -> None:
+        call_log.append("llm.cancel")
+
+    async def _tts_aclose_recording() -> None:
+        call_log.append("tts.aclose")
+
+    settings = _fake_settings(tmp_path)
+    stt = _make_mock_stt()
+    llm = _make_mock_llm()
+    llm.cancel = _llm_cancel_recording
+    tts = _make_mock_tts()
+    tts.aclose = _tts_aclose_recording
+    audio_source = _make_mock_audio_source()
+
+    agent = ShuguVoiceAgent(
+        stt, llm, tts, settings, audio_source,
+        filler_bank=_SpyFillerBank(),
+    )
+
+    await agent.cancel_speaking()
+
+    # Contract: filler.cancel called exactly once
+    filler_cancel_count = sum(1 for c in call_log if c == "filler.cancel")
+    assert filler_cancel_count == 1, (
+        f"filler_bank.cancel() must be called by cancel_speaking(), got {filler_cancel_count}"
+    )
+    # Contract: relative ordering matches cancel_speaking() docstring contract.
+    # llm.cancel signals the executor first (sync), then awaits tts subprocess kill,
+    # then awaits filler task cancel. An inverted order could let an in-flight Piper
+    # process emit frames AFTER filler stopped → audible bleed-through.
+    assert call_log == ["llm.cancel", "tts.aclose", "filler.cancel"], (
+        f"cancel_speaking() must invoke llm.cancel → tts.aclose → filler.cancel "
+        f"in that exact order. Got: {call_log}"
     )

@@ -168,6 +168,53 @@ class Settings(BaseSettings):
                     "Env: SHUGU_VOICE_WEB_INJECTION_THRESHOLD.",
     )
 
+    # D-F1 — Filler acoustique WEB_SEARCH. ON par défaut.
+    # Désactiver via SHUGU_VOICE_FILLER_ENABLED=false pour tests / préférence silence.
+    voice_filler_enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices(
+            "VOICE_FILLER_ENABLED", "SHUGU_VOICE_FILLER_ENABLED"
+        ),
+        description="Active la banque de fillers audio ('je cherche...') pendant "
+                    "le RTT Tavily/Brave sur intent WEB_SEARCH. "
+                    "Env: SHUGU_VOICE_FILLER_ENABLED.",
+    )
+    # D-F2 — Nombre de fillers à pré-render au démarrage.
+    # 7 fillers × ~0.65s × 48000 Hz × 2 bytes ≈ 440 KB RAM après upsampling.
+    voice_filler_count: int = Field(
+        default=7,
+        ge=3,
+        le=15,
+        validation_alias=AliasChoices(
+            "VOICE_FILLER_COUNT", "SHUGU_VOICE_FILLER_COUNT"
+        ),
+        description="Nombre de phrases filler à pré-rendre via Piper au démarrage. "
+                    "Plage [3, 15]. Défaut 7. Env: SHUGU_VOICE_FILLER_COUNT.",
+    )
+    # D-F3 — Métriques voix (structlog + Prometheus Histogram per-stage).
+    # OFF par défaut pour backward-compat des 103 tests Sprint C.
+    voice_metrics_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices(
+            "VOICE_METRICS_ENABLED", "SHUGU_VOICE_METRICS_ENABLED"
+        ),
+        description="Active les métriques latence E2E voice.metrics.turn via structlog "
+                    "et Prometheus histogram voice_turn_latency_seconds{stage}. "
+                    "Env: SHUGU_VOICE_METRICS_ENABLED.",
+    )
+    # D-F4 — AgentSession Voie A. OFF par défaut = chemin Sprint C préservé.
+    # Activer via SHUGU_VOICE_USE_AGENTSESSION=true après validation adapters PR D3.
+    voice_use_agentsession: bool = Field(
+        default=False,
+        validation_alias=AliasChoices(
+            "VOICE_USE_AGENTSESSION", "SHUGU_VOICE_USE_AGENTSESSION"
+        ),
+        description="Active le pipeline AgentSession Voie A (adapters LiveKitWhisperSTT, "
+                    "LiveKitPiperTTS, LiveKitLocalLLM) à la place du pipeline Sprint C. "
+                    "OFF par défaut — activer après validation. "
+                    "Env: SHUGU_VOICE_USE_AGENTSESSION.",
+    )
+
     # LLM (Shugu shares the MiniMax account; can diverge later)
     minimax_api_key: str = ""
     minimax_base_url: str = "https://api.minimax.io/v1"
