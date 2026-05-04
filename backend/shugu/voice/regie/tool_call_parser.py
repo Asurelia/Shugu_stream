@@ -10,7 +10,6 @@ from __future__ import annotations
 import re
 from typing import Any
 
-
 _TOOL_CALL_RE = re.compile(
     r"<\|tool_call>call:(?P<name>\w+)\{(?P<args>[^}]*)\}<tool_call\|>"
 )

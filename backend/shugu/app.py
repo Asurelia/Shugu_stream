@@ -536,6 +536,29 @@ async def lifespan(app: FastAPI):
     else:
         log.info("director.orchestrator_skipped", extra={"reason": "director_enabled=False"})
 
+    # Voice Agent (Sprint B) — LiveKit Worker in-process (DUR-1).
+    # Conditional on settings.voice_agent_enabled (default False).
+    # If True: LocalLLM instance created here (lazy model load on first generate()).
+    # Worker runs as asyncio task sharing the same event loop as FastAPI.
+    # NOTE: agents.cli.run_app() calls sys.exit() — NEVER use it in a lifespan.
+    # Correct pattern: AgentServer.from_server_options(opts).run() which is async.
+    _voice_worker_task: asyncio.Task | None = None
+    _agent_server = None
+    if settings.voice_agent_enabled:
+        from livekit.agents.worker import AgentServer as _AgentServer
+
+        from .voice.livekit_agent import build_worker_options as _build_worker_options
+        from .voice.llm_local import LocalLLM as _VoiceLLM
+
+        _voice_llm_instance = _VoiceLLM(settings)
+        _worker_opts = _build_worker_options(settings, _voice_llm_instance)
+        _agent_server = _AgentServer.from_server_options(_worker_opts)
+        _voice_worker_task = asyncio.create_task(
+            _agent_server.run(),
+            name="voice_worker",
+        )
+        log.info("voice.agent.started")
+
     log.info("shugu.ready", host=settings.shugu_host, port=settings.shugu_port)
     try:
         yield
@@ -582,6 +605,21 @@ async def lifespan(app: FastAPI):
         await event_bus.close()
         await _redis.aclose()
         await http.aclose()
+        # Voice worker shutdown — call AgentServer.aclose() FIRST so the
+        # registered shutdown callbacks fire (agent._on_shutdown terminates
+        # whisper/piper subprocesses and closes AudioSource). task.cancel()
+        # alone would raise CancelledError inside AgentServer.run() and skip
+        # aclose() entirely, leaving subprocess handles potentially orphaned.
+        if _agent_server is not None and _voice_worker_task is not None:
+            try:
+                await asyncio.wait_for(_agent_server.aclose(), timeout=5.0)
+            except asyncio.TimeoutError:
+                log.warning("voice.agent.aclose_timeout")
+            try:
+                await asyncio.wait_for(_voice_worker_task, timeout=5.0)
+            except (asyncio.CancelledError, asyncio.TimeoutError):
+                _voice_worker_task.cancel()
+            log.info("voice.agent.stopped")
 
 
 def create_app() -> FastAPI:
