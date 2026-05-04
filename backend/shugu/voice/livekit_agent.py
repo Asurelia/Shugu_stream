@@ -3,6 +3,11 @@
 Sprint B naive pipeline (no streaming):
   Audio frames -> VAD (Silero) -> WhisperSTT -> régie -> LocalLLM -> PiperTTS -> AudioSource
 
+Sprint C additions:
+  - Streaming pipeline: LLM.stream() → SentenceChunker → TTS.synthesize_stream()
+  - 3-state barge-in: _AgentState enum (LISTENING/PROCESSING/SPEAKING)
+  - START_OF_SPEECH handler: cancel_speaking() when user interrupts
+
 Architecture note (divergence from blueprint §3):
   The VAD is driven manually via VADStream.push_frame() + END_OF_SPEECH event,
   NOT via AgentSession's built-in pipeline. This is because:
@@ -21,6 +26,7 @@ AgentServer note (divergence from blueprint §9):
 from __future__ import annotations
 
 import asyncio
+from enum import Enum
 from functools import partial
 from typing import TYPE_CHECKING, AsyncIterator
 
@@ -61,6 +67,12 @@ _MAX_BUFFER_SECONDS: float = 30.0
 _WEB_CONTEXT_OPEN: str = "[WEB_CONTEXT]"
 _WEB_CONTEXT_CLOSE: str = "[/WEB_CONTEXT]"
 
+# Window after a cancel_speaking() during which an incoming END_OF_SPEECH is
+# treated as the tail of the interrupting user utterance and dropped (logged
+# as voice.bargein.utterance_dropped). Blueprint §7.5 — prevents Shugu from
+# immediately responding to the interrupt itself.
+_BARGEIN_DROP_WINDOW_S: float = 0.2
+
 
 def _neutralize_delimiters(snippet: str) -> str:
     """Strip our custom WEB_CONTEXT markers from a snippet before prompt injection.
@@ -84,6 +96,23 @@ _TOOL_CALL_OPEN_LEN: int = len(_TOOL_CALL_OPEN)
 # unclosed opening (LLM truncated mid-call) eventually flushes instead of
 # starving TTS forever.
 _TOOL_CALL_MAX_BUFFER: int = 2048
+
+
+class _AgentState(Enum):
+    """3-state barge-in FSM for Sprint C.
+
+    State transitions (single-writer: _process_utterance owns all → LISTENING):
+      LISTENING  → PROCESSING : _consume_vad on END_OF_SPEECH before create_task
+      PROCESSING → SPEAKING   : _handle_turn / _handle_turn_streaming just before first publish
+      SPEAKING   → LISTENING  : _process_utterance.finally (always)
+      PROCESSING → LISTENING  : _process_utterance.finally (barge-in during processing)
+
+    Sprint D replaces this with the 7-state FSM.
+    """
+
+    LISTENING = "listening"
+    PROCESSING = "processing"
+    SPEAKING = "speaking"
 
 
 async def _strip_tool_calls_streaming(
@@ -180,13 +209,32 @@ class ShuguVoiceAgent(Agent):
         self._tts = tts
         self._settings = settings
         self._audio_source = audio_source
-        self._processing: bool = False      # backpressure flag (§6.2)
+        # Sprint C PR3 — replaces _processing: bool with 3-state FSM.
+        # Backward-compat property _processing is kept (read-only) for external introspection.
+        self._state: _AgentState = _AgentState.LISTENING
+        # Monotonic timestamp (seconds) of the most recent cancel_speaking() call.
+        # Used by _consume_vad to log voice.bargein.utterance_dropped when an
+        # END_OF_SPEECH lands within _BARGEIN_DROP_WINDOW_S of a cancel — that
+        # utterance is the user's interrupt itself, finishing speaking; we drop
+        # it on purpose so Shugu doesn't immediately respond to the interrupt.
+        # Blueprint §7.5 mitigation.
+        self._last_cancel_ts: float = 0.0
         # WebSearch provider — injectable for tests, defaults to Aggregator from settings.
         # If both Tavily and Brave keys are empty, Aggregator uses NullProvider silently.
         self._web_search: WebSearchProvider = (
             web_search if web_search is not None
             else WebSearchAggregator.from_settings(settings)
         )
+
+    @property
+    def _processing(self) -> bool:
+        """Backward-compat read: True when agent is not LISTENING (processing or speaking).
+
+        Read-only — external code that needs to SET backpressure must use _state directly
+        or go through _consume_vad (which is the single writer).
+        Kept for test introspection only; do NOT use this for internal logic.
+        """
+        return self._state != _AgentState.LISTENING
 
     async def on_enter(self) -> None:
         """Called by AgentSession on connection. Sprint B: log voice.session.ready."""
@@ -214,20 +262,34 @@ class ShuguVoiceAgent(Agent):
 
         async def _consume_vad() -> None:
             async for vad_event in vad_stream:
-                if vad_event.type == agents_vad.VADEventType.END_OF_SPEECH:
-                    if self._processing:
+                if vad_event.type == agents_vad.VADEventType.START_OF_SPEECH:
+                    await self._on_speech_started()
+                elif vad_event.type == agents_vad.VADEventType.END_OF_SPEECH:
+                    # Blueprint §7.5: drop END_OF_SPEECH tails arriving within
+                    # 200ms of a barge-in cancel — that's the user's interrupt
+                    # finishing, not a new turn to answer.
+                    elapsed = asyncio.get_running_loop().time() - self._last_cancel_ts
+                    if self._last_cancel_ts > 0 and elapsed < _BARGEIN_DROP_WINDOW_S:
+                        log.info(
+                            "voice.bargein.utterance_dropped",
+                            elapsed_ms=int(elapsed * 1000),
+                            window_ms=int(_BARGEIN_DROP_WINDOW_S * 1000),
+                        )
+                        continue
+                    if self._state != _AgentState.LISTENING:
                         log.info(
                             "voice.audio.dropped",
-                            reason="already processing previous turn",
+                            reason="not in LISTENING state",
+                            state=self._state.value,
                         )
                         continue
                     if not vad_event.frames:
                         continue
                     combined = rtc.combine_audio_frames(vad_event.frames)
-                    # Set backpressure flag synchronously BEFORE scheduling the task
+                    # Transition LISTENING → PROCESSING synchronously BEFORE scheduling
                     # so a second END_OF_SPEECH event cannot pass the guard above
-                    # while the first utterance is still being processed (§6.2).
-                    self._processing = True
+                    # while the first utterance is still being processed (§6.2 backpressure).
+                    self._state = _AgentState.PROCESSING
                     asyncio.create_task(self._process_utterance(combined))
 
         feed_task = asyncio.create_task(_feed_frames())
@@ -245,10 +307,22 @@ class ShuguVoiceAgent(Agent):
     async def _process_utterance(self, combined: rtc.AudioFrame) -> None:
         """Resample 48 kHz -> 16 kHz, transcribe, then handle turn.
 
-        Owns the _processing flag lifecycle: _consume_vad sets it before
-        create_task; this finally block always clears it so the agent is
-        never permanently bricked by empty transcripts, resampler no-ops,
-        or STT errors (§6.2 backpressure contract).
+        Single owner of _state lifecycle:
+          - _consume_vad transitions LISTENING → PROCESSING before create_task.
+          - This finally block always restores LISTENING regardless of inner state,
+            so the agent is never permanently bricked by empty transcripts, resampler
+            no-ops, STT errors, or barge-in cancels (§6.2 backpressure contract).
+
+        State invariant: when this finally runs, _state is one of three values:
+          - PROCESSING : the inner pipeline returned before reaching SPEAKING
+            (empty transcript, resampler no-op, STT empty, LLM error pre-TTS).
+          - SPEAKING   : the inner pipeline reached the TTS publish phase
+            (normal completion, OR an exception was raised mid-publish, OR a
+            barge-in `cancel_speaking()` was invoked — `cancel_speaking` does
+            NOT touch _state, only signals LLM/TTS to stop).
+          - LISTENING  : never observed here (single-writer guarantee — the
+            only writer to LISTENING is this finally itself).
+        Unconditional reset to LISTENING below covers every path.
         """
         try:
             resampler_down = rtc.AudioResampler(
@@ -268,7 +342,9 @@ class ShuguVoiceAgent(Agent):
             else:
                 await self._handle_turn(transcript)
         finally:
-            self._processing = False
+            # Single-writer pattern: _process_utterance always returns to LISTENING.
+            # cancel_speaking() does NOT touch state; the finally here is the sole writer.
+            self._state = _AgentState.LISTENING
 
     async def _handle_turn(self, transcript: str) -> None:
         """Complete pipeline for one turn (Sprint B one-shot path).
@@ -281,16 +357,16 @@ class ShuguVoiceAgent(Agent):
         5. tool_call_parser.has_tool_calls(resp) -> log + strip markers.
         6. PiperTTS.synthesize(response_text) -> pcm_22050.
         7. _resample_and_publish(pcm_22050).
-        finally: self._processing = False (always, backpressure guard).
+        State transitions to LISTENING are owned by _process_utterance.finally
+        (single-writer pattern). This method itself never writes _state.
         """
         if not transcript:
             return
 
-        # NOTE: do NOT set self._processing = True here — _consume_vad already
-        # set it synchronously before scheduling _process_utterance. The flag
-        # lifecycle is owned by _process_utterance.finally (single owner). When
-        # PR3 introduces _AgentState enum, the second writer would corrupt the
-        # state machine. The outer finally in _process_utterance always clears.
+        # State write rule (PR3): _state is owned by _process_utterance — never
+        # written here. _consume_vad set PROCESSING before scheduling the task,
+        # the outer finally restores LISTENING. Transition PROCESSING → SPEAKING
+        # happens just before the TTS publish step (line below).
         try:
             intent_match = intent_classifier.classify(transcript)
             log.info(
@@ -342,13 +418,15 @@ class ShuguVoiceAgent(Agent):
                 log.warning("voice.tts.empty_output")
                 return
 
+            # Transition PROCESSING → SPEAKING just before first audio publish.
+            # The finally of _process_utterance restores LISTENING unconditionally.
+            self._state = _AgentState.SPEAKING
             await self._resample_and_publish(pcm_22050)
 
         except Exception as exc:
             log.error("voice.handle_turn.error", error=str(exc))
-        # No finally here — _processing is cleared by _process_utterance's outer
-        # finally. Removing the duplicate write avoids racing with the future
-        # _AgentState enum (PR3).
+        # No finally here — _state is restored to LISTENING by _process_utterance's outer
+        # finally (single-writer pattern, PR3).
 
     async def _handle_turn_streaming(self, transcript: str) -> None:
         """Pipeline streaming Sprint C (activé par voice_streaming_enabled=True).
@@ -359,9 +437,10 @@ class ShuguVoiceAgent(Agent):
           3. LocalLLM.stream() → tokens → SentenceChunker → phrases
           4. PiperTTS.synthesize_stream(phrases) → PCM chunks → _resample_and_publish
 
-        Barge-in hooks (PR3) :
-          cancel_speaking() is exposed but not yet wired to START_OF_SPEECH.
-          The _processing flag continues to guard backpressure (bool, not enum — PR3).
+        Barge-in (PR3):
+          cancel_speaking() wired via _on_speech_started() in _consume_vad.
+          PROCESSING → SPEAKING transition just before first TTS frame.
+          Backpressure guard uses _state != _AgentState.LISTENING check.
 
         Note WEB_SEARCH latency : Tavily adds ~300-600ms RTT — TTFB ~700-1000ms.
         Budget depassé vs CHAT path (330-450ms). Filler acoustique Sprint D.
@@ -415,6 +494,10 @@ class ShuguVoiceAgent(Agent):
             filtered_stream = _strip_tool_calls_streaming(token_stream)
             sentence_stream = chunker.feed_stream(filtered_stream)
 
+            # Transition PROCESSING → SPEAKING just before first TTS frame.
+            # The finally of _process_utterance restores LISTENING unconditionally.
+            self._state = _AgentState.SPEAKING
+
             async for pcm_chunk in self._tts.synthesize_stream(sentence_stream):
                 await self._resample_and_publish(pcm_chunk)
 
@@ -429,13 +512,36 @@ class ShuguVoiceAgent(Agent):
         Cooperative — does not brutally kill the executor thread.
         The asyncio.Lock is released by stream() finally block when the thread exits.
 
-        This is a PR3 hook: exposed here but not yet wired to START_OF_SPEECH
-        in _drain_and_transcribe. The full barge-in state machine (_AgentState enum,
-        SPEAKING guard, START_OF_SPEECH handler) ships in PR3.
+        Single-writer contract: this method does NOT set _state. The finally block
+        in _process_utterance is the sole writer of _state → LISTENING. This ensures
+        no race between barge-in cancel and the normal turn-end path.
+
+        Called from _on_speech_started() when user speaks while agent is
+        SPEAKING or PROCESSING (barge-in detection).
         """
-        log.info("voice.bargein.cancelling")
+        from_state = self._state.value
+        log.info("voice.bargein.cancelling", from_state=from_state)
         self._llm.cancel()
         await self._tts.aclose()
+        # Mark the cancel time so _consume_vad can drop the tail END_OF_SPEECH
+        # (the interrupt utterance itself) per blueprint §7.5.
+        self._last_cancel_ts = asyncio.get_running_loop().time()
+        log.info("voice.bargein.cancelled", from_state=from_state)
+
+    async def _on_speech_started(self) -> None:
+        """Handler for VAD START_OF_SPEECH events. Extracted for testability.
+
+        Barge-in logic:
+          - SPEAKING  → cancel LLM + TTS immediately (user interrupted Shugu)
+          - PROCESSING → cancel LLM (user spoke before TTS started)
+          - LISTENING  → no-op (expected: user is starting their turn)
+
+        State restores to LISTENING via _process_utterance.finally (single-writer).
+        """
+        if self._state in (_AgentState.SPEAKING, _AgentState.PROCESSING):
+            log.info("voice.bargein.detected", from_state=self._state.value)
+            await self.cancel_speaking()
+        # LISTENING: user starting a new utterance — normal path, no cancel needed
 
     async def _resample_and_publish(self, pcm_22050: bytes) -> None:
         """Resample 22050 -> 48000 Hz (ratio ~2.177) and publish via AudioSource.
