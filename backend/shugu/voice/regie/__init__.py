@@ -10,10 +10,26 @@ en ajoutant une couche Python en amont du LLM qui :
 Modules :
 - intent_classifier  : intent → chat / web_search / emotion / emote
 - tool_call_parser   : Gemma format `<|tool_call>call:N{...}<tool_call|>` → dict
-- web_search_tool    : Tavily/Brave API (Sprint C)
-- avatar_control     : sentiment + keyword → emotion/emote events
-- prompt_builder     : system prompt augmenté
-- safety_filter      : réutilise injection_detector
+- web_search         : Tavily/Brave API (Sprint C PR1)
+- avatar_control     : sentiment + keyword → emotion/emote events (Sprint D)
+- safety_filter      : réutilise injection_detector (Sprint D)
 
 See docs/specs/2026-05-03-realtime-voice-shugu.md §5.bis pour le design complet.
 """
+from .web_search import (
+    BraveProvider,
+    NullProvider,
+    TavilyProvider,
+    WebSearchAggregator,
+    WebSearchProvider,
+    WebSearchResult,
+)
+
+__all__ = [
+    "BraveProvider",
+    "NullProvider",
+    "TavilyProvider",
+    "WebSearchAggregator",
+    "WebSearchProvider",
+    "WebSearchResult",
+]

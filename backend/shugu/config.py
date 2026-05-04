@@ -126,6 +126,47 @@ class Settings(BaseSettings):
                     "If False: LocalLLM voice not instantiated (zero VRAM impact).",
     )
     voice_recordings_dir: str = "data/voice_recordings"
+    # D1 ARBITRÉ — Tavily + Brave fallback dès PR1.
+    # NullProvider silencieux si la clé est vide (comportement inchangé).
+    tavily_api_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("TAVILY_API_KEY", "SHUGU_TAVILY_API_KEY"),
+        description="Clé API Tavily pour web search (free tier 1000 req/mois). "
+                    "Si vide, Tavily est ignoré par WebSearchAggregator. "
+                    "Env: TAVILY_API_KEY ou SHUGU_TAVILY_API_KEY.",
+    )
+    brave_api_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("BRAVE_API_KEY", "SHUGU_BRAVE_API_KEY"),
+        description="Clé API Brave Search (free tier 2000 req/mois). "
+                    "Utilisée en fallback si Tavily est absent/timeout/429. "
+                    "Si vide, Brave est ignoré par WebSearchAggregator. "
+                    "Env: BRAVE_API_KEY ou SHUGU_BRAVE_API_KEY.",
+    )
+    # D3 ARBITRÉ — default=True : le streaming est actif dès le merge de PR2.
+    voice_streaming_enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices(
+            "VOICE_STREAMING_ENABLED", "SHUGU_VOICE_STREAMING_ENABLED"
+        ),
+        description="Active le pipeline streaming TTS+LLM+barge-in dans _handle_turn_streaming. "
+                    "ON par défaut — le pipeline Sprint B one-shot reste accessible via False. "
+                    "Requis=True pour que la barge-in PR3 fonctionne. "
+                    "Env: SHUGU_VOICE_STREAMING_ENABLED (ou VOICE_STREAMING_ENABLED).",
+    )
+    # D7 ARBITRÉ — champ Settings dédié (pas de constante inline).
+    voice_web_injection_threshold: float = Field(
+        default=0.7,
+        ge=0.0,
+        le=1.0,
+        validation_alias=AliasChoices(
+            "VOICE_WEB_INJECTION_THRESHOLD", "SHUGU_VOICE_WEB_INJECTION_THRESHOLD"
+        ),
+        description="Score injection_detector au-delà duquel un snippet web est rejeté "
+                    "(protection prompt injection via résultats Tavily/Brave). "
+                    "Défaut 0.7. Bornes [0.0, 1.0]. "
+                    "Env: SHUGU_VOICE_WEB_INJECTION_THRESHOLD.",
+    )
 
     # LLM (Shugu shares the MiniMax account; can diverge later)
     minimax_api_key: str = ""
