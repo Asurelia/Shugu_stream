@@ -31,9 +31,12 @@ from livekit.agents import vad as agents_vad
 from livekit.agents.worker import AgentServer
 from livekit.plugins.silero import VAD
 
+from ..adapters.injection_detector import aggregate_weight
+from ..adapters.injection_detector import scan as _injection_scan
 from ..config import Settings, get_settings
 from .llm_local import LocalLLM
 from .regie import intent_classifier, tool_call_parser
+from .regie.web_search import WebSearchAggregator, WebSearchProvider
 from .stt_local import WhisperSTT
 from .tts_local import PiperTTS
 
@@ -50,6 +53,24 @@ _CHUNK_BYTES: int = _CHUNK_SAMPLES * 2  # s16le = 2 bytes/sample
 _MAX_BUFFER_SECONDS: float = 30.0
 
 
+# Markers used to delimit web snippets in the LLM system prompt. A snippet from
+# Tavily/Brave that literally contains these strings would break the confinement
+# layer and let an attacker write arbitrary text outside [WEB_CONTEXT]. We
+# neutralize them on retrieval — injection_detector does not cover custom markers.
+_WEB_CONTEXT_OPEN: str = "[WEB_CONTEXT]"
+_WEB_CONTEXT_CLOSE: str = "[/WEB_CONTEXT]"
+
+
+def _neutralize_delimiters(snippet: str) -> str:
+    """Strip our custom WEB_CONTEXT markers from a snippet before prompt injection.
+
+    Replaces both opening and closing markers with empty string. Case-insensitive
+    is unnecessary — the markers are uppercase ASCII and we control them; only the
+    exact literal can break out of confinement.
+    """
+    return snippet.replace(_WEB_CONTEXT_OPEN, "").replace(_WEB_CONTEXT_CLOSE, "")
+
+
 class ShuguVoiceAgent(Agent):
     """LiveKit Agent naive pipeline Sprint B.
 
@@ -64,6 +85,7 @@ class ShuguVoiceAgent(Agent):
         tts: PiperTTS,
         settings: Settings,
         audio_source: rtc.AudioSource,
+        web_search: WebSearchProvider | None = None,
     ) -> None:
         # Agent.instructions is required by livekit-agents 1.5.5.
         # We pass a placeholder — the actual prompt is built per-turn in
@@ -81,6 +103,12 @@ class ShuguVoiceAgent(Agent):
         self._settings = settings
         self._audio_source = audio_source
         self._processing: bool = False      # backpressure flag (§6.2)
+        # WebSearch provider — injectable for tests, defaults to Aggregator from settings.
+        # If both Tavily and Brave keys are empty, Aggregator uses NullProvider silently.
+        self._web_search: WebSearchProvider = (
+            web_search if web_search is not None
+            else WebSearchAggregator.from_settings(settings)
+        )
 
     async def on_enter(self) -> None:
         """Called by AgentSession on connection. Sprint B: log voice.session.ready."""
@@ -162,13 +190,14 @@ class ShuguVoiceAgent(Agent):
             self._processing = False
 
     async def _handle_turn(self, transcript: str) -> None:
-        """Complete pipeline for one turn.
+        """Complete pipeline for one turn (Sprint B one-shot path).
 
         1. Empty transcript -> skip (no LLM waste per U-AGT-3).
         2. intent_classifier.classify(transcript) -> régie hint.
-        3. _build_sprint_b_system_prompt(intent_match) -> system prompt.
+        3. WEB_SEARCH intent: fetch snippets, sanitize via injection_detector,
+           inject [WEB_CONTEXT]...[/WEB_CONTEXT] into system prompt (D7).
         4. LocalLLM.generate(system, msgs, max_tokens=200, enable_thinking=False).
-        5. tool_call_parser.has_tool_calls(resp) -> log + strip markers (Sprint C executes).
+        5. tool_call_parser.has_tool_calls(resp) -> log + strip markers.
         6. PiperTTS.synthesize(response_text) -> pcm_22050.
         7. _resample_and_publish(pcm_22050).
         finally: self._processing = False (always, backpressure guard).
@@ -185,7 +214,24 @@ class ShuguVoiceAgent(Agent):
                 matched_terms=intent_match.matched_terms,
             )
 
-            system = self._build_sprint_b_system_prompt(intent_match)
+            # Step: web search pre-fetch for WEB_SEARCH intent
+            web_snippets: list[str] = []
+            if intent_match.intent == intent_classifier.Intent.WEB_SEARCH:
+                raw_results = await self._web_search.search(transcript)
+                threshold = self._settings.voice_web_injection_threshold
+                for result in raw_results:
+                    signals = _injection_scan(result.snippet)
+                    score = min(aggregate_weight(signals) / 5.0, 1.0)
+                    if score > threshold:
+                        log.warning(
+                            "voice.websearch.snippet_dropped",
+                            score=score,
+                            threshold=threshold,
+                        )
+                    else:
+                        web_snippets.append(_neutralize_delimiters(result.snippet))
+
+            system = self._build_system_prompt(intent_match, web_snippets)
             messages: list[dict[str, str]] = [{"role": "user", "content": transcript}]
 
             response_text = await self._llm.generate(
@@ -264,12 +310,32 @@ class ShuguVoiceAgent(Agent):
 
     @staticmethod
     def _build_sprint_b_system_prompt(intent_match: intent_classifier.IntentMatch) -> str:
-        """Minimal inline system prompt. Sprint C replaces with regie/prompt_builder.py."""
+        """Minimal inline system prompt — kept for backward compatibility with existing tests."""
+        return ShuguVoiceAgent._build_system_prompt(intent_match, [])
+
+    @staticmethod
+    def _build_system_prompt(
+        intent_match: intent_classifier.IntentMatch,
+        web_snippets: list[str],
+    ) -> str:
+        """Build system prompt, optionally injecting sanitized web snippets.
+
+        Web snippets are delimited by [WEB_CONTEXT]...[/WEB_CONTEXT] markers
+        per blueprint §3.6.3 (prompt injection guard layer 1).
+        """
         base = (
             "Tu es Shugu, une streameuse virtuelle francophone enthousiaste et bienveillante. "
             "Réponds en 1 à 2 phrases concises et naturelles."
         )
         if intent_match.intent == intent_classifier.Intent.WEB_SEARCH:
+            if web_snippets:
+                joined = " | ".join(web_snippets)
+                return (
+                    base
+                    + " Contexte web récupéré pour répondre à la question : "
+                    f"[WEB_CONTEXT]{joined}[/WEB_CONTEXT] "
+                    "Utilise ce contexte pour répondre factuellement et brièvement."
+                )
             return (
                 base
                 + " L'utilisateur cherche une information factuelle. "
