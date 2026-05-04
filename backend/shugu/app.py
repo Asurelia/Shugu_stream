@@ -551,7 +551,13 @@ async def lifespan(app: FastAPI):
         from .voice.llm_local import LocalLLM as _VoiceLLM
 
         _voice_llm_instance = _VoiceLLM(settings)
-        _worker_opts = _build_worker_options(settings, _voice_llm_instance)
+        # Sprint D PR1 — share the Prometheus registry so voice_turn_latency_seconds
+        # histograms appear in GET /metrics alongside agent-loop counters
+        # (PrometheusMetricsRecorder.registry is the registry passed to /metrics).
+        _voice_prom_registry = getattr(_prom_recorder, "registry", None)
+        _worker_opts = _build_worker_options(
+            settings, _voice_llm_instance, prom_registry=_voice_prom_registry,
+        )
         _agent_server = _AgentServer.from_server_options(_worker_opts)
         _voice_worker_task = asyncio.create_task(
             _agent_server.run(),

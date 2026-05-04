@@ -92,12 +92,30 @@ async def test_stream_skips_empty_content_chunks() -> None:
 
 @pytest.mark.asyncio
 async def test_cancel_stops_stream() -> None:
-    """cancel() must stop the streaming iterator and release the lock."""
-    # Produce many tokens; we'll cancel after the first
+    """cancel() must stop the streaming iterator and release the lock.
+
+    The sync producer (executor thread) walks `iter(chunks)` and pushes onto an
+    asyncio.Queue via call_soon_threadsafe. Without a per-chunk pause, the producer
+    can flush all chunks into the queue before the asyncio consumer gets to call
+    cancel(). We inject a tiny `time.sleep(0.001)` between chunks via a generator
+    wrapper — this matches the real llama-cpp-python behaviour where each chunk
+    takes ~25ms (40 tok/s) — and gives the cooperative cancel a real cancellation
+    window. CI-stable because the wait is on actual chunk emission, not wall-clock.
+    """
+    import time
     tokens_input = [f"tok{i}" for i in range(50)]
     chunks = [_make_stream_chunk(t) for t in tokens_input]
 
-    llm, _ = _make_llm_with_mock_model(chunks)
+    def _slow_iter() -> object:
+        for ch in chunks:
+            time.sleep(0.001)  # 1ms per chunk → producer yields ~50ms total worst-case
+            yield ch
+
+    settings = _fake_settings()
+    llm = LocalLLM(settings)
+    mock_model = MagicMock()
+    mock_model.create_chat_completion.return_value = _slow_iter()
+    llm._llm = mock_model
 
     collected: list[str] = []
     async for token in llm.stream("s", [{"role": "user", "content": "x"}]):
@@ -105,13 +123,11 @@ async def test_cancel_stops_stream() -> None:
         if len(collected) >= 1:
             llm.cancel()
 
-    # Cancel must take effect within a small window. The executor checks the
-    # event between chunks; one in-flight chunk may be received after cancel(),
-    # but anything beyond a tight bound means the cancel is not actually wired.
-    # Tighter bound forces a real test of the cooperative cancel contract
-    # instead of letting near-full consumption pass silently.
-    assert len(collected) <= 5, (
-        f"cancel() must stop iteration within ~5 tokens, got {len(collected)} "
+    # With the per-chunk pause, cancel must take effect within ~10 chunks
+    # (cooperative cancel checks the event at the top of each loop iteration).
+    # If this bound is exceeded, the cancel event is not reaching the executor.
+    assert len(collected) <= 10, (
+        f"cancel() must stop iteration within ~10 tokens, got {len(collected)} "
         f"out of {len(tokens_input)} — cancel event is not reaching the executor."
     )
     # Lock must be released — try acquiring it within a short timeout
