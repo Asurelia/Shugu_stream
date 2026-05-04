@@ -209,6 +209,54 @@ async def test_transcribe_empty_pcm_skips_subprocess(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# U-STT-7: aclose() terminates active subprocess (Agent shutdown contract)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_aclose_terminates_active_subprocess(tmp_path: Path) -> None:
+    """aclose() must terminate the live subprocess so SIGINT during transcribe
+    does not leave an orphan whisper-cli process. Idempotent when no proc active."""
+    settings = _fake_settings(tmp_path)
+    stt = WhisperSTT(settings)
+
+    # No-op when nothing is running
+    await stt.aclose()
+
+    # Simulate an in-flight transcribe by injecting a live mock subprocess
+    proc_mock = MagicMock()
+    proc_mock.returncode = None
+    proc_mock.terminate = MagicMock()
+    proc_mock.wait = AsyncMock()
+    stt._current_proc = proc_mock  # type: ignore[attr-defined]
+
+    await stt.aclose()
+
+    proc_mock.terminate.assert_called_once()
+    proc_mock.wait.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_aclose_kills_on_terminate_timeout(tmp_path: Path) -> None:
+    """If terminate() does not exit within 2s, aclose() must escalate to kill()."""
+    settings = _fake_settings(tmp_path)
+    stt = WhisperSTT(settings)
+
+    proc_mock = MagicMock()
+    proc_mock.returncode = None
+    proc_mock.terminate = MagicMock()
+    proc_mock.kill = MagicMock()
+    proc_mock.wait = AsyncMock()
+    stt._current_proc = proc_mock  # type: ignore[attr-defined]
+
+    with patch("asyncio.wait_for", side_effect=asyncio.TimeoutError()):
+        await stt.aclose()
+
+    proc_mock.terminate.assert_called_once()
+    proc_mock.kill.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
 # Retro-compat alias
 # ---------------------------------------------------------------------------
 

@@ -38,6 +38,9 @@ class PiperTTS:
             )
         self._binary_path = str(bin_path)
         self._voice_path = str(voice_path)
+        # current_proc is set while a synthesize() call holds an active subprocess so
+        # an external shutdown handler (Agent._on_shutdown) can terminate it cleanly.
+        self._current_proc: asyncio.subprocess.Process | None = None
 
     async def synthesize(self, text: str) -> bytes:
         """One-shot synthesis via subprocess. Returns b"" on error/timeout.
@@ -59,6 +62,7 @@ class PiperTTS:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
+            self._current_proc = proc
             try:
                 stdout, _ = await asyncio.wait_for(
                     proc.communicate(input=text.encode("utf-8")),
@@ -85,6 +89,24 @@ class PiperTTS:
                 proc.kill()
                 await proc.wait()
             return b""
+        finally:
+            self._current_proc = None
+
+    async def aclose(self) -> None:
+        """Terminate the active synthesis subprocess if any.
+
+        Called by ShuguVoiceAgent._on_shutdown so a SIGINT during a long-running
+        piper invocation does not leave an orphan process. Idempotent.
+        """
+        proc = self._current_proc
+        if proc is None or proc.returncode is not None:
+            return
+        proc.terminate()
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=2.0)
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()
 
     async def synthesize_stream(
         self,

@@ -45,6 +45,9 @@ class WhisperSTT:
             )
         self._binary_path = str(bin_path)
         self._model_path = str(model_path)
+        # current_proc is set while a transcribe() call holds an active subprocess so
+        # an external shutdown handler (Agent._on_shutdown) can terminate it cleanly.
+        self._current_proc: asyncio.subprocess.Process | None = None
 
     @staticmethod
     def _build_wav_header(pcm_bytes: bytes) -> bytes:
@@ -103,6 +106,7 @@ class WhisperSTT:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
+            self._current_proc = proc
             try:
                 stdout, _ = await asyncio.wait_for(
                     proc.communicate(input=wav_data),
@@ -130,6 +134,24 @@ class WhisperSTT:
                 proc.kill()
                 await proc.wait()
             return ""
+        finally:
+            self._current_proc = None
+
+    async def aclose(self) -> None:
+        """Terminate the active transcription subprocess if any.
+
+        Called by ShuguVoiceAgent._on_shutdown so a SIGINT during a long-running
+        whisper-cli invocation does not leave an orphan process. Idempotent.
+        """
+        proc = self._current_proc
+        if proc is None or proc.returncode is not None:
+            return
+        proc.terminate()
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=2.0)
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()
 
     async def transcribe_stream(
         self,
