@@ -42,6 +42,7 @@ import { useViewerToken } from "./useViewerToken";
 import { ViewerEventsClient } from "./ViewerEventsClient";
 import { mapSceneApply } from "./sceneApplyMapper";
 import { SceneScheduler } from "./sceneScheduler";
+import { createBargeInHandler } from "./bargeInHandler";
 
 // ─── Constantes ─────────────────────────────────────────────────────────────
 
@@ -157,6 +158,12 @@ export function ViewerEventsProvider({
     });
     schedulerRef.current = scheduler;
 
+    // D-9 wiring : factory consume scheduler.flush() + viewer.fadeOut +
+    // emoteController.applyDirectorAction(neutral). Le handler est pur
+    // (pas un Provider React) — exécute la chaîne complète audio fade
+    // 50ms + neutral + flush en réaction à voice.interrupt.
+    const bargeInHandler = createBargeInHandler({ viewer, scheduler });
+
     const wsUrl = url ?? buildViewerEventsUrl();
     const client = new ViewerEventsClient({
       url: wsUrl,
@@ -165,9 +172,9 @@ export function ViewerEventsProvider({
         const action = mapSceneApply(event);
         scheduler.schedule(event, action);
       },
-      onInterrupt: () => {
-        scheduler.flush();
-        // D-9 : appliquer une expression neutre + ramp-down audio. Stub.
+      onInterrupt: (event) => {
+        // D-9 wired : fade audio 50ms + neutral expression + flush scheduler.
+        bargeInHandler(event);
       },
       // Review fix critique #2 : hook reconnect handling. Spec §6.2 mandate
       // "Au reconnect : fetch /viewer/state snapshot + apply au mapper pour
