@@ -109,6 +109,35 @@ export class Model {
   }
 
   /**
+   * Branche un HTMLAudioElement (typiquement issu de LiveKit
+   * `RemoteAudioTrack.attach()`) sur l'analyser lipSync, sans toucher à
+   * l'expression faciale.
+   *
+   * Sprint D PR D-6 : la voix TTS arrive en streaming via WebRTC LiveKit.
+   * Le mapping émotion ↔ phrase est géré séparément par `sceneApplyMapper`
+   * + `emoteController.applyDirectorAction` (PR D-7), donc cette méthode
+   * NE déclenche PAS `playEmotion` (contrairement à `startStreamingSpeak`).
+   * Seule la lecture audio + lipSync est branchée.
+   */
+  public attachStreamingAudio(audio: HTMLAudioElement): void {
+    this._lipSync?.attachMediaElement(audio);
+  }
+
+  /**
+   * Retourne l'AudioContext interne du lipSync (pour gérer la policy autoplay
+   * du browser : `audioContext.resume()` après un user-gesture). Undefined si
+   * le LipSync n'est pas encore initialisé.
+   *
+   * Cas d'usage principal : LiveKitProvider expose un overlay "click to start"
+   * quand `audioContext.state === "suspended"` après attach. Le click déclenche
+   * `audioContext.resume()` sur CETTE instance — on ne crée jamais de second
+   * AudioContext côté Provider, sinon les deux graphs deviennent désynchronisés.
+   */
+  public get audioContext(): AudioContext | undefined {
+    return this._lipSync?.audio;
+  }
+
+  /**
    * Per-frame update. Called from Viewer.update() with the frame delta AND
    * the viewer-captured cursor NDC (used by the look-at manager).
    */
