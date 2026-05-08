@@ -54,6 +54,7 @@ from .routes import (
     scene_composer_api,
     scene_editor_api,
     test_director_api,
+    viewer,
     visitor_ws,
     world_ws,
 )
@@ -344,6 +345,18 @@ async def lifespan(app: FastAPI):
     # {id}/drafts`). Voir `routes/editor_ws.py` pour le contract.
     editor_ws.set_deps(editor_ws.EditorWSDeps(
         event_bus=event_bus, settings=settings, redis=_redis,
+    ))
+    # Viewer WS + REST — Sprint D PR D-3. Push director events (scene.apply +
+    # voice.interrupt) vers le frontend React + bootstrap/refresh JWT viewer +
+    # snapshot SceneState pour resync reconnect. Cf routes/viewer.py.
+    # Le state_store est un singleton in-memory déjà instancié par get_director_state_store()
+    # ailleurs dans le wiring (Director ou pas, le store existe pour servir GET /viewer/state).
+    from .director.state_store import get_director_state_store as _get_state_store
+    viewer.set_deps(viewer.ViewerDeps(
+        event_bus=event_bus,
+        settings=settings,
+        redis=_redis,
+        state_store=_get_state_store(),
     ))
     # Observatory SSE (Sprint mos-A) — flux temps réel des events workers.
     # Lit le bus event partagé en read-only ; aucun side effect possible côté
@@ -661,6 +674,7 @@ def create_app() -> FastAPI:
     app.include_router(operator_ws.router)
     app.include_router(editor_ws.router)   # /ws/editor — Phase D collab
     app.include_router(world_ws.router)    # /ws/world — Phase L4 world.delta viewer
+    app.include_router(viewer.router)      # /viewer/events + /voice/token* — Sprint D PR D-3
     # Phase E4 — route de test Director (gated par settings.test_triggers_enabled).
     # La route retourne 404 si le flag est OFF, donc on peut toujours l'inclure —
     # pas de risque de surface d'attaque en prod. L'inclusion inconditionnelle
