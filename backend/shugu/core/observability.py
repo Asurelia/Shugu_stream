@@ -9,11 +9,9 @@ we'll need a Redis-backed variant — but v4 is mono-node.
 
 from __future__ import annotations
 
-import time
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Deque
-
 
 # ─── Metrics collector ───────────────────────────────────────────────────────
 
