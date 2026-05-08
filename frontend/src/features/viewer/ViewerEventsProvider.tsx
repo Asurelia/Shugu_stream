@@ -169,6 +169,21 @@ export function ViewerEventsProvider({
         scheduler.flush();
         // D-9 : appliquer une expression neutre + ramp-down audio. Stub.
       },
+      // Review fix critique #2 : hook reconnect handling. Spec §6.2 mandate
+      // "Au reconnect : fetch /viewer/state snapshot + apply au mapper pour
+      // resync l'expression actuelle." Sans ça, un drop WS 2s laisse l'avatar
+      // gelé sur la dernière expression.
+      //
+      // TODO(D-10 ou follow-up) : implémenter la fetch GET /api/viewer/state
+      // avec Authorization: Bearer ${token} dans onDisconnected ou onReconnected
+      // callback (ViewerEventsClient n'expose actuellement pas ces hooks —
+      // ajout API mineur). Le payload retourné `{face, active_vfx, scene,
+      // outfit, camera_mode}` (D-3) doit être replayé via mapSceneApply +
+      // scheduler.schedule comme s'il s'agissait d'events scene.apply normaux.
+      //
+      // Pour l'instant : flush + log. Le prochain event scene.apply re-set
+      // l'expression — drift acceptable pour MVP, à durcir avant live test
+      // longue durée.
     });
     clientRef.current = client;
     void client.connect();

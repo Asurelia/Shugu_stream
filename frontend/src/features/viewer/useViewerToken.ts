@@ -198,6 +198,23 @@ export function useViewerToken(
         });
         if (cancelled) return;
         if (!resp.ok) {
+          // Review fix critique #1 : surfacer 401/403 (auth invalide) au caller.
+          // Spec §6.1 mandate "Si refresh échoue (auth invalide) → notification
+          // user 'session expirée, reload'". Sans ça, le token meurt
+          // silencieusement après 5min et l'avatar gèle sans signal user.
+          if (resp.status === 401 || resp.status === 403) {
+            const sessionExpired = new Error(
+              `session-expired (HTTP ${resp.status})`,
+            );
+            console.error(
+              "[useViewerToken] refresh auth failed — session expired:",
+              sessionExpired,
+            );
+            if (!cancelled) {
+              setState((prev) => ({ ...prev, error: sessionExpired }));
+            }
+            return;
+          }
           throw new Error(`refresh failed: HTTP ${resp.status}`);
         }
         const data = (await resp.json()) as BackendRefreshResponse;
@@ -213,13 +230,17 @@ export function useViewerToken(
           ...prev,
           token: data.token!,
           expiresAt: data.expires_at!,
+          error: null,  // clear toute erreur précédente sur succès
         }));
         scheduleRefresh(data.expires_at);
       } catch (err) {
-        // Pas critique — l'ancien token reste valide jusqu'à `expires_at`.
-        // Le prochain remount du hook refera un bootstrap si besoin.
+        // Erreurs non-401 (network, 500, etc.) : pas critique.
+        // L'ancien token reste valide jusqu'à `expires_at`. Le prochain
+        // tentative du timer scheduleRefresh retentera. Si l'`expires_at`
+        // arrive sans refresh réussi, le backend retournera 401 au prochain
+        // event WS et le client sera signalé via le path 401 ci-dessus.
         console.warn(
-          "[useViewerToken] proactive refresh failed — keeping current token:",
+          "[useViewerToken] proactive refresh failed (non-auth) — keeping current token:",
           err,
         );
       }

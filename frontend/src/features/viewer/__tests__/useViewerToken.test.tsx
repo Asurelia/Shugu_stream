@@ -328,6 +328,152 @@ describe("useViewerToken — refresh proactif T-60s", () => {
   });
 });
 
+describe("useViewerToken — enabled flip (login mid-session)", () => {
+  /**
+   * Test review #3 critique D-8 : le pattern central "wrap inconditionnel +
+   * prop enabled" est load-bearing. Sans test du flip false→true, une
+   * régression sur les deps de useEffect rend le bootstrap silencieux et
+   * l'avatar n'aura jamais de token.
+   */
+
+  function FlipConsumer({
+    enabled,
+    snapshotRef,
+  }: {
+    enabled: boolean;
+    snapshotRef: { current: ViewerTokenSnapshot | null };
+  }): JSX.Element {
+    const value = useViewerToken({ enabled });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    React.useEffect(() => {
+      snapshotRef.current = {
+        token: value.token,
+        livekitUrl: value.livekitUrl,
+        expiresAt: value.expiresAt,
+        isLoading: value.isLoading,
+        error: value.error,
+      };
+    });
+    return <div data-testid="flip-consumer" />;
+  }
+
+  it("enabled=false au mount → aucun fetch ; flip true → bootstrap fetch fire", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve(makeBackendTokenResponse({})),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const snapshot = { current: null as ViewerTokenSnapshot | null };
+    const { rerender } = render(
+      <FlipConsumer enabled={false} snapshotRef={snapshot} />,
+    );
+
+    await act(async () => {
+      await flushMicrotasks();
+    });
+
+    // Aucun fetch tant que enabled=false (pas de bootstrap, pas de timer).
+    expect(fetchMock).toHaveBeenCalledTimes(0);
+    expect(snapshot.current?.token).toBeNull();
+
+    // Flip enabled=true → bootstrap doit fire.
+    rerender(<FlipConsumer enabled={true} snapshotRef={snapshot} />);
+    await act(async () => {
+      await flushMicrotasks();
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(snapshot.current?.token).toBe("tok-initial");
+    expect(snapshot.current?.livekitUrl).toBe("wss://livekit.test");
+  });
+
+  it("enabled=true → false → cleanup token (cancel refresh timer pending)", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve(makeBackendTokenResponse({ expiresInS: 300 })),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const snapshot = { current: null as ViewerTokenSnapshot | null };
+    const { rerender } = render(
+      <FlipConsumer enabled={true} snapshotRef={snapshot} />,
+    );
+
+    await act(async () => {
+      await flushMicrotasks();
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(snapshot.current?.token).toBe("tok-initial");
+
+    // Flip enabled=false (logout mid-session par exemple).
+    rerender(<FlipConsumer enabled={false} snapshotRef={snapshot} />);
+    await act(async () => {
+      await flushMicrotasks();
+    });
+
+    // Avance au-delà du refresh point — aucun nouveau fetch (timer cancellé).
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500_000);
+      await flushMicrotasks();
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("useViewerToken — refresh 401 surface error (review fix #1)", () => {
+  /**
+   * Spec §6.1 : "Si refresh échoue (auth invalide) → notification user
+   * 'session expirée, reload'." Test review fix critique #1 : 401/403
+   * doit set state.error pour que le caller puisse afficher l'UI.
+   */
+  it("refresh retourne 401 → state.error set 'session-expired'", async () => {
+    const nowS = Math.floor(Date.now() / 1000);
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        // bootstrap initial — token expire dans 65s pour fire le refresh à T-60s rapide.
+        ok: true,
+        status: 200,
+        json: () =>
+          Promise.resolve({
+            token: "tok-A",
+            expires_at: nowS + 65,
+            livekit_url: "wss://livekit.test",
+          }),
+      })
+      .mockResolvedValueOnce({
+        // refresh : 401 auth invalid.
+        ok: false,
+        status: 401,
+        json: () => Promise.resolve({ detail: "viewer token expired" }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const snapshot = { current: null as ViewerTokenSnapshot | null };
+    render(<TestConsumer snapshotRef={snapshot} />);
+
+    await act(async () => {
+      await flushMicrotasks();
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    // Avance jusqu'au refresh (à T-60s = T+5s).
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(6_000);
+      await flushMicrotasks();
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(snapshot.current?.error).not.toBeNull();
+    expect(snapshot.current?.error?.message).toMatch(/session-expired/);
+    // Old token reste exposé (le caller peut décider de reload).
+    expect(snapshot.current?.token).toBe("tok-A");
+  });
+});
+
 describe("useViewerToken — cleanup", () => {
   it("unmount cancel le timer de refresh (pas de fetch après unmount)", async () => {
     const nowS = Math.floor(Date.now() / 1000);
