@@ -112,7 +112,7 @@ Livrer un pipeline complet end-to-end où :
 | `backend/shugu/voice/audio_bridge.py` | Implémenter (vide actuellement) | Subscriber sur `voice.tts.chunks` → publish vers LiveKit room audio track. Tag chaque chunk avec `chunk_started_at_ms` (horloge LiveKit). |
 | `backend/shugu/voice/livekit_publisher.py` | Créer | Wrapper `LocalAudioTrack` LiveKit. Expose `publish_pcm(pcm, sample_rate=22050)` et `unpublish()` (pour barge-in). |
 | `backend/shugu/director/event_bus.py` | Étendre | Ajouter `audio_at_ms` au payload de `scene.apply` quand `kind ∈ {say_emotion, face}`. Calcul = `now_ms - chunk_started_at_ms` du publisher courant. |
-| `backend/shugu/app.py` | Ajouter route | `WS /viewer/events` (auth JWT, broadcast `scene.apply` + `voice.interrupt`). REST `GET /viewer/state` (snapshot SceneState pour reconnect). REST `POST /voice/token/refresh`. |
+| `backend/shugu/app.py` | Ajouter route | Routes sous le préfixe `/api/` (pattern repo) : `WS /api/viewer/events` (auth JWT, broadcast `scene.apply` + `voice.interrupt`). REST `GET /api/viewer/state` (snapshot SceneState pour reconnect). REST `POST /api/voice/token` + `POST /api/voice/token/refresh`. |
 | `backend/shugu/voice/regie/interrupt_handler.py` | Créer | Listener `voice.interrupt` (publié par VADDriver) → enchaîne `PiperTTS.aclose()`, `livekit_publisher.unpublish()`, push `{action:"interrupt"}` sur `/viewer/events`. Debounce 200ms anti-faux-positifs. |
 | `backend/shugu/auth/viewer_token.py` | Créer | Issue + refresh JWT spécifique viewer (claim `session_id`, TTL 5min). Pattern miroir de `auth/jwt_tokens.py` existant. |
 | `backend/shugu/director/workers/{face,anim,vfx,camera}.py` | Vérifier (pas de modif fonctionnelle) | Confirmer publish `scene.apply` avec format normalisé. |
@@ -122,8 +122,8 @@ Livrer un pipeline complet end-to-end où :
 
 | Fichier | Action | Responsabilité |
 |---|---|---|
-| `frontend/src/features/livekit/LiveKitClient.ts` | Créer | Wrapper `@livekit/client` Room + lifecycle. Expose `connect(token, url)`, `onAudioTrack(cb)`, `disconnect()`. |
-| `frontend/src/features/livekit/LiveKitProvider.tsx` | Créer | Context React qui gère session LiveKit + token fetch (`/voice/token`). Gestion auto-resume `AudioContext` derrière user gesture. |
+| `frontend/src/features/livekit/LiveKitClient.ts` | Créer | Wrapper `livekit-client` Room + lifecycle. Expose `connect(token, url)`, `onAudioTrack(cb)`, `disconnect()`. **NB** : le package npm s'appelle `livekit-client` (déjà dans `frontend/package.json` v2.18+), PAS `@livekit/client`. |
+| `frontend/src/features/livekit/LiveKitProvider.tsx` | Créer | Context React qui gère session LiveKit + token fetch (`/api/voice/token` — préfixe `/api/` pattern repo). Gestion auto-resume `AudioContext` derrière user gesture. |
 | `frontend/src/features/viewer/ViewerEventsClient.ts` | Créer | Wrapper WS `/viewer/events` avec reconnect exponentiel (200/500/1000/2000ms cap) + heartbeat. Token refresh proactif T-60s avant expiration. Expose `onSceneApply(cb)` + `onInterrupt(cb)`. |
 | `frontend/src/features/viewer/sceneApplyMapper.ts` | Créer | Mapping pur. Tables const : `SAY_EMOTION_TO_VRM_PRESET`, `FACE_TO_VRM_PRESET`, `ANIM_TO_CLIP_NAME`. Validation Zod sur l'event reçu. |
 | `frontend/src/features/viewer/sceneScheduler.ts` | Créer | Convertit `audio_at_ms` + LiveKit audio currentTime → `setTimeout` ou `audioCtx.currentTime`. Ring buffer pour events arrivés en avance. |
