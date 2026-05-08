@@ -18,6 +18,8 @@
  * silencieux.
  */
 
+import Link from "next/link";
+import { useParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { AdminShell } from "@/components/admin/AdminShell";
@@ -106,6 +108,13 @@ function formatLogLine(ev: ObservatoryEvent): LogLine {
 }
 
 export function ObservatoryClient() {
+  const params = useParams<{ username?: string | string[] }>();
+  const rawUsername = params?.username;
+  const username = Array.isArray(rawUsername) ? rawUsername[0] : rawUsername;
+  const meshHref = username
+    ? `/${encodeURIComponent(username)}/admin/observatory/mesh`
+    : "#";
+
   const [logs, setLogs] = useState<LogLine[]>([]);
   const [connected, setConnected] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -184,9 +193,19 @@ export function ObservatoryClient() {
       title="Observatory"
       subtitle="Live mesh of Shugu workers"
       headerRight={
-        <GlassPill tone={connected ? "primary" : "warn"} dot>
-          {connected ? `${activeCount}/${KNOWN_WORKERS.length} actifs` : "déconnecté"}
-        </GlassPill>
+        <div className="flex items-center gap-3">
+          <GlassPill tone={connected ? "primary" : "warn"} dot>
+            {connected ? `${activeCount}/${KNOWN_WORKERS.length} actifs` : "déconnecté"}
+          </GlassPill>
+          <Link
+            href={meshHref}
+            data-testid="observatory-mesh-link"
+            className="lgb lgb-subtle lgb-sm"
+            style={{ textDecoration: "none" }}
+          >
+            <span>⊛</span><span>View mesh →</span>
+          </Link>
+        </div>
       }
     >
       <section className="flex flex-col gap-5">
