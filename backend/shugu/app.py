@@ -375,13 +375,31 @@ async def lifespan(app: FastAPI):
     # Utilisé par l'orchestrator E2 pour dispatcher les tags inline vers les workers
     # déterministes (outfit, vfx, anim, face, say_emotion, camera, scene).
     #
-    # TODO(D-5 wiring) : passer audio_clock_provider=lambda: bridge.chunk_started_at_ms
-    # quand AudioBridge (D-2) sera disponible dans le lifespan voice.
-    # Sans ce wiring, audio_at_ms est absent de tous les payloads say_emotion/face
-    # → le drift cible §7.2 (<100ms p95) entre expression et audio TTS n'est pas garanti.
+    # Sprint integration D-5 (2026-05-09) : wiring audio_clock_provider via
+    # ``VoiceRuntimeState`` partagé entre lifespan FastAPI et worker LiveKit.
+    # Le worker LiveKit tourne dans le même process (livekit-agents 1.5.5
+    # default = JobExecutorType.THREAD), donc une référence Python suffit —
+    # pas de Redis IPC, pas de drift 50 ms.
+    #
+    # IMPORTANT (honest scope) : avec D-2 Option B (bridge créé mais
+    # ``_handle_turn_streaming`` continue d'utiliser ``audio_source`` legacy),
+    # ``bridge.publish_pcm`` n'est jamais appelé → ``chunk_started_at_ms``
+    # reste ``None`` à vie → ``audio_at_ms`` est absent des payloads
+    # say_emotion/face. La cible drift §7.2 <100ms p95 sera effective
+    # uniquement après migration Option A (bascule
+    # ``_handle_turn_streaming → bridge.publish_stream``, à faire dans un PR
+    # ultérieur). Ce wiring prépare l'infrastructure ; le bénéfice arrive
+    # plus tard.
+    #
     # Voir backend/shugu/director/workers/__init__.py docstring pour exemple.
     from .director.workers import make_workers
-    app.state.director_workers = make_workers(event_bus)
+    from .voice.voice_runtime import VoiceRuntimeState
+    _voice_runtime = VoiceRuntimeState()
+    app.state.voice_runtime = _voice_runtime  # exposé pour tests + extensions futures
+    app.state.director_workers = make_workers(
+        event_bus,
+        audio_clock_provider=_voice_runtime.chunk_started_at_ms,
+    )
 
     # Scene Composer ScenePlayer (Phase E5.1) — exécuteur déterministe.
     # OFF par défaut (`scene_player_enabled=False`), aucun impact prod sans le flag.
@@ -580,8 +598,18 @@ async def lifespan(app: FastAPI):
         # histograms appear in GET /metrics alongside agent-loop counters
         # (PrometheusMetricsRecorder.registry is the registry passed to /metrics).
         _voice_prom_registry = getattr(_prom_recorder, "registry", None)
+        # Sprint integration D-4 v3 + D-5 (2026-05-09) : on injecte event_bus
+        # et voice_runtime au worker LiveKit. event_bus permet à
+        # ``ShuguVoiceAgent.cancel_speaking`` de publier ``voice.interrupt``
+        # sur ``editor:broadcast`` (relayé au frontend via D-3). voice_runtime
+        # est le container partagé pour exposer le ``bridge`` actif au
+        # ``audio_clock_provider`` injecté à ``make_workers`` ci-dessus.
         _worker_opts = _build_worker_options(
-            settings, _voice_llm_instance, prom_registry=_voice_prom_registry,
+            settings,
+            _voice_llm_instance,
+            prom_registry=_voice_prom_registry,
+            event_bus=event_bus,
+            voice_runtime=_voice_runtime,
         )
         _agent_server = _AgentServer.from_server_options(_worker_opts)
         _voice_worker_task = asyncio.create_task(

@@ -26,6 +26,7 @@ AgentServer note (divergence from blueprint §9):
 from __future__ import annotations
 
 import asyncio
+import time
 from datetime import datetime, timezone
 from enum import Enum
 from functools import partial
@@ -42,6 +43,7 @@ from ..config import Settings, get_settings
 from .audio_bridge import AudioBridge
 from .chunker import SentenceChunker
 from .filler_bank import _DEFAULT_FILLER_PHRASES, FillerBank, NullFillerBank
+from .livekit_publisher import LiveKitPublisher
 from .llm_local import LocalLLM
 from .metrics import (
     STAGE_AUDIO_FIRST,
@@ -62,6 +64,7 @@ from .regie.web_search import WebSearchAggregator, WebSearchProvider
 from .stt_local import WhisperSTT
 from .tts_local import PiperTTS
 from .vad_driver import VADDriver
+from .voice_runtime import VoiceRuntimeState
 
 if TYPE_CHECKING:
     from ..core.protocols import EventBus
@@ -903,6 +906,8 @@ async def entrypoint(
     ctx: JobContext,
     llm: LocalLLM,
     prom_registry: object | None = None,
+    event_bus: "EventBus | None" = None,
+    voice_runtime: VoiceRuntimeState | None = None,
 ) -> None:
     """Registered in WorkerOptions.entrypoint_fnc via partial(entrypoint, llm=llm).
 
@@ -911,18 +916,55 @@ async def entrypoint(
     - Voice metrics recorder created from voice_metrics_enabled setting.
     - voice_use_agentsession flag routing (default=False = Sprint C path preserved).
 
+    Sprint integration D-2 + D-4 v3 + D-5 (2026-05-09) :
+
+    - **D-2 Option B coexistence** : un ``LiveKitPublisher`` (D-1) + ``AudioBridge``
+      sont instanciés en parallèle de ``audio_source`` legacy. Lazy : aucune track
+      ``shugu-voice-tts`` n'est publiée tant que ``bridge.publish_*`` n'est pas
+      appelé. Tant que ``_handle_turn_streaming`` continue d'utiliser
+      ``audio_source.capture_frame`` (path Sprint C), on a un seul track legacy
+      ``shugu-voice``. Ce wiring débloque D-4 v3 et prépare la migration Option A.
+
+    - **D-4 v3 cancel_speaking ext** : ``bridge``, ``event_bus`` et ``session_id``
+      sont passés à ``ShuguVoiceAgent.__init__``. Le constructor les accepte déjà
+      (cf. PR #116). Sans ces 3 args, ``cancel_speaking`` skip silencieusement
+      le ``bridge.cancel`` et le broadcast ``voice.interrupt``.
+
+    - **D-5 audio_clock_provider** : le ``bridge`` est posé dans
+      ``voice_runtime.bridge`` pour que les workers Director (face/say) lisent
+      ``chunk_started_at_ms`` via ``voice_runtime.chunk_started_at_ms``. Pas de
+      Redis IPC : le worker LiveKit tourne dans le même process que FastAPI
+      (livekit-agents 1.5.5 default = ``JobExecutorType.THREAD``). Si on bascule
+      sur ``PROCESS`` plus tard, il faudra remplacer ``voice_runtime`` par un
+      cache Redis (cf. ``docs/ops/voice-body-wiring-audit-2026-05-08.md`` §2.4).
+
+    Args:
+        ctx: JobContext fourni par le worker LiveKit (room + connect + shutdown).
+        llm: LocalLLM partagé (one-shot par process via ``build_worker_options``).
+        prom_registry: CollectorRegistry partagé pour exposer les histograms
+            voice sur ``GET /metrics``.
+        event_bus: EventBus partagé. Si ``None`` (config sans Director ou
+            standalone smoke test), ``cancel_speaking`` skip le broadcast
+            ``voice.interrupt`` (best-effort + log warning).
+        voice_runtime: Container partagé pour exposer le ``bridge`` actif au
+            ``audio_clock_provider`` injecté à ``make_workers``. Si ``None``
+            (config sans Director), pas de sync audio↔anim.
+
     Initialization sequence:
     1. get_settings()
     2. WhisperSTT(settings) — FileNotFoundError if bin missing
     3. PiperTTS(settings) — FileNotFoundError if bin missing
     4. FillerBank preload (if voice_filler_enabled) — parallel asyncio.gather
     5. make_recorder (voice_metrics_enabled)
-    6. AudioSource(48000, 1) + LocalAudioTrack.create_audio_track
-    7. publish_track
-    8. ShuguVoiceAgent constructed with injected dependencies
-    9. Connect to room with AUDIO_ONLY auto-subscribe
-    10. track_subscribed event -> _drain_and_transcribe task (or AgentSession for Voie A)
-    11. add_shutdown_callback
+    6. AudioSource(48000, 1) + LocalAudioTrack.create_audio_track (legacy Sprint C)
+    7. LiveKitPublisher(settings, ctx.room) + AudioBridge(tts, publisher) (lazy D-2)
+    8. publish_track (legacy)
+    9. ShuguVoiceAgent constructed with injected dependencies
+       + bridge / event_bus / session_id (D-4 v3)
+    10. voice_runtime.bridge = bridge (D-5)
+    11. Connect to room with AUDIO_ONLY auto-subscribe
+    12. track_subscribed event -> _drain_and_transcribe task (or AgentSession for Voie A)
+    13. add_shutdown_callback (resets voice_runtime.bridge to None on job end)
     """
     settings = get_settings()
 
@@ -982,11 +1024,53 @@ async def entrypoint(
         agent_audio_source = rtc.AudioSource(
             sample_rate=_LIVEKIT_SAMPLE_RATE, num_channels=1,
         )
+        # D-2 Option B coexistence : LiveKitPublisher + AudioBridge instanciés
+        # en parallèle. Lazy → tant que bridge.publish_* n'est pas appelé,
+        # aucune track ``shugu-voice-tts`` n'est publiée. Le AgentSession
+        # publie sa propre track ``roomio_audio`` séparément. Ce wiring
+        # débloque D-4 v3 (bridge.cancel sur barge-in) sans risque de
+        # double-track tant que la migration Option A n'est pas faite.
+        publisher = LiveKitPublisher(settings, ctx.room)
+        bridge = AudioBridge(tts=tts, publisher=publisher)
+        session_id = f"voice-sess-{ctx.room.name}-{int(time.time())}"
+
         agent = ShuguVoiceAgent(
             stt, llm, tts, settings, agent_audio_source,
             filler_bank=filler_bank,
             metrics=voice_metrics,
+            # D-4 v3 wiring : cancel_speaking étend la chain avec
+            # bridge.cancel + broadcast voice.interrupt. Sans ces 3 args,
+            # path E3 inchangé (best-effort skip dans cancel_speaking).
+            bridge=bridge,
+            event_bus=event_bus,
+            session_id=session_id,
         )
+        # D-5 wiring : pose bridge dans voice_runtime pour que les workers
+        # Director (face/say) lisent chunk_started_at_ms via
+        # audio_clock_provider injecté à make_workers (lifespan FastAPI).
+        # Worker LiveKit + lifespan tournent dans le même process
+        # (JobExecutorType.THREAD default 1.5.5) → référence partagée OK.
+        if voice_runtime is not None:
+            voice_runtime.bridge = bridge
+
+        # Review fix Issue 1 : register le shutdown callback IMMÉDIATEMENT
+        # après l'assignation `voice_runtime.bridge = bridge` pour fermer la
+        # fenêtre d'orphan bridge. Si une étape suivante (agent.on_enter,
+        # SileroVAD.load, AgentSession()) raise, le callback réinitialise
+        # quand même voice_runtime.bridge à None — évite qu'un bridge dont
+        # le job est mort reste référencé jusqu'au prochain job.
+        # Critique avant Option A migration où chunk_started_at_ms retournera
+        # de vrais timestamps (pas None comme en Option B).
+        async def _on_shutdown_with_runtime_reset_agentsession() -> None:
+            try:
+                await agent._on_shutdown()
+                await bridge.aclose()
+            finally:
+                if voice_runtime is not None:
+                    voice_runtime.bridge = None
+
+        ctx.add_shutdown_callback(_on_shutdown_with_runtime_reset_agentsession)
+
         await agent.on_enter()
 
         stt_adapter = LiveKitWhisperSTT(stt)
@@ -1000,7 +1084,6 @@ async def entrypoint(
             llm=llm_adapter,
             vad=silero_vad,
         )
-        ctx.add_shutdown_callback(agent._on_shutdown)
         log.info("voice.session.start", room=ctx.room.name, pipeline="agentsession")
         await agent_session.start(agent, room=ctx.room)
     else:
@@ -1015,11 +1098,59 @@ async def entrypoint(
             track, rtc.TrackPublishOptions(),
         )
 
+        # D-2 Option B coexistence : LiveKitPublisher + AudioBridge instanciés
+        # en parallèle de ``audio_source`` legacy. Le publisher D-1 ne crée
+        # son AudioSource interne (lazy via ``_ensure_published``) que lors
+        # du premier ``publish_pcm`` — donc tant que ``_handle_turn_streaming``
+        # continue d'utiliser ``audio_source.capture_frame`` (path Sprint C),
+        # **aucune track supplémentaire ``shugu-voice-tts`` n'est publiée**.
+        # Coexistence safe.
+        #
+        # NB : avec Option B, ``bridge.chunk_started_at_ms`` reste ``None`` à
+        # vie (pas de publish_pcm jamais appelé) → ``audio_at_ms`` est absent
+        # de tous les payloads ``say_emotion``/``face`` → la cible drift §7.2
+        # <100ms p95 n'est PAS effective tant que la migration Option A
+        # (basculement ``_handle_turn_streaming`` vers ``bridge.publish_stream``)
+        # n'est pas faite. Ce wiring prépare juste l'infrastructure ; le bénéfice
+        # arrive dans un PR ultérieur.
+        publisher = LiveKitPublisher(settings, ctx.room)
+        bridge = AudioBridge(tts=tts, publisher=publisher)
+        session_id = f"voice-sess-{ctx.room.name}-{int(time.time())}"
+
         agent = ShuguVoiceAgent(
             stt, llm, tts, settings, audio_source,
             filler_bank=filler_bank,
             metrics=voice_metrics,
+            # D-4 v3 wiring : cancel_speaking étend la chain avec
+            # bridge.cancel + broadcast voice.interrupt. Si event_bus=None
+            # (config sans Director), cancel_speaking skip silencieusement
+            # le broadcast (best-effort, cf. ligne 756).
+            bridge=bridge,
+            event_bus=event_bus,
+            session_id=session_id,
         )
+        # D-5 wiring : pose bridge dans voice_runtime pour que les workers
+        # Director (face/say) lisent ``chunk_started_at_ms`` via
+        # ``audio_clock_provider`` (injecté à ``make_workers`` côté lifespan).
+        # Effectif uniquement après migration Option A (cf. note ci-dessus).
+        if voice_runtime is not None:
+            voice_runtime.bridge = bridge
+
+        # Review fix Issue 1 : register shutdown callback IMMÉDIATEMENT après
+        # l'assignation `voice_runtime.bridge = bridge` pour fermer la fenêtre
+        # d'orphan bridge. Si agent.on_enter() ou la setup track_subscribed
+        # raise, le callback réinitialise voice_runtime.bridge à None de toute
+        # façon. Critique avant Option A migration.
+        async def _on_shutdown_with_runtime_reset() -> None:
+            try:
+                await agent._on_shutdown()
+                await bridge.aclose()
+            finally:
+                if voice_runtime is not None:
+                    voice_runtime.bridge = None
+
+        ctx.add_shutdown_callback(_on_shutdown_with_runtime_reset)
+
         await agent.on_enter()
 
         async def _on_track_subscribed(
@@ -1033,7 +1164,7 @@ async def entrypoint(
                 )
 
         ctx.room.on("track_subscribed", _on_track_subscribed)
-        ctx.add_shutdown_callback(agent._on_shutdown)
+
         log.info("voice.session.start", room=ctx.room.name, pipeline="manual")
 
 
@@ -1041,6 +1172,8 @@ def build_worker_options(
     settings: Settings,
     llm: LocalLLM,
     prom_registry: object | None = None,
+    event_bus: "EventBus | None" = None,
+    voice_runtime: VoiceRuntimeState | None = None,
 ) -> WorkerOptions:
     """Factory called from app.py lifespan.
 
@@ -1050,12 +1183,28 @@ def build_worker_options(
         prom_registry: shared CollectorRegistry from app.state.prom_recorder so
             voice_turn_latency_seconds histograms appear in GET /metrics.
             None for dev/standalone smoke test (creates isolated registry).
+        event_bus: Sprint integration D-4 v3 wiring. EventBus partagé pour
+            que ``cancel_speaking`` puisse publier ``voice.interrupt`` sur le
+            topic ``editor:broadcast`` (broadcast vers le frontend via D-3).
+            ``None`` (défaut) = path legacy E3, le broadcast est skipé.
+        voice_runtime: Sprint integration D-5 wiring. Container partagé entre
+            lifespan et entrypoint pour exposer le ``bridge`` actif au
+            ``audio_clock_provider`` injecté à ``make_workers``. Worker LiveKit
+            + lifespan tournent dans le même process (livekit-agents 1.5.5
+            default = ``JobExecutorType.THREAD``), donc une référence Python
+            suffit. ``None`` (défaut) = path legacy, pas de sync audio↔anim.
 
     Returns WorkerOptions configured with entrypoint, ws_url, api_key, api_secret.
     Use AgentServer.from_server_options(opts) to create the runnable worker.
     """
     return WorkerOptions(
-        entrypoint_fnc=partial(entrypoint, llm=llm, prom_registry=prom_registry),
+        entrypoint_fnc=partial(
+            entrypoint,
+            llm=llm,
+            prom_registry=prom_registry,
+            event_bus=event_bus,
+            voice_runtime=voice_runtime,
+        ),
         ws_url=settings.livekit_url,
         api_key=settings.livekit_api_key,
         api_secret=settings.livekit_api_secret,
