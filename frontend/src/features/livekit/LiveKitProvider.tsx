@@ -94,9 +94,12 @@ interface LiveKitProviderProps {
  * Provider — monter au-dessus de `<VrmViewer />` dans la hiérarchie React.
  *
  * Architecture isolation : ce Provider ne lit `viewer.model` qu'au moment où
- * un audio track arrive. À ce point-là, le VRM est forcément chargé (sinon le
- * backend n'aurait pas commencé à publier). Si jamais le model est encore
- * undefined (race), on log et on retry au prochain track ; pas de crash.
+ * un audio track arrive. À ce point-là, idéalement le VRM est déjà chargé,
+ * mais il existe une race documentée : token-fetch peut compléter avant que
+ * le VRM (28 MB) finisse de se charger en cold-cache. `RoomEvent.TrackSubscribed`
+ * ne fire qu'UNE fois par session — sans gestion explicite, l'audio serait
+ * perdu pour toute la session avec zéro signal user. On poll donc 100ms x 300
+ * (30s cap) jusqu'à ce que le model soit ready, puis on flush l'audio en attente.
  */
 export function LiveKitProvider({
   children,
@@ -112,6 +115,12 @@ export function LiveKitProvider({
   // On garde une ref vers le client pour le cleanup au unmount sans
   // re-render inutile.
   const clientRef = useRef<LiveKitClient | null>(null);
+
+  // Race fix — gestion de l'audio reçu avant que viewer.model soit ready.
+  // `pendingAudioRef` retient le HTMLAudioElement en attente.
+  // `pollIntervalRef` track le setInterval pour cleanup propre au unmount.
+  const pendingAudioRef = useRef<HTMLAudioElement | null>(null);
+  const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Resume = appelle audioContext.resume() sur l'AudioContext du viewer.
   const resume = useCallback(async (): Promise<void> => {
@@ -181,22 +190,74 @@ export function LiveKitProvider({
           url: data.url,
           token: data.token,
           onAudioTrack: (_track, audio) => {
-            const model = viewer.model;
-            if (!model) {
-              console.warn(
-                "[LiveKit] Audio track received but viewer.model is not ready — skipping lipSync attach (will be retried on next track).",
-              );
-              return;
-            }
-            model.attachStreamingAudio(audio);
+            // Tente l'attach maintenant. Retourne true si succès (model était
+            // ready), false si on doit poll en attendant que le VRM finisse
+            // de charger.
+            const tryAttach = (): boolean => {
+              const model = viewer.model;
+              if (!model) return false;
+              model.attachStreamingAudio(audio);
+              // Vérifier la policy autoplay : si le context du browser refuse
+              // de jouer l'audio sans user gesture, on lève le flag pour que
+              // l'overlay s'affiche.
+              const ctx = model.audioContext;
+              if (ctx && ctx.state === "suspended") {
+                setNeedsUserGesture(true);
+              }
+              return true;
+            };
 
-            // Vérifier la policy autoplay : si le context du browser refuse
-            // de jouer l'audio sans user gesture, on lève le flag pour que
-            // l'overlay s'affiche.
-            const ctx = model.audioContext;
-            if (ctx && ctx.state === "suspended") {
-              setNeedsUserGesture(true);
+            if (tryAttach()) return;
+
+            // Race condition fix — TrackSubscribed fire UNE seule fois par
+            // session (le backend D-1 publie une track persistante, pas une
+            // par chunk). Si on droppait ici sans retry, l'audio serait perdu
+            // pour TOUTE la session sans signal user. On poll 100ms x 300
+            // (30s cap) jusqu'à ce que viewer.model soit ready.
+            console.warn(
+              "[LiveKit] Audio track received before viewer.model ready — polling 100ms × 300 (30s cap).",
+            );
+            pendingAudioRef.current = audio;
+            // Cleanup tout poll précédent (paranoïa : si un onAudioTrack
+            // précédent avait laissé un poll actif, on l'écrase ici).
+            if (pollIntervalRef.current) {
+              clearInterval(pollIntervalRef.current);
             }
+            let attempts = 0;
+            pollIntervalRef.current = setInterval(() => {
+              attempts++;
+              if (cancelled) {
+                // Provider unmonté pendant le poll — cleanup et stop.
+                if (pollIntervalRef.current) {
+                  clearInterval(pollIntervalRef.current);
+                  pollIntervalRef.current = null;
+                }
+                return;
+              }
+              if (tryAttach()) {
+                if (pollIntervalRef.current) {
+                  clearInterval(pollIntervalRef.current);
+                  pollIntervalRef.current = null;
+                }
+                pendingAudioRef.current = null;
+                console.info(
+                  `[LiveKit] viewer.model ready after ${attempts * 100}ms — audio attached.`,
+                );
+              } else if (attempts >= 300) {
+                // 30s : éviter l'interval-leak et signaler clairement.
+                if (pollIntervalRef.current) {
+                  clearInterval(pollIntervalRef.current);
+                  pollIntervalRef.current = null;
+                }
+                pendingAudioRef.current = null;
+                console.error(
+                  "[LiveKit] viewer.model never became ready after 30s — audio dropped, session degraded.",
+                );
+                setError(
+                  new Error("VRM model never loaded — audio attach failed"),
+                );
+              }
+            }, 100);
           },
           onConnected: () => {
             if (cancelled) return;
@@ -232,12 +293,25 @@ export function LiveKitProvider({
 
     return () => {
       cancelled = true;
+      // Cleanup poll race-fix avant disconnect, sinon l'interval pourrait
+      // appeler attachStreamingAudio sur un model en cours d'unmount.
+      if (pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current);
+        pollIntervalRef.current = null;
+      }
+      pendingAudioRef.current = null;
       clientRef.current?.disconnect();
       clientRef.current = null;
     };
     // viewer is a context-singleton (see viewerContext.ts) — stable across
     // renders. tokenEndpoint is a prop, on re-fetch si parent en change.
   }, [viewer, tokenEndpoint]);
+
+  // TODO(D-7): proactive token refresh à T-60s avant expiration.
+  // Token TTL = 5 min (spec §6.3). Sans refresh, Room.connect() lors d'un
+  // reconnect après 5min échouera silencieusement (401). Voir spec §3.2.
+  // Implémenter dans le hook `useViewerToken()` proposé par la review D-6
+  // (mutualisable avec ViewerEventsClient).
 
   const value: LiveKitContextValue = {
     isConnected,

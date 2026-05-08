@@ -261,6 +261,92 @@ describe("LiveKitProvider", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("race fix: audio reçu avant viewer.model ready → poll → attach quand model devient dispo", async () => {
+    // Cas réaliste : le token-fetch / Room.connect complète plus vite que le
+    // chargement du VRM 28 MB (cold-cache). TrackSubscribed fire UNE seule
+    // fois par session, donc sans le polling l'audio serait perdu pour toute
+    // la session sans signal user. Spec §6.2 + review D-6.
+
+    // Viewer initialement SANS model. On le mute après pour simuler le VRM
+    // qui finit de charger.
+    const viewer: FakeViewer = {};
+    renderProvider(viewer);
+
+    await waitFor(() => {
+      expect(liveKitInstances).toHaveLength(1);
+    });
+
+    // CRUCIAL : passer en fake timers AVANT le onAudioTrack, sinon le
+    // setInterval est créé en real-time et nos vi.advanceTimersByTime()
+    // ne déclenchent pas la callback de poll.
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+
+    const fakeAudio = document.createElement("audio");
+    // Fire onAudioTrack alors que viewer.model est undefined.
+    act(() => {
+      liveKitInstances[0].options.onAudioTrack?.({}, fakeAudio);
+    });
+
+    // Avance 250ms → 2 tentatives de poll (100ms, 200ms). Toujours pas de
+    // model → aucun attach, pas d'erreur.
+    act(() => {
+      vi.advanceTimersByTime(250);
+    });
+    expect(screen.queryByTestId("livekit-error")).not.toBeInTheDocument();
+
+    // Simule fin du chargement VRM : on attache un model au viewer.
+    const lateModel = {
+      attachStreamingAudio: vi.fn(),
+      audioContext: { state: "running" as const, resume: vi.fn() },
+    };
+    // Mutation directe — viewer est un singleton de contexte, model est
+    // assigné par viewer.loadVrm() dans la vraie app.
+    viewer.model = lateModel;
+
+    // Avance 150ms supplémentaires → la prochaine tentative de poll
+    // (à 300ms cumulé) doit tryAttach() avec succès.
+    act(() => {
+      vi.advanceTimersByTime(150);
+    });
+
+    expect(lateModel.attachStreamingAudio).toHaveBeenCalledWith(fakeAudio);
+    expect(lateModel.attachStreamingAudio).toHaveBeenCalledTimes(1);
+
+    vi.useRealTimers();
+  });
+
+  it("race fix: timeout 30s sans model → audio dropped + error remontée", async () => {
+    const viewer: FakeViewer = {};
+    renderProvider(viewer);
+
+    await waitFor(() => {
+      expect(liveKitInstances).toHaveLength(1);
+    });
+
+    // Fake timers AVANT onAudioTrack pour capturer le setInterval.
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+
+    const fakeAudio = document.createElement("audio");
+    act(() => {
+      liveKitInstances[0].options.onAudioTrack?.({}, fakeAudio);
+    });
+
+    // Avance 31s → 310 tentatives, dépasse le cap 300. Le poll s'auto-stop
+    // et set une error.
+    act(() => {
+      vi.advanceTimersByTime(31_000);
+    });
+
+    vi.useRealTimers();
+
+    await waitFor(() => {
+      expect(screen.getByTestId("livekit-error")).toBeInTheDocument();
+    });
+    expect(screen.getByTestId("livekit-error").textContent).toMatch(
+      /VRM model never loaded/i,
+    );
+  });
+
   it("expose error dans le context si le fetch token échoue", async () => {
     vi.unstubAllGlobals();
     vi.stubGlobal(
