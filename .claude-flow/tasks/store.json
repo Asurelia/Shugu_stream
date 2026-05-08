@@ -1,0 +1,59 @@
+{
+  "tasks": {
+    "task-1778260401811-4jz029": {
+      "taskId": "task-1778260401811-4jz029",
+      "type": "feature",
+      "description": "D-1: Backend livekit_publisher.py — wrapper LocalAudioTrack LiveKit. Expose publish_pcm(pcm, sample_rate=22050) + unpublish() pour barge-in. TDD obligatoire avec mock Room. Spec ref: docs/specs/2026-05-08-voice-body-pipeline-design.md §3.1 + §6.1.",
+      "priority": "high",
+      "status": "pending",
+      "progress": 0,
+      "assignedTo": [],
+      "tags": [
+        "voice-body-D",
+        "backend",
+        "PR-D-1",
+        "no-deps"
+      ],
+      "createdAt": "2026-05-08T17:13:21.811Z",
+      "startedAt": null,
+      "completedAt": null
+    },
+    "task-1778260404164-bqnzmx": {
+      "taskId": "task-1778260404164-bqnzmx",
+      "type": "feature",
+      "description": "D-3: Backend WS /viewer/events + JWT auth + endpoint refresh. Auth via auth/dependencies.py existant. Token claim session_id signé. Rate limit 1 conn/token, 5/user. TDD avec FastAPI TestClient + WS test client. Spec ref: §3.1 + §4.1 + §6.1 + §6.3.",
+      "priority": "high",
+      "status": "pending",
+      "progress": 0,
+      "assignedTo": [],
+      "tags": [
+        "voice-body-D",
+        "backend",
+        "PR-D-3",
+        "no-deps"
+      ],
+      "createdAt": "2026-05-08T17:13:24.164Z",
+      "startedAt": null,
+      "completedAt": null
+    },
+    "task-1778260407187-q9hn09": {
+      "taskId": "task-1778260407187-q9hn09",
+      "type": "feature",
+      "description": "D-6: Frontend LiveKitProvider + audio consumer + lipSync attach. Wrapper @livekit/client Room lifecycle. Context React. Au mount: connect via /voice/token, attach audio track au lipSync.attachMediaElement, gérer AudioContext autoplay policy. TDD Vitest + mocks LiveKit Room. Spec ref: §3.2 + §6.2.",
+      "priority": "high",
+      "status": "pending",
+      "progress": 0,
+      "assignedTo": [],
+      "tags": [
+        "voice-body-D",
+        "frontend",
+        "PR-D-6",
+        "no-deps"
+      ],
+      "createdAt": "2026-05-08T17:13:27.187Z",
+      "startedAt": null,
+      "completedAt": null
+    }
+  },
+  "version": "3.0.0"
+}

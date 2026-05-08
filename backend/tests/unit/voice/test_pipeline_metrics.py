@@ -34,7 +34,6 @@ from shugu.voice.pipeline_metrics import (
     make_pipeline_recorder,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helpers — extraction des compteurs Prometheus pour assertions
 # ---------------------------------------------------------------------------

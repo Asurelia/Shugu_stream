@@ -65,7 +65,6 @@ from .metrics import (
 from .pipeline_metrics import (
     PipelineMetricsRecorder,
     get_null_pipeline_recorder,
-    make_pipeline_recorder,
 )
 from .stt_local import WhisperSTT
 from .tts_local import PiperTTS

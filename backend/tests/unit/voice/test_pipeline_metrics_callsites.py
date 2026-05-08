@@ -34,7 +34,6 @@ from shugu.voice.livekit_publisher import LiveKitPublisher
 from shugu.voice.pipeline_metrics import PipelineMetricsRecorder
 from shugu.voice.tts_local import PiperTTS
 
-
 # ---------------------------------------------------------------------------
 # Fixtures partagées
 # ---------------------------------------------------------------------------
