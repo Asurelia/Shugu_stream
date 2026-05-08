@@ -116,6 +116,14 @@ class AudioBridge:
             log.debug("voice.bridge.empty_sentence_skipped")
             return
 
+        # Barge-in awareness pre-synth : si cancel() a été appelé, on saute
+        # même la synthèse — économise un subprocess Piper et garantit un
+        # cut-off rapide (cible <200ms spec §7.2). Sans ce check, une phrase
+        # mid-flight pendant un cancel serait quand même synthétisée + publiée.
+        if self._cancelled:
+            log.info("voice.bridge.sentence_skipped_pre_synth_cancelled")
+            return
+
         stripped = sentence.strip()
 
         # 1. Synthèse Piper (best-effort).
@@ -135,6 +143,18 @@ class AudioBridge:
             log.debug(
                 "voice.bridge.tts_empty_output",
                 sentence_len=len(stripped),
+            )
+            return
+
+        # Barge-in awareness post-synth : si cancel() est arrivé pendant
+        # await synthesize, on ne publie PAS le PCM résultant — il serait
+        # republié sur une track recréée par publisher.publish_pcm (D-1
+        # _ensure_published recrée la track après unpublish), contredisant
+        # le contrat de cancel(). Review C1 PR #115.
+        if self._cancelled:
+            log.info(
+                "voice.bridge.publish_skipped_post_synth_cancelled",
+                pcm_bytes=len(pcm),
             )
             return
 
@@ -217,13 +237,32 @@ class AudioBridge:
         Deux effets :
 
         1. ``self._cancelled = True`` → ``publish_stream`` interrompt
-           l'itération au prochain check (entre deux phrases).
+           l'itération au prochain check (entre deux phrases). En plus,
+           ``publish_sentence`` skip la synthèse + le publish si le flag
+           est levé pendant son exécution (review C1 PR #115).
         2. ``await self._publisher.unpublish()`` → coupe la track LiveKit
            côté serveur. Idempotent (cf. tests D-1).
 
         Best-effort : si ``unpublish`` raise, on log + return sans propager.
-        Le caller (``ShuguVoiceAgent.cancel_speaking``) a d'autres étapes
-        de cleanup à enchaîner (LLM cancel, TTS aclose, filler cancel).
+
+        **Contrat important pour le wiring D-4** (``ShuguVoiceAgent.cancel_speaking``) :
+
+        Cette méthode n'appelle PAS ``self._tts.aclose()``. Le caller doit
+        enchaîner les étapes de cleanup dans l'ordre précis :
+
+        1. ``await self._tts.aclose()`` — kill le subprocess Piper s'il est
+           en cours de synthèse (cible cut-off <200ms). DOIT être appelé
+           AVANT ``bridge.cancel()`` pour que le subprocess soit déjà mort
+           quand publish_sentence post-synth voit ``_cancelled``.
+        2. ``await bridge.cancel()`` — stop la publication track LiveKit +
+           lève le flag pour les phrases mid-flight.
+        3. ``self._llm.cancel()`` — cancel coopératif du stream LLM (sync).
+        4. ``await self._filler_bank.cancel()`` — cancel les fillers en cours.
+
+        Sans tts.aclose() en amont, Piper continue à synthétiser la phrase
+        courante en arrière-plan, ses ressources OS fuitent jusqu'au prochain
+        timeout. Le ``_cancelled`` flag du bridge protège contre la
+        republication du PCM résultant, mais pas contre le coût Piper.
         """
         self._cancelled = True
         try:

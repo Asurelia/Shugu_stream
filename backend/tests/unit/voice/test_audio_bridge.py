@@ -289,14 +289,68 @@ async def test_publish_stream_cancelled_stops_iteration(
 
     await bridge.publish_stream(gen())
 
-    # On a publié au moins 2 (la 2e étant celle qui déclenche le cancel),
-    # mais pas tous les 10. ``<= 3`` couvre le cas où le check est fait
-    # APRÈS publish_sentence (donc on a peut-être publié la 3ème avant
-    # de break) — implémentation acceptée tant qu'on s'arrête tôt.
-    assert call_count["n"] <= 3, (
-        f"Cancel a échoué à interrompre l'itération : {call_count['n']} synth calls"
+    # Phrase 0 : synth OK, publish OK
+    # Phrase 1 : synth OK (cancel appelé pendant), check post-synth voit
+    #            _cancelled=True → publish SKIP (review C1 PR #115)
+    # Itération break post-publish → pas de phrase 2.
+    assert call_count["n"] == 2, (
+        f"Exactement 2 synth attendus (la 2e déclenche le cancel) : "
+        f"reçu {call_count['n']}"
     )
-    assert call_count["n"] >= 2, "Au moins les 2 premières phrases doivent passer"
+    # Critique : même si la 2e synth a été tentée (cancel arrive pendant
+    # await synthesize), le PCM ne doit PAS être publié — sinon il serait
+    # republié sur une track recréée par publish_pcm (D-1 _ensure_published),
+    # contredisant le contrat de cancel().
+    assert mock_publisher.publish_pcm.await_count == 1, (
+        f"Seule la phrase 0 (avant cancel) doit être publiée : "
+        f"reçu {mock_publisher.publish_pcm.await_count} publish_pcm calls"
+    )
+    # unpublish doit avoir été appelé exactement une fois (par cancel()).
+    assert mock_publisher.unpublish.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_publish_sentence_skips_publish_if_cancelled_post_synth(
+    mock_tts: MagicMock, mock_publisher: MagicMock
+) -> None:
+    """publish_sentence skip publish_pcm si cancel() pendant await synthesize.
+
+    Régression test pour review C1 PR #115 : avant le fix, la phrase
+    mid-flight était publiée sur une track recréée → barge-in raté.
+    """
+    bridge = AudioBridge(mock_tts, mock_publisher)
+
+    async def fake_synth(_s: str) -> bytes:
+        # Cancel appelé PENDANT la synth (race barge-in).
+        await bridge.cancel()
+        return b"\x00\x01" * 22_050
+
+    mock_tts.synthesize.side_effect = fake_synth
+
+    await bridge.publish_sentence("Salut tout le monde !")
+
+    mock_tts.synthesize.assert_awaited_once()
+    # Critique : publish_pcm NE doit PAS être appelé.
+    mock_publisher.publish_pcm.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_publish_sentence_skips_synth_if_cancelled_pre_synth(
+    mock_tts: MagicMock, mock_publisher: MagicMock
+) -> None:
+    """publish_sentence skip MÊME la synth si _cancelled déjà True à l'entrée.
+
+    Use case : barge-in déclenché juste avant qu'un nouveau publish_sentence
+    soit invoqué (ex: depuis un AsyncIterator amont). Économise un subprocess
+    Piper inutile.
+    """
+    bridge = AudioBridge(mock_tts, mock_publisher)
+    await bridge.cancel()  # cancel AVANT publish_sentence
+
+    await bridge.publish_sentence("Salut !")
+
+    mock_tts.synthesize.assert_not_called()
+    mock_publisher.publish_pcm.assert_not_called()
 
 
 @pytest.mark.asyncio
