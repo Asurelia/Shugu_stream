@@ -1,8 +1,8 @@
 """Tests unit régie — tool_call_parser + intent_classifier."""
 from __future__ import annotations
 
-from shugu.voice.regie.intent_classifier import Intent, classify
-from shugu.voice.regie.tool_call_parser import (
+from shugu.regie.voice_intent.intent_classifier import Intent, classify
+from shugu.regie.voice_intent.tool_call_parser import (
     has_tool_calls,
     parse_gemma_tool_calls,
 )
