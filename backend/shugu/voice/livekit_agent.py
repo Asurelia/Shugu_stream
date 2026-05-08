@@ -1052,6 +1052,25 @@ async def entrypoint(
         # (JobExecutorType.THREAD default 1.5.5) → référence partagée OK.
         if voice_runtime is not None:
             voice_runtime.bridge = bridge
+
+        # Review fix Issue 1 : register le shutdown callback IMMÉDIATEMENT
+        # après l'assignation `voice_runtime.bridge = bridge` pour fermer la
+        # fenêtre d'orphan bridge. Si une étape suivante (agent.on_enter,
+        # SileroVAD.load, AgentSession()) raise, le callback réinitialise
+        # quand même voice_runtime.bridge à None — évite qu'un bridge dont
+        # le job est mort reste référencé jusqu'au prochain job.
+        # Critique avant Option A migration où chunk_started_at_ms retournera
+        # de vrais timestamps (pas None comme en Option B).
+        async def _on_shutdown_with_runtime_reset_agentsession() -> None:
+            try:
+                await agent._on_shutdown()
+                await bridge.aclose()
+            finally:
+                if voice_runtime is not None:
+                    voice_runtime.bridge = None
+
+        ctx.add_shutdown_callback(_on_shutdown_with_runtime_reset_agentsession)
+
         await agent.on_enter()
 
         stt_adapter = LiveKitWhisperSTT(stt)
@@ -1065,20 +1084,6 @@ async def entrypoint(
             llm=llm_adapter,
             vad=silero_vad,
         )
-        # Shutdown callback : aclose agent + bridge + reset voice_runtime.bridge
-        # à None pour repasser audio_clock_provider en mode legacy après fin de job.
-        # bridge.aclose() est best-effort interne et idempotent — safe no-op en
-        # Option B (publisher lazy n'a jamais publié), mandatory en Option A
-        # pour libérer les handles FFI LiveKit (anti-leak Sprint integration).
-        async def _on_shutdown_with_runtime_reset_agentsession() -> None:
-            try:
-                await agent._on_shutdown()
-                await bridge.aclose()
-            finally:
-                if voice_runtime is not None:
-                    voice_runtime.bridge = None
-
-        ctx.add_shutdown_callback(_on_shutdown_with_runtime_reset_agentsession)
         log.info("voice.session.start", room=ctx.room.name, pipeline="agentsession")
         await agent_session.start(agent, room=ctx.room)
     else:
@@ -1130,6 +1135,22 @@ async def entrypoint(
         # Effectif uniquement après migration Option A (cf. note ci-dessus).
         if voice_runtime is not None:
             voice_runtime.bridge = bridge
+
+        # Review fix Issue 1 : register shutdown callback IMMÉDIATEMENT après
+        # l'assignation `voice_runtime.bridge = bridge` pour fermer la fenêtre
+        # d'orphan bridge. Si agent.on_enter() ou la setup track_subscribed
+        # raise, le callback réinitialise voice_runtime.bridge à None de toute
+        # façon. Critique avant Option A migration.
+        async def _on_shutdown_with_runtime_reset() -> None:
+            try:
+                await agent._on_shutdown()
+                await bridge.aclose()
+            finally:
+                if voice_runtime is not None:
+                    voice_runtime.bridge = None
+
+        ctx.add_shutdown_callback(_on_shutdown_with_runtime_reset)
+
         await agent.on_enter()
 
         async def _on_track_subscribed(
@@ -1144,21 +1165,6 @@ async def entrypoint(
 
         ctx.room.on("track_subscribed", _on_track_subscribed)
 
-        # Shutdown callback : aclose agent + bridge + reset voice_runtime.bridge
-        # à None pour que le audio_clock_provider repasse en mode legacy après
-        # fin du job.
-        # bridge.aclose() est best-effort interne et idempotent — safe no-op en
-        # Option B (publisher lazy n'a jamais publié), mandatory en Option A
-        # pour libérer les handles FFI LiveKit (anti-leak Sprint integration).
-        async def _on_shutdown_with_runtime_reset() -> None:
-            try:
-                await agent._on_shutdown()
-                await bridge.aclose()
-            finally:
-                if voice_runtime is not None:
-                    voice_runtime.bridge = None
-
-        ctx.add_shutdown_callback(_on_shutdown_with_runtime_reset)
         log.info("voice.session.start", room=ctx.room.name, pipeline="manual")
 
 

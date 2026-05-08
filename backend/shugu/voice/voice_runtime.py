@@ -35,13 +35,23 @@ Threading model
 ---------------
 
 Le worker LiveKit étant THREAD-based (cf. ``livekit-agents`` 1.5.5 default),
-toutes les lectures/écritures sur ``VoiceRuntimeState`` se font dans le même
-event loop. Pas de lock asyncio nécessaire.
+les écritures sur ``VoiceRuntimeState`` se font depuis le **thread du job
+LiveKit** (jobs runnent dans des worker threads, pas dans la loop FastAPI),
+tandis que les lectures du ``audio_clock_provider`` se font depuis les
+Workers Director sur la **loop asyncio FastAPI**. Donc lecture et écriture
+sont cross-thread.
+
+La sécurité ne vient PAS de "même event loop" : elle vient du **GIL
+CPython** qui sérialise les bytecodes ``LOAD_ATTR`` et ``STORE_ATTR`` sur
+un single-attribute. Une lecture concurrente avec une écriture verra soit
+l'ancienne valeur soit la nouvelle — jamais un état corrompu — sans lock.
 
 Si à terme on bascule sur ``JobExecutorType.PROCESS``, ce module devra être
 remplacé par un pattern Redis/pub-sub (cf. ``docs/ops/voice-body-wiring-audit-2026-05-08.md``
-§2.4 Option a). À ce moment-là, le ``audio_clock_provider`` deviendra un
-appel Redis ``GET`` (drift potentiel +50 ms).
+§2.4 Option a) — le GIL ne traverse pas les frontières de processus, donc
+les attributs Python ne seraient plus partagés. À ce moment-là, le
+``audio_clock_provider`` deviendra un appel Redis ``GET`` (drift potentiel
++50 ms).
 
 Spec : ``docs/specs/2026-05-08-voice-body-pipeline-design.md`` §3.1, §6.2.
 """
