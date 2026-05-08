@@ -26,6 +26,7 @@ AgentServer note (divergence from blueprint §9):
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 from enum import Enum
 from functools import partial
 from typing import TYPE_CHECKING, AsyncIterator
@@ -38,6 +39,7 @@ from livekit.agents.worker import AgentServer
 from ..adapters.injection_detector import aggregate_weight
 from ..adapters.injection_detector import scan as _injection_scan
 from ..config import Settings, get_settings
+from .audio_bridge import AudioBridge
 from .chunker import SentenceChunker
 from .filler_bank import _DEFAULT_FILLER_PHRASES, FillerBank, NullFillerBank
 from .llm_local import LocalLLM
@@ -62,7 +64,7 @@ from .tts_local import PiperTTS
 from .vad_driver import VADDriver
 
 if TYPE_CHECKING:
-    pass
+    from ..core.protocols import EventBus
 
 log = structlog.get_logger(__name__)
 
@@ -141,6 +143,14 @@ class ShuguVoiceAgent(Agent):
         web_search: WebSearchProvider | None = None,
         filler_bank: FillerBank | NullFillerBank | None = None,   # Sprint D PR1
         metrics: VoiceMetricsRecorder | None = None,               # Sprint D PR1
+        # D-4 v3 — barge-in chain extension. Tous keyword-only, défaut None pour
+        # backward-compat E3. Le wiring effectif (entrypoint construit le bridge
+        # + injecte event_bus) est laissé à un PR suivant (D-5/D-6) ; cette PR
+        # se limite à étendre cancel_speaking pour appeler ces collaborateurs
+        # quand ils sont fournis. Sans wiring : comportement E3 inchangé.
+        bridge: AudioBridge | None = None,
+        event_bus: "EventBus | None" = None,
+        session_id: str | None = None,
     ) -> None:
         # Agent.instructions is required by livekit-agents 1.5.5.
         # We pass a placeholder — the actual prompt is built per-turn in
@@ -183,6 +193,17 @@ class ShuguVoiceAgent(Agent):
         )
         # Sprint D PR3 — AgentSession Voie A. Built lazily via _handle_turn_agentsession().
         self._agent_session: object | None = None  # type: AgentSession | None
+        # D-4 v3 — barge-in chain extension. None = E3 backward-compat path.
+        # Lorsqu'un bridge est wired, cancel_speaking l'appelle entre tts.aclose
+        # et llm.cancel (cf. AudioBridge.cancel docstring §contrat-D-4 — kill
+        # subprocess Piper avant de couper la track LiveKit).
+        # Lorsqu'un event_bus est wired, cancel_speaking publie un event
+        # voice.interrupt sur "editor:broadcast" pour que le frontend (via
+        # /ws/viewer/events câblé en D-3) déclenche le fade-out audio + reset
+        # expression neutre côté avatar.
+        self._bridge: AudioBridge | None = bridge
+        self._event_bus: "EventBus | None" = event_bus
+        self._session_id: str | None = session_id
 
     @property
     def _processing(self) -> bool:
@@ -658,7 +679,7 @@ class ShuguVoiceAgent(Agent):
                 self._metrics.record_turn(m)
 
     async def cancel_speaking(self) -> None:
-        """Cancel safe : stop LLM streaming + terminate active TTS + cancel active filler.
+        """Cancel safe : stop la chain voice + bridge + push event interrupt.
 
         Cooperative — does not brutally kill the executor thread.
         The asyncio.Lock is released by stream() finally block when the thread exits.
@@ -667,20 +688,87 @@ class ShuguVoiceAgent(Agent):
         in _process_utterance is the sole writer of _state → LISTENING. This ensures
         no race between barge-in cancel and the normal turn-end path.
 
-        Sprint D PR1 addition: also calls self._filler_bank.cancel() to abort active
-        filler playback. NullFillerBank.cancel() is a no-op, so backward-compatible.
-
         Called from _on_speech_started() when user speaks while agent is
         SPEAKING or PROCESSING (barge-in detection).
+
+        Ordre garanti par le contrat AudioBridge.cancel docstring (D-2 review,
+        cf. ``audio_bridge.py:248-265``). Reorder vs. E3 : ``tts.aclose()``
+        passe AVANT ``llm.cancel()`` car le subprocess Piper doit être mort
+        avant qu'on coupe la track LiveKit, sinon des frames résiduelles
+        peuvent encore atteindre le publisher après ``unpublish``.
+
+        1. ``tts.aclose()``                  — kill subprocess Piper (E3, conservé)
+        2. ``bridge.cancel()`` *(D-4 v3)*    — flag _cancelled + publisher.unpublish
+        3. ``llm.cancel()``                  — cancel coopératif sync (E3, conservé)
+        4. ``filler_bank.cancel()``          — fillers en cours (E3, conservé)
+        5. ``event_bus.publish(voice.interrupt)`` *(D-4 v3)*
+                                             — broadcast vers frontend via /ws/viewer/events D-3
+
+        Best-effort STRICT : chaque étape est wrappée try/except + log warn.
+        Une exception sur ``bridge.cancel`` n'empêche pas ``llm.cancel`` ;
+        une exception sur ``event_bus.publish`` ne propage pas au caller.
+        Le pipeline voice continue après un barge-in malgré une faillite locale.
         """
         from_state = self._state.value
         log.info("voice.bargein.cancelling", from_state=from_state)
-        self._llm.cancel()
-        await self._tts.aclose()
-        await self._filler_bank.cancel()  # Sprint D PR1 — cancel filler if playing
+
+        # 1. tts.aclose — kill subprocess Piper (E3 + contrat D-2).
+        # Wrappé en best-effort comme les autres steps : si Piper subprocess
+        # est déjà mort ou aclose raise un OSError sur un PID stale, on log
+        # et on continue. La chain barge-in est best-effort STRICT (spec §6.1).
+        try:
+            await self._tts.aclose()
+        except Exception as exc:  # noqa: BLE001 — best-effort
+            log.warning("voice.cancel.tts_aclose_failed", error=str(exc))
+
+        # 2. bridge.cancel — flag _cancelled + publisher.unpublish (D-4 v3)
+        if self._bridge is not None:
+            try:
+                await self._bridge.cancel()
+            except Exception as exc:  # noqa: BLE001 — best-effort barge-in chain
+                log.warning("voice.cancel.bridge_cancel_failed", error=str(exc))
+
+        # 3. llm.cancel — cancel coopératif sync (E3 conservé)
+        try:
+            self._llm.cancel()
+        except Exception as exc:  # noqa: BLE001 — best-effort
+            log.warning("voice.cancel.llm_cancel_failed", error=str(exc))
+
+        # 4. filler_bank.cancel — Sprint D PR1, async (E3 conservé)
+        try:
+            await self._filler_bank.cancel()
+        except Exception as exc:  # noqa: BLE001 — best-effort
+            log.warning("voice.cancel.filler_cancel_failed", error=str(exc))
+
         # Mark the cancel time so _consume_vad can drop the tail END_OF_SPEECH
         # (the interrupt utterance itself) per blueprint §7.5.
         self._last_cancel_ts = asyncio.get_running_loop().time()
+
+        # 5. event_bus.publish voice.interrupt (D-4 v3) — relay frontend via D-3.
+        # Format envelope match Worker.base._publish (director/workers/base.py:112)
+        # et le filter D-3 (routes/viewer.py:_bus_forward_loop) :
+        # - origin == "director" : gate principal du forward
+        # - payload.type == "voice.interrupt" : type whitelist
+        # - payload.session_id : si != claims.session_id côté viewer, l'event est
+        #   filtré (cross-session anti-spoofing). None = pass-through legacy.
+        # scene_id == "*" : aligne avec DIRECTOR_SCENE_ID_SENTINEL — non utilisé
+        # par le filter D-3 pour voice.interrupt mais cohérence inter-broadcasts.
+        if self._event_bus is not None:
+            envelope = {
+                "scene_id": "*",
+                "origin": "director",
+                "payload": {
+                    "type": "voice.interrupt",
+                    "session_id": self._session_id,
+                    "reason": "vad_detected",
+                    "ts": datetime.now(timezone.utc).isoformat(),
+                },
+            }
+            try:
+                await self._event_bus.publish("editor:broadcast", envelope)
+            except Exception as exc:  # noqa: BLE001 — best-effort
+                log.warning("voice.cancel.broadcast_failed", error=str(exc))
+
         log.info("voice.bargein.cancelled", from_state=from_state)
 
     async def _on_speech_started(self) -> None:
