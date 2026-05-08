@@ -45,6 +45,10 @@ import structlog
 from livekit import rtc
 
 from ..config import Settings
+from .pipeline_metrics import (
+    PipelineMetricsRecorder,
+    get_null_pipeline_recorder,
+)
 
 log = structlog.get_logger(__name__)
 
@@ -110,12 +114,27 @@ class LiveKitPublisher:
 
     NATIVE_SAMPLE_RATE: Final[int] = 22_050  # Piper fr_FR-siwis-medium
 
-    def __init__(self, settings: Settings, room: rtc.Room) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        room: rtc.Room,
+        *,
+        pipeline_metrics: PipelineMetricsRecorder | None = None,
+    ) -> None:
         """Init sans side-effect : aucune ressource LiveKit allouée tant que
         ``publish_pcm`` n'a pas été appelée.
 
         Permet d'instancier le publisher en amont (ex: dans
         ``Agent._on_session_started``) avant de connaître l'audio à pousser.
+
+        Args:
+            settings: Settings global.
+            room: Room LiveKit cible (publish_track / unpublish_track).
+            pipeline_metrics: Recorder D-10 pour les métriques publisher
+                (chunks_published_total, publish_duration_ms, drops_total).
+                Si ``None`` (défaut), le singleton ``NullPipelineMetricsRecorder``
+                absorbe silencieusement (pattern Null Object — pas de guard
+                ``if recorder is not None`` dans la hot path).
         """
         self._settings = settings
         self._room = room
@@ -126,6 +145,11 @@ class LiveKitPublisher:
         # Si deux callers concurrents font publish_pcm en même temps sur un
         # publisher fraîchement créé, un seul doit créer la track et publier.
         self._publish_lock = asyncio.Lock()
+        # D-10B — Pipeline metrics injection (Null par défaut → no-op).
+        self._metrics: PipelineMetricsRecorder = (
+            pipeline_metrics if pipeline_metrics is not None
+            else get_null_pipeline_recorder()
+        )
 
     @property
     def chunk_started_at_ms(self) -> int | None:
@@ -182,6 +206,7 @@ class LiveKitPublisher:
                 "voice.publisher.invalid_sample_rate",
                 sample_rate=sample_rate,
             )
+            self._metrics.record_publisher_drop()
             return
         bytes_per_frame = samples_per_frame * _BYTES_PER_SAMPLE_S16LE
         if len(pcm) < bytes_per_frame:
@@ -190,11 +215,13 @@ class LiveKitPublisher:
                 pcm_bytes=len(pcm),
                 bytes_per_frame=bytes_per_frame,
             )
+            self._metrics.record_publisher_drop()
             return
 
         # 1. Init lazy de la chaîne LiveKit (1er appel uniquement).
         if not await self._ensure_published(sample_rate):
             # Reconnect raté → audio droppé, déjà loggé dans _ensure_published.
+            self._metrics.record_publisher_drop()
             return
 
         # 2. Découpe et capture frame par frame.
@@ -206,15 +233,24 @@ class LiveKitPublisher:
         # plus bas et logué (best-effort audio).
         source = self._source
         if source is None:
-            return  # unpublish a coupé entre _ensure_published et ici.
+            # unpublish a coupé entre _ensure_published et ici → drop comptabilisé.
+            self._metrics.record_publisher_drop()
+            return
 
         num_frames = len(pcm) // bytes_per_frame
         first_frame_pushed = False
+        # D-10B — wall-clock timing du publish complet pour
+        # ``voice_publisher_publish_duration_ms`` (cible §7.2 <100 ms en moyenne).
+        # Mesuré en monotonic_ns pour être cohérent avec les buckets ms.
+        publish_start_ns = time.monotonic_ns()
         try:
             for i in range(num_frames):
                 # unpublish() ou aclose() concurrent → arrêter proprement.
                 if self._source is None:
                     log.info("voice.publisher.aborted_mid_stream", frame_idx=i)
+                    # Stream coupé mid-flight → on compte le drop (frames non
+                    # délivrés) mais on n'observe PAS la durée publish (incomplet).
+                    self._metrics.record_publisher_drop()
                     return
                 start = i * bytes_per_frame
                 frame_data = pcm[start : start + bytes_per_frame]
@@ -237,13 +273,20 @@ class LiveKitPublisher:
                 frames_pushed=i if first_frame_pushed else 0,
                 total_frames=num_frames,
             )
+            # capture_frame raise → chunk partiellement publié = drop côté metrics.
+            self._metrics.record_publisher_drop()
             return
+
+        # Publish complet réussi → record duration + counter increment.
+        duration_ms = (time.monotonic_ns() - publish_start_ns) / 1_000_000.0
+        self._metrics.record_publisher_chunk(duration_ms=duration_ms)
 
         log.debug(
             "voice.publisher.published",
             frames=num_frames,
             sample_rate=sample_rate,
             chunk_started_at_ms=self._chunk_started_at_ms,
+            duration_ms=duration_ms,
         )
 
     async def unpublish(self) -> None:

@@ -39,11 +39,16 @@ Spec : ``docs/specs/2026-05-08-voice-body-pipeline-design.md`` §3.1, §5.1, §6
 """
 from __future__ import annotations
 
+import time
 from typing import AsyncIterator
 
 import structlog
 
 from .livekit_publisher import LiveKitPublisher
+from .pipeline_metrics import (
+    PipelineMetricsRecorder,
+    get_null_pipeline_recorder,
+)
 from .tts_local import PiperTTS
 
 log = structlog.get_logger(__name__)
@@ -62,6 +67,8 @@ class AudioBridge:
         self,
         tts: PiperTTS,
         publisher: LiveKitPublisher,
+        *,
+        pipeline_metrics: PipelineMetricsRecorder | None = None,
     ) -> None:
         """Init sans side-effect.
 
@@ -73,6 +80,10 @@ class AudioBridge:
         Args:
             tts: ``PiperTTS`` partagé (déjà initialisé par ``entrypoint``).
             publisher: ``LiveKitPublisher`` rattaché à la room courante.
+            pipeline_metrics: Recorder D-10 pour les métriques bridge
+                (sentences_published_total, publish_sentence_duration_ms,
+                sentences_skipped_total{reason}). Si ``None`` (défaut), le
+                singleton ``NullPipelineMetricsRecorder`` est utilisé.
         """
         self._tts = tts
         self._publisher = publisher
@@ -80,6 +91,11 @@ class AudioBridge:
         # (ne pas laisser un cancel sticky bloquer le tour suivant).
         # Lu/écrit single-byte CPython → atomique sans lock asyncio.
         self._cancelled: bool = False
+        # D-10B — Pipeline metrics injection (Null par défaut → no-op).
+        self._metrics: PipelineMetricsRecorder = (
+            pipeline_metrics if pipeline_metrics is not None
+            else get_null_pipeline_recorder()
+        )
 
     @property
     def chunk_started_at_ms(self) -> int | None:
@@ -114,6 +130,7 @@ class AudioBridge:
         """
         if not sentence or not sentence.strip():
             log.debug("voice.bridge.empty_sentence_skipped")
+            self._metrics.record_bridge_sentence_skipped(reason="empty")
             return
 
         # Barge-in awareness pre-synth : si cancel() a été appelé, on saute
@@ -122,9 +139,15 @@ class AudioBridge:
         # mid-flight pendant un cancel serait quand même synthétisée + publiée.
         if self._cancelled:
             log.info("voice.bridge.sentence_skipped_pre_synth_cancelled")
+            self._metrics.record_bridge_sentence_skipped(reason="cancelled_pre_synth")
             return
 
         stripped = sentence.strip()
+
+        # D-10B — wall-clock timing du publish complet (synthèse Piper +
+        # publish LiveKit). Mesuré pour ``voice_bridge_publish_sentence_duration_ms``
+        # buckets 50ms-30s (une phrase typique 1-3s à 22050 Hz).
+        start_ns = time.monotonic_ns()
 
         # 1. Synthèse Piper (best-effort).
         try:
@@ -135,6 +158,7 @@ class AudioBridge:
                 error=str(exc),
                 sentence_len=len(stripped),
             )
+            self._metrics.record_bridge_sentence_skipped(reason="tts_failed")
             return
 
         if not pcm:
@@ -144,6 +168,7 @@ class AudioBridge:
                 "voice.bridge.tts_empty_output",
                 sentence_len=len(stripped),
             )
+            self._metrics.record_bridge_sentence_skipped(reason="tts_empty")
             return
 
         # Barge-in awareness post-synth : si cancel() est arrivé pendant
@@ -156,6 +181,7 @@ class AudioBridge:
                 "voice.bridge.publish_skipped_post_synth_cancelled",
                 pcm_bytes=len(pcm),
             )
+            self._metrics.record_bridge_sentence_skipped(reason="cancelled_post_synth")
             return
 
         # 2. Publish PCM (best-effort).
@@ -170,12 +196,18 @@ class AudioBridge:
                 error=str(exc),
                 pcm_bytes=len(pcm),
             )
+            self._metrics.record_bridge_sentence_skipped(reason="publish_failed")
             return
+
+        # Publish complet réussi → record duration + counter.
+        duration_ms = (time.monotonic_ns() - start_ns) / 1_000_000.0
+        self._metrics.record_bridge_sentence_published(duration_ms=duration_ms)
 
         log.debug(
             "voice.bridge.published_sentence",
             pcm_bytes=len(pcm),
             sentence_len=len(stripped),
+            duration_ms=duration_ms,
         )
 
     async def publish_stream(
@@ -229,6 +261,11 @@ class AudioBridge:
             log.warning(
                 "voice.bridge.stream_iterator_failed",
                 error=str(exc),
+            )
+            # D-10B — compte le drop côté metrics (pas une phrase publishée
+            # ni une phrase nominalement skipée — c'est une faillite amont).
+            self._metrics.record_bridge_sentence_skipped(
+                reason="stream_iterator_failed",
             )
 
     async def cancel(self) -> None:

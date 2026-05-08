@@ -40,7 +40,7 @@ import asyncio
 import json
 import time
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Optional
 
 import structlog
@@ -63,6 +63,10 @@ from ..core.errors import AuthError
 from ..core.protocols import EventBus
 from ..director.scene_state import SceneStateSnapshot
 from ..director.state_store import DirectorStateStore
+from ..voice.pipeline_metrics import (
+    PipelineMetricsRecorder,
+    get_null_pipeline_recorder,
+)
 
 router = APIRouter()
 log = structlog.get_logger(__name__)
@@ -95,11 +99,19 @@ class ViewerDeps:
     import lourd au top-level (les tests minimalistes peuvent injecter un
     fakeredis). Le contrat runtime reste le même : un client async avec
     INCR/DECR/EXPIRE/EXISTS/DELETE.
+
+    D-10B — ``pipeline_metrics`` enregistre les compteurs viewer
+    (``viewer_ws_connections_total``, ``viewer_ws_disconnects_total{reason}``,
+    ``viewer_token_refresh_total{outcome}``). Default ``Null`` (no-op) si
+    omis lors de la construction (compatibilité tests).
     """
     event_bus: EventBus
     settings: Settings
     redis: Any
     state_store: DirectorStateStore
+    pipeline_metrics: PipelineMetricsRecorder = field(
+        default_factory=get_null_pipeline_recorder,
+    )
 
 
 _deps: Optional[ViewerDeps] = None
@@ -278,8 +290,19 @@ async def viewer_events_ws(
     """
     deps = _get_deps(ws=ws)
 
+    # D-10B — Note sur les call sites de ``record_viewer_disconnect`` :
+    # cette métrique est appelée à la fois pour les fermetures post-accept
+    # (dans le ``finally`` plus bas) ET pour les rejets PRE-accept (no_token,
+    # auth invalide, rate limit). Sémantique : un refus pré-accept est un
+    # "disconnect avec une cause spécifique avant même l'ouverture", pas un
+    # nouveau type de métrique. Le label ``reason`` distingue les deux cas
+    # côté Grafana (``auth_failed``/``rate_limited`` vs ``client_close``).
     raw_token = token or sec_websocket_protocol
     if not raw_token:
+        # D-10B — pre-accept reject : pas de connexion ouverte, donc on ne
+        # compte pas de connection_total mais on compte le refus comme
+        # disconnect{reason=auth_failed} pour la corrélation Grafana.
+        deps.pipeline_metrics.record_viewer_disconnect(reason="auth_failed")
         await ws.close(code=WS_CLOSE_NO_AUTH, reason="no token")
         return
 
@@ -288,6 +311,7 @@ async def viewer_events_ws(
             raw_token, settings=deps.settings,
         )
     except HTTPException as exc:
+        deps.pipeline_metrics.record_viewer_disconnect(reason="auth_failed")
         await ws.close(code=WS_CLOSE_NO_AUTH, reason=f"auth: {exc.detail}")
         return
 
@@ -301,6 +325,7 @@ async def viewer_events_ws(
         ttl_s=token_lock_ttl,
     )
     if not token_acquired:
+        deps.pipeline_metrics.record_viewer_disconnect(reason="rate_limited")
         await ws.close(
             code=WS_CLOSE_TOO_MANY,
             reason="token already in use",
@@ -316,6 +341,7 @@ async def viewer_events_ws(
     if not user_acquired:
         # Libère le token lock car on n'a pas réellement ouvert.
         await _release_token_lock(deps.redis, claims.jti)
+        deps.pipeline_metrics.record_viewer_disconnect(reason="rate_limited")
         await ws.close(
             code=WS_CLOSE_TOO_MANY,
             reason="too many connections for this user",
@@ -332,6 +358,9 @@ async def viewer_events_ws(
         await ws.accept(subprotocol=sec_websocket_protocol)
     else:
         await ws.accept()
+    # D-10B — record la connexion ouverte (post-auth, post-rate-limit). Compte
+    # uniquement les connexions effectivement acceptées par le serveur.
+    deps.pipeline_metrics.record_viewer_connection()
     log.info(
         "viewer_ws.connect",
         user_id=claims.sub,
@@ -351,6 +380,10 @@ async def viewer_events_ws(
         name=f"viewer_ws_bus:{claims.sub}",
     )
 
+    # D-10B — track disconnect reason : default client_close, override en
+    # cas d'exception non-WebSocketDisconnect. Lu une fois dans le finally
+    # pour appeler record_viewer_disconnect(reason=...).
+    disconnect_reason = "client_close"
     try:
         # On lit les frames client juste pour détecter le disconnect — le viewer
         # n'envoie pas de commands en MVP (purement consommateur). receive_text
@@ -371,6 +404,15 @@ async def viewer_events_ws(
             user_id=claims.sub,
             session_id=claims.session_id,
         )
+        # disconnect_reason reste "client_close" (path nominal).
+    except Exception as exc:  # noqa: BLE001 — defensive
+        log.warning(
+            "viewer_ws.unexpected_error",
+            user_id=claims.sub,
+            error=str(exc),
+        )
+        disconnect_reason = "server_error"
+        raise
     finally:
         bus_task.cancel()
         with suppress(asyncio.CancelledError):
@@ -384,6 +426,9 @@ async def viewer_events_ws(
             await _release_token_lock(deps.redis, claims.jti)
         except Exception as exc:
             log.warning("viewer_ws.release_token_lock_failed", error=str(exc))
+        # D-10B — record disconnect avec la reason déterminée. Toujours appelé
+        # pour symétrie avec record_viewer_connection (pair connect/disconnect).
+        deps.pipeline_metrics.record_viewer_disconnect(reason=disconnect_reason)
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -531,15 +576,44 @@ async def voice_token_refresh(
     Le frontend appelle cette route à T-60s avant ``exp``. Si le token est
     expiré depuis plus que ``viewer_token_refresh_grace_s`` (défaut 120s),
     refus 401 — le frontend doit refaire un full ``POST /voice/token``.
+
+    D-10B — record l'outcome ``viewer_token_refresh_total{outcome}`` :
+
+    - ``success`` : new token émis ;
+    - ``missing_token`` : pas de header Authorization ;
+    - ``expired_grace`` : 401 avec detail "token expired ..." (au-delà grace) ;
+    - ``auth_failed`` : 401 autres (token invalide / mauvais issuer / etc.).
+
+    Les outcomes alimentent le dashboard Grafana pour distinguer une rotation
+    saine d'un flot d'auth fail (attaque brute force JWT).
     """
     deps_eff = _get_deps(request=request)
-    old_token = _extract_bearer(authorization)
-    new_token = viewer_token.refresh_viewer_token(
-        old_token, settings=deps_eff.settings,
-    )
+
+    # Capture missing_token outcome avant que _extract_bearer ne raise.
+    if not authorization or not authorization.lower().startswith("bearer "):
+        deps_eff.pipeline_metrics.record_viewer_token_refresh(
+            outcome="missing_token",
+        )
+        raise HTTPException(status_code=401, detail="missing Bearer token")
+
+    old_token = authorization[len("bearer "):].strip()
+    try:
+        new_token = viewer_token.refresh_viewer_token(
+            old_token, settings=deps_eff.settings,
+        )
+    except HTTPException as exc:
+        # Distinguer expired_grace (window dépassée) des autres auth failures
+        # via le detail de l'exception. Le detail "token expired ..." est posé
+        # par refresh_viewer_token quand la grace window est dépassée.
+        detail = str(exc.detail or "")
+        outcome = "expired_grace" if "expired" in detail else "auth_failed"
+        deps_eff.pipeline_metrics.record_viewer_token_refresh(outcome=outcome)
+        raise
+
     expires_at = viewer_token.verify_viewer_token(
         new_token, settings=deps_eff.settings,
     ).exp
+    deps_eff.pipeline_metrics.record_viewer_token_refresh(outcome="success")
     return VoiceTokenRefreshResponse(token=new_token, expires_at=expires_at)
 
 

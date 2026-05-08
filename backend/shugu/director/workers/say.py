@@ -42,6 +42,10 @@ import time
 from datetime import datetime, timezone
 from typing import Callable, Optional
 
+from ...voice.pipeline_metrics import (
+    PipelineMetricsRecorder,
+    get_null_pipeline_recorder,
+)
 from ..scene_state import SceneStateSnapshot
 from .base import StateDelta, Worker
 
@@ -95,6 +99,7 @@ class SayWorker(Worker):
         event_bus,
         *,
         audio_clock_provider: Optional[Callable[[], Optional[int]]] = None,
+        pipeline_metrics: Optional[PipelineMetricsRecorder] = None,
     ) -> None:
         """Init avec injection optionnelle du clock provider.
 
@@ -107,9 +112,16 @@ class SayWorker(Worker):
                 (cf. ``director.workers.__init__.make_workers``).
                 ``None`` (défaut) = pas de sync audio, payload sans
                 ``audio_at_ms`` (backward-compat avec configs sans voice).
+            pipeline_metrics: Recorder D-10 pour enregistrer
+                ``director_audio_at_ms_distribution{kind=say_emotion}``
+                à chaque payload enrichi. ``None`` (défaut) = no-op.
         """
         super().__init__(event_bus=event_bus)
         self._audio_clock_provider = audio_clock_provider
+        self._pipeline_metrics: PipelineMetricsRecorder = (
+            pipeline_metrics if pipeline_metrics is not None
+            else get_null_pipeline_recorder()
+        )
 
     async def apply(
         self,
@@ -154,6 +166,11 @@ class SayWorker(Worker):
                 # défend contre les inversions d'horloge).
                 audio_at_ms = max(0, _monotonic_ms() - chunk_started)
                 payload["audio_at_ms"] = audio_at_ms
+                # D-10B — record drift audio↔anim (cible §7.2 <100 ms p95).
+                self._pipeline_metrics.record_audio_at_ms(
+                    kind="say_emotion",
+                    audio_at_ms=float(audio_at_ms),
+                )
 
         await self._publish(payload)
         # Pas de patch : l'émotion vocale est consommée par le pipeline TTS

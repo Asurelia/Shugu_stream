@@ -135,6 +135,22 @@ async def lifespan(app: FastAPI):
         "observability.prometheus_recorder_ready",
         metrics_enabled=settings.metrics_enabled,
     )
+
+    # D-10B — Pipeline metrics recorder (voice↔body). Branché sur le MÊME
+    # registry que l'agent-loop recorder pour que les compteurs voice
+    # apparaissent dans /metrics aux côtés des compteurs agent-loop. Gated
+    # par settings.voice_metrics_enabled (cohérent avec voice/metrics.py
+    # turn metrics — le même flag active les deux).
+    from .voice.pipeline_metrics import make_pipeline_recorder
+    _pipeline_metrics = make_pipeline_recorder(
+        enabled=settings.voice_metrics_enabled,
+        registry=_prom_recorder.registry,
+    )
+    app.state.pipeline_metrics = _pipeline_metrics  # exposé pour tests + extensions
+    log.info(
+        "observability.pipeline_metrics_ready",
+        enabled=settings.voice_metrics_enabled,
+    )
     # ── Fin Phase 8.2 ─────────────────────────────────────────────────────
 
     # Email (Resend) — NullSender si pas de clé, ResendSender sinon. Ça permet
@@ -357,6 +373,7 @@ async def lifespan(app: FastAPI):
         settings=settings,
         redis=_redis,
         state_store=_get_state_store(),
+        pipeline_metrics=_pipeline_metrics,
     ))
     # Observatory SSE (Sprint mos-A) — flux temps réel des events workers.
     # Lit le bus event partagé en read-only ; aucun side effect possible côté
@@ -399,6 +416,7 @@ async def lifespan(app: FastAPI):
     app.state.director_workers = make_workers(
         event_bus,
         audio_clock_provider=_voice_runtime.chunk_started_at_ms,
+        pipeline_metrics=_pipeline_metrics,
     )
 
     # Scene Composer ScenePlayer (Phase E5.1) — exécuteur déterministe.
@@ -610,6 +628,7 @@ async def lifespan(app: FastAPI):
             prom_registry=_voice_prom_registry,
             event_bus=event_bus,
             voice_runtime=_voice_runtime,
+            pipeline_metrics=_pipeline_metrics,
         )
         _agent_server = _AgentServer.from_server_options(_worker_opts)
         _voice_worker_task = asyncio.create_task(

@@ -33,6 +33,10 @@ import time
 from datetime import datetime, timezone
 from typing import Callable, Optional
 
+from ...voice.pipeline_metrics import (
+    PipelineMetricsRecorder,
+    get_null_pipeline_recorder,
+)
 from ..scene_state import SceneStateSnapshot
 from .base import StateDelta, Worker
 
@@ -75,6 +79,7 @@ class FaceWorker(Worker):
         event_bus,
         *,
         audio_clock_provider: Optional[Callable[[], Optional[int]]] = None,
+        pipeline_metrics: Optional[PipelineMetricsRecorder] = None,
     ) -> None:
         """Init avec injection optionnelle du clock provider.
 
@@ -83,9 +88,16 @@ class FaceWorker(Worker):
             audio_clock_provider: Callable qui retourne ``chunk_started_at_ms``
                 du publisher LiveKit courant, ou ``None``. Voir docstring
                 ``say.SayWorker.__init__`` pour le détail.
+            pipeline_metrics: Recorder D-10 pour
+                ``director_audio_at_ms_distribution{kind=face}``. ``None``
+                (défaut) = no-op.
         """
         super().__init__(event_bus=event_bus)
         self._audio_clock_provider = audio_clock_provider
+        self._pipeline_metrics: PipelineMetricsRecorder = (
+            pipeline_metrics if pipeline_metrics is not None
+            else get_null_pipeline_recorder()
+        )
 
     async def apply(
         self,
@@ -123,6 +135,11 @@ class FaceWorker(Worker):
             if chunk_started is not None:
                 audio_at_ms = max(0, _monotonic_ms() - chunk_started)
                 payload["audio_at_ms"] = audio_at_ms
+                # D-10B — record drift audio↔anim (cible §7.2 <100 ms p95).
+                self._pipeline_metrics.record_audio_at_ms(
+                    kind="face",
+                    audio_at_ms=float(audio_at_ms),
+                )
 
         await self._publish(payload)
         return StateDelta(patch={"face": slug})

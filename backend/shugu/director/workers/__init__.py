@@ -50,6 +50,7 @@ from __future__ import annotations
 
 from typing import Callable, Optional
 
+from ...voice.pipeline_metrics import PipelineMetricsRecorder
 from .anim import AnimWorker
 from .base import (
     DIRECTOR_SCENE_ID_SENTINEL,
@@ -84,6 +85,7 @@ def make_workers(
     event_bus,
     *,
     audio_clock_provider: Optional[Callable[[], Optional[int]]] = None,
+    pipeline_metrics: Optional[PipelineMetricsRecorder] = None,
 ) -> dict[str, Worker]:
     """Construit le registry `tag_name -> Worker` avec la DI du bus.
 
@@ -138,8 +140,16 @@ def make_workers(
         OutfitWorker(event_bus=event_bus),
         VfxWorker(event_bus=event_bus),
         AnimWorker(event_bus=event_bus),
-        FaceWorker(event_bus=event_bus, audio_clock_provider=audio_clock_provider),
-        SayWorker(event_bus=event_bus, audio_clock_provider=audio_clock_provider),
+        FaceWorker(
+            event_bus=event_bus,
+            audio_clock_provider=audio_clock_provider,
+            pipeline_metrics=pipeline_metrics,
+        ),
+        SayWorker(
+            event_bus=event_bus,
+            audio_clock_provider=audio_clock_provider,
+            pipeline_metrics=pipeline_metrics,
+        ),
         CameraWorker(event_bus=event_bus),
         SceneWorker(event_bus=event_bus),
     )

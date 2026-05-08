@@ -59,6 +59,11 @@ from .metrics import (
     get_null_recorder,
     make_recorder,
 )
+from .pipeline_metrics import (
+    PipelineMetricsRecorder,
+    get_null_pipeline_recorder,
+    make_pipeline_recorder,
+)
 from .regie import intent_classifier, tool_call_parser
 from .regie.web_search import WebSearchAggregator, WebSearchProvider
 from .stt_local import WhisperSTT
@@ -154,6 +159,9 @@ class ShuguVoiceAgent(Agent):
         bridge: AudioBridge | None = None,
         event_bus: "EventBus | None" = None,
         session_id: str | None = None,
+        # D-10B — Pipeline metrics injection. Default None → singleton no-op
+        # (NullPipelineMetricsRecorder), aucun side-effect Prometheus.
+        pipeline_metrics: PipelineMetricsRecorder | None = None,
     ) -> None:
         # Agent.instructions is required by livekit-agents 1.5.5.
         # We pass a placeholder — the actual prompt is built per-turn in
@@ -207,6 +215,11 @@ class ShuguVoiceAgent(Agent):
         self._bridge: AudioBridge | None = bridge
         self._event_bus: "EventBus | None" = event_bus
         self._session_id: str | None = session_id
+        # D-10B — Pipeline metrics recorder (Null par défaut → no-op).
+        self._pipeline_metrics: PipelineMetricsRecorder = (
+            pipeline_metrics if pipeline_metrics is not None
+            else get_null_pipeline_recorder()
+        )
 
     @property
     def _processing(self) -> bool:
@@ -681,7 +694,7 @@ class ShuguVoiceAgent(Agent):
             if m:
                 self._metrics.record_turn(m)
 
-    async def cancel_speaking(self) -> None:
+    async def cancel_speaking(self, *, reason: str = "barge_in") -> None:
         """Cancel safe : stop la chain voice + bridge + push event interrupt.
 
         Cooperative — does not brutally kill the executor thread.
@@ -693,6 +706,16 @@ class ShuguVoiceAgent(Agent):
 
         Called from _on_speech_started() when user speaks while agent is
         SPEAKING or PROCESSING (barge-in detection).
+
+        D-10B — Pipeline metrics:
+        - ``reason`` (keyword-only) : étiquette le motif du cancel pour
+          ``voice_cancel_speaking_total{reason}``. Whitelist côté
+          ``pipeline_metrics._VALID_CANCEL_REASONS`` (``barge_in`` /
+          ``shutdown`` / ``external`` / ``unknown``). Default ``"barge_in"``
+          car c'est l'unique appel interne (``_on_speech_started``).
+          Les tests externes peuvent passer ``"external"``.
+        - Wall-clock duration mesurée de l'entrée à la fin du broadcast →
+          ``voice_cancel_speaking_duration_ms`` (cible §7.2 <200ms p95).
 
         Ordre garanti par le contrat AudioBridge.cancel docstring (D-2 review,
         cf. ``audio_bridge.py:248-265``). Reorder vs. E3 : ``tts.aclose()``
@@ -713,7 +736,11 @@ class ShuguVoiceAgent(Agent):
         Le pipeline voice continue après un barge-in malgré une faillite locale.
         """
         from_state = self._state.value
-        log.info("voice.bargein.cancelling", from_state=from_state)
+        log.info("voice.bargein.cancelling", from_state=from_state, reason=reason)
+
+        # D-10B — wall-clock timing complet du cancel chain pour la cible §7.2
+        # (cut-off <200ms p95). monotonic_ns pour précision sub-ms.
+        cancel_start_ns = time.monotonic_ns()
 
         # 1. tts.aclose — kill subprocess Piper (E3 + contrat D-2).
         # Wrappé en best-effort comme les autres steps : si Piper subprocess
@@ -772,7 +799,21 @@ class ShuguVoiceAgent(Agent):
             except Exception as exc:  # noqa: BLE001 — best-effort
                 log.warning("voice.cancel.broadcast_failed", error=str(exc))
 
-        log.info("voice.bargein.cancelled", from_state=from_state)
+        # D-10B — record cancel duration + reason. Toujours appelé, même si
+        # une étape best-effort raise (l'exception est swallowed plus haut,
+        # on est ici dans le path nominal après chaque step).
+        cancel_duration_ms = (time.monotonic_ns() - cancel_start_ns) / 1_000_000.0
+        self._pipeline_metrics.record_cancel_speaking(
+            reason=reason,
+            duration_ms=cancel_duration_ms,
+        )
+
+        log.info(
+            "voice.bargein.cancelled",
+            from_state=from_state,
+            reason=reason,
+            duration_ms=cancel_duration_ms,
+        )
 
     async def _on_speech_started(self) -> None:
         """Handler for VAD START_OF_SPEECH events. Extracted for testability.
@@ -908,6 +949,7 @@ async def entrypoint(
     prom_registry: object | None = None,
     event_bus: "EventBus | None" = None,
     voice_runtime: VoiceRuntimeState | None = None,
+    pipeline_metrics: PipelineMetricsRecorder | None = None,
 ) -> None:
     """Registered in WorkerOptions.entrypoint_fnc via partial(entrypoint, llm=llm).
 
@@ -991,6 +1033,13 @@ async def entrypoint(
     voice_metrics = make_recorder(
         settings.voice_metrics_enabled, registry=prom_registry,
     )
+    # D-10B — pipeline metrics recorder. Si None est passé, on retombe sur le
+    # singleton no-op ; sinon on utilise celui injecté par app.py lifespan
+    # (branché sur app.state.prom_recorder.registry pour exposition /metrics).
+    effective_pipeline_metrics: PipelineMetricsRecorder = (
+        pipeline_metrics if pipeline_metrics is not None
+        else get_null_pipeline_recorder()
+    )
 
     await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
 
@@ -1030,8 +1079,14 @@ async def entrypoint(
         # publie sa propre track ``roomio_audio`` séparément. Ce wiring
         # débloque D-4 v3 (bridge.cancel sur barge-in) sans risque de
         # double-track tant que la migration Option A n'est pas faite.
-        publisher = LiveKitPublisher(settings, ctx.room)
-        bridge = AudioBridge(tts=tts, publisher=publisher)
+        publisher = LiveKitPublisher(
+            settings, ctx.room,
+            pipeline_metrics=effective_pipeline_metrics,
+        )
+        bridge = AudioBridge(
+            tts=tts, publisher=publisher,
+            pipeline_metrics=effective_pipeline_metrics,
+        )
         session_id = f"voice-sess-{ctx.room.name}-{int(time.time())}"
 
         agent = ShuguVoiceAgent(
@@ -1044,6 +1099,8 @@ async def entrypoint(
             bridge=bridge,
             event_bus=event_bus,
             session_id=session_id,
+            # D-10B wiring : recorder partagé pour cancel_speaking metric.
+            pipeline_metrics=effective_pipeline_metrics,
         )
         # D-5 wiring : pose bridge dans voice_runtime pour que les workers
         # Director (face/say) lisent chunk_started_at_ms via
@@ -1113,8 +1170,14 @@ async def entrypoint(
         # (basculement ``_handle_turn_streaming`` vers ``bridge.publish_stream``)
         # n'est pas faite. Ce wiring prépare juste l'infrastructure ; le bénéfice
         # arrive dans un PR ultérieur.
-        publisher = LiveKitPublisher(settings, ctx.room)
-        bridge = AudioBridge(tts=tts, publisher=publisher)
+        publisher = LiveKitPublisher(
+            settings, ctx.room,
+            pipeline_metrics=effective_pipeline_metrics,
+        )
+        bridge = AudioBridge(
+            tts=tts, publisher=publisher,
+            pipeline_metrics=effective_pipeline_metrics,
+        )
         session_id = f"voice-sess-{ctx.room.name}-{int(time.time())}"
 
         agent = ShuguVoiceAgent(
@@ -1128,6 +1191,8 @@ async def entrypoint(
             bridge=bridge,
             event_bus=event_bus,
             session_id=session_id,
+            # D-10B wiring : recorder partagé pour cancel_speaking metric.
+            pipeline_metrics=effective_pipeline_metrics,
         )
         # D-5 wiring : pose bridge dans voice_runtime pour que les workers
         # Director (face/say) lisent ``chunk_started_at_ms`` via
@@ -1174,6 +1239,7 @@ def build_worker_options(
     prom_registry: object | None = None,
     event_bus: "EventBus | None" = None,
     voice_runtime: VoiceRuntimeState | None = None,
+    pipeline_metrics: PipelineMetricsRecorder | None = None,
 ) -> WorkerOptions:
     """Factory called from app.py lifespan.
 
@@ -1204,6 +1270,7 @@ def build_worker_options(
             prom_registry=prom_registry,
             event_bus=event_bus,
             voice_runtime=voice_runtime,
+            pipeline_metrics=pipeline_metrics,
         ),
         ws_url=settings.livekit_url,
         api_key=settings.livekit_api_key,
