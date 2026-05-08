@@ -108,11 +108,19 @@ function formatLogLine(ev: ObservatoryEvent): LogLine {
 }
 
 export function ObservatoryClient() {
+  // Les hrefs des boutons "Mesh →" / "Missions →" sont construits en absolu
+  // via `useParams`. Un href relatif (ex: "./missions") sur l'URL parent
+  // `/[username]/admin/observatory` (sans trailing slash) résolverait vers
+  // `/[username]/admin/missions` côté navigateur (sémantique URL standard
+  // — le dernier segment est remplacé) → 404. L'absolu est défensif.
   const params = useParams<{ username?: string | string[] }>();
   const rawUsername = params?.username;
   const username = Array.isArray(rawUsername) ? rawUsername[0] : rawUsername;
   const meshHref = username
     ? `/${encodeURIComponent(username)}/admin/observatory/mesh`
+    : "#";
+  const missionsHref = username
+    ? `/${encodeURIComponent(username)}/admin/observatory/missions`
     : "#";
 
   const [logs, setLogs] = useState<LogLine[]>([]);
@@ -204,6 +212,14 @@ export function ObservatoryClient() {
             style={{ textDecoration: "none" }}
           >
             <span>⊛</span><span>View mesh →</span>
+          </Link>
+          <Link
+            href={missionsHref}
+            data-testid="observatory-missions-link"
+            className="lgb lgb-subtle lgb-sm"
+            style={{ textDecoration: "none" }}
+          >
+            <span>▦</span><span>Missions →</span>
           </Link>
         </div>
       }

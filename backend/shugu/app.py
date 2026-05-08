@@ -48,6 +48,7 @@ from .routes import (
     editor_ws,
     health,
     observatory,
+    observatory_missions,
     operator_ws,
     registry_api,
     scene_composer_api,
@@ -650,6 +651,7 @@ def create_app() -> FastAPI:
     app.include_router(admin.router)
     app.include_router(admin_users.router)   # /api/admin/users — VIP promote/revoke
     app.include_router(observatory.router)   # /api/admin/observatory/events — Sprint mos-A SSE
+    app.include_router(observatory_missions.router)  # /api/admin/observatory/missions — Sprint mos-A iter 2b Kanban
     app.include_router(registry_api.public_router)
     app.include_router(registry_api.admin_router)
     app.include_router(scene_editor_api.router)  # /api/scene-editor/* — Phase C drafts/patterns/layouts/timeline
