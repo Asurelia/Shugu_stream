@@ -374,6 +374,12 @@ async def lifespan(app: FastAPI):
     # Director workers (Phase E3) — registry tag_name -> Worker injecté avec le bus.
     # Utilisé par l'orchestrator E2 pour dispatcher les tags inline vers les workers
     # déterministes (outfit, vfx, anim, face, say_emotion, camera, scene).
+    #
+    # TODO(D-5 wiring) : passer audio_clock_provider=lambda: bridge.chunk_started_at_ms
+    # quand AudioBridge (D-2) sera disponible dans le lifespan voice.
+    # Sans ce wiring, audio_at_ms est absent de tous les payloads say_emotion/face
+    # → le drift cible §7.2 (<100ms p95) entre expression et audio TTS n'est pas garanti.
+    # Voir backend/shugu/director/workers/__init__.py docstring pour exemple.
     from .director.workers import make_workers
     app.state.director_workers = make_workers(event_bus)
 
