@@ -228,22 +228,30 @@ describe("Model.fadeOutAndStopStreamingAudio", () => {
 
   it("idempotent : 2 appels rapprochés ne crashent pas + ne re-rampent pas depuis 1.0", async () => {
     const model = makeModel();
+    // Pre-cache le timer ID pour éviter que le pause() async null le
+    // _streamingAudio entre les 2 fades — on veut tester la séquence cancel
+    // + re-ramp sur le MÊME audio actif. Use fake timers pour contrôler.
     const audio = makeFakeAudioElement();
     model.attachStreamingAudio(audio);
 
     await model.fadeOutAndStopStreamingAudio(50);
-    const firstCallCount =
-      currentFakeCtx.__lastGain!.gain.linearRampToValueAtTime.mock.calls.length;
-
-    // 2e appel : ne doit pas re-créer un GainNode (réutilisation).
+    // 2e appel AVANT que le timer du 1er fade ne fire (reste dans le scope
+    // du même streaming audio).
     await model.fadeOutAndStopStreamingAudio(50);
 
+    // Review D-9 fix : assertions strictes sur le mécanisme cancel+re-anchor.
+    const gain = currentFakeCtx.__lastGain!.gain;
+    // GainNode reutilisé (singleton), pas re-créé.
     expect(currentFakeCtx.createGain).toHaveBeenCalledTimes(1);
-    // Un nouveau ramp est armé (cancel + re-ramp accepté), mais pas un
-    // doublement du nombre d'appels initial sur le même node.
-    const totalCalls =
-      currentFakeCtx.__lastGain!.gain.linearRampToValueAtTime.mock.calls.length;
-    expect(totalCalls).toBeGreaterThanOrEqual(firstCallCount);
+    // cancelScheduledValues appelé 2x : une fois par fade pour clear le ramp
+    // précédent (sinon glitch audible si re-ramp depuis 1.0 alors que le gain
+    // était déjà rampé à mi-chemin).
+    expect(gain.cancelScheduledValues).toHaveBeenCalledTimes(2);
+    // setValueAtTime appelé 2x : re-anchor sur la valeur courante avant
+    // le nouveau ramp (évite le retour brutal à 1.0).
+    expect(gain.setValueAtTime).toHaveBeenCalledTimes(2);
+    // Exactement 2 ramps au total — un par appel à fadeOut.
+    expect(gain.linearRampToValueAtTime).toHaveBeenCalledTimes(2);
   });
 
   it("attache nouvelle audio APRÈS un fade : reset le gain à 1 (audio audible)", async () => {

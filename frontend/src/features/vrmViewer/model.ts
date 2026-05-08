@@ -267,6 +267,12 @@ export class Model {
       } catch {
         // pause() peut throw si l'élément est déjà détaché du DOM — safe.
       }
+      // Review D-9 fix : null la ref pour matcher la JSDoc + libère le pointeur
+      // si une 2e fadeOut est déclenchée (le double-pause sur élément déjà
+      // pausé est benign mais le contrat documenté reste cohérent).
+      if (this._streamingAudio === audioRef) {
+        this._streamingAudio = null;
+      }
     }, durationMs + 10);
   }
 
