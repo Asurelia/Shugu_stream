@@ -52,3 +52,9 @@ assets/voice/*.mp3
 assets/voice/*.flac
 assets/voice/*.ogg
 assets/voice/*.m4a
+
+
+# Ruflo / claude-flow MCP runtime artifacts (per-machine, not for git)
+.claude-flow/
+.swarm/
+ruvector.db
