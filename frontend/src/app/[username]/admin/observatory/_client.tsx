@@ -18,6 +18,8 @@
  * silencieux.
  */
 
+import Link from "next/link";
+import { useParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { AdminShell } from "@/components/admin/AdminShell";
@@ -106,6 +108,18 @@ function formatLogLine(ev: ObservatoryEvent): LogLine {
 }
 
 export function ObservatoryClient() {
+  // L'href du bouton "Missions →" doit être absolu : un href relatif
+  // `./missions` sur l'URL `/[username]/admin/observatory` (sans trailing
+  // slash) résolverait vers `/[username]/admin/missions` côté navigateur
+  // (sémantique URL standard — le dernier segment est remplacé). On
+  // construit donc l'absolu via `useParams` pour récupérer le username.
+  const params = useParams<{ username?: string | string[] }>();
+  const rawUsername = params?.username;
+  const username = Array.isArray(rawUsername) ? rawUsername[0] : rawUsername;
+  const missionsHref = username
+    ? `/${encodeURIComponent(username)}/admin/observatory/missions`
+    : "#";
+
   const [logs, setLogs] = useState<LogLine[]>([]);
   const [connected, setConnected] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -184,9 +198,18 @@ export function ObservatoryClient() {
       title="Observatory"
       subtitle="Live mesh of Shugu workers"
       headerRight={
-        <GlassPill tone={connected ? "primary" : "warn"} dot>
-          {connected ? `${activeCount}/${KNOWN_WORKERS.length} actifs` : "déconnecté"}
-        </GlassPill>
+        <div className="flex items-center gap-2">
+          <Link
+            href={missionsHref}
+            data-testid="observatory-missions-link"
+            className="text-[11px] px-2.5 py-1 rounded-full border border-white/10 text-shugu-cream-dim hover:text-shugu-cream hover:border-white/20 transition-colors"
+          >
+            Missions →
+          </Link>
+          <GlassPill tone={connected ? "primary" : "warn"} dot>
+            {connected ? `${activeCount}/${KNOWN_WORKERS.length} actifs` : "déconnecté"}
+          </GlassPill>
+        </div>
       }
     >
       <section className="flex flex-col gap-5">
