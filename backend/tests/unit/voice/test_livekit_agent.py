@@ -1793,6 +1793,52 @@ async def test_cancel_speaking_robust_if_bridge_cancel_raises(tmp_path: Path) ->
 
 
 @pytest.mark.asyncio
+async def test_cancel_speaking_robust_if_tts_aclose_raises(tmp_path: Path) -> None:
+    """Si tts.aclose() raise, la chaîne continue : bridge.cancel + llm.cancel + publish.
+
+    Régression review D-4 v3 PR #116 M-1 : le wrap try/except autour de
+    tts.aclose était nouveau (E3 ne le wrappait pas). Sans test dédié,
+    une régression silencieuse pourrait casser le best-effort §6.1 sur
+    cette branche du code uniquement.
+    """
+    call_log: list[str] = []
+    bridge = _SpyBridge(call_log)  # bridge.cancel sain
+    event_bus = _SpyEventBus()
+    agent = _make_agent_with_d4_wiring(
+        tmp_path,
+        bridge=bridge,
+        event_bus=event_bus,
+        session_id="sess-tts-fail",
+        call_log=call_log,
+    )
+
+    # Patch tts.aclose pour qu'il raise.
+    async def _tts_aclose_raises() -> None:
+        call_log.append("tts.aclose")
+        raise RuntimeError("piper subprocess crashed")
+
+    agent._tts.aclose = _tts_aclose_raises  # type: ignore[method-assign]
+
+    # Ne doit PAS propager l'exception au caller.
+    await agent.cancel_speaking()
+
+    # tts.aclose a été tenté
+    assert "tts.aclose" in call_log, "tts.aclose doit être appelé même s'il raise"
+    # Bridge.cancel exécuté APRÈS tts.aclose (ordre garanti par le contrat)
+    assert "bridge.cancel" in call_log, (
+        "bridge.cancel doit être appelé après tts.aclose raise"
+    )
+    # LLM cancel + filler cancel exécutés ensuite
+    assert "llm.cancel" in call_log, (
+        "llm.cancel doit être appelé après bridge.cancel"
+    )
+    # Push event final atteint malgré le raise tts
+    assert len(event_bus.published) == 1, (
+        "voice.interrupt doit être publié même si tts.aclose a raise"
+    )
+
+
+@pytest.mark.asyncio
 async def test_cancel_speaking_robust_if_event_bus_publish_raises(tmp_path: Path) -> None:
     """Si event_bus.publish raise, on log mais ne propage pas. cancel_speaking termine."""
     event_bus = _SpyEventBus(raises=RuntimeError("bus boom"))
