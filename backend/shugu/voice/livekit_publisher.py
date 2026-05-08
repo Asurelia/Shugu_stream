@@ -173,6 +173,16 @@ class LiveKitPublisher:
             return
 
         samples_per_frame = int(sample_rate * _FRAME_DURATION_S)
+        # Guard absolue : un sample_rate ≤ 0 ou < 100 (impossible à découper en
+        # frames de 10 ms) provoquerait un ZeroDivisionError sur ``len(pcm) //
+        # bytes_per_frame`` — qui n'est PAS dans le ``try/except`` global et
+        # propagerait au caller. Spec §6.1 mandate "pas de propagation".
+        if samples_per_frame <= 0:
+            log.warning(
+                "voice.publisher.invalid_sample_rate",
+                sample_rate=sample_rate,
+            )
+            return
         bytes_per_frame = samples_per_frame * _BYTES_PER_SAMPLE_S16LE
         if len(pcm) < bytes_per_frame:
             log.debug(
@@ -266,28 +276,32 @@ class LiveKitPublisher:
 
         # AudioSource clear sa file pour ne pas re-jouer des frames bufferisés
         # quand on republiera (sinon barge-in fait écho au tour précédent).
+        # Puis ``aclose()`` explicite pour libérer les handles FFI natifs —
+        # sinon une session avec barge-ins fréquents accumule des AudioSource
+        # détachés en attente de GC, fuite ressources native LiveKit.
         if source is not None:
             try:
                 source.clear_queue()
             except Exception as exc:  # noqa: BLE001
                 log.debug("voice.publisher.clear_queue_failed", error=str(exc))
-
-        log.info("voice.publisher.unpublished", sid=track.sid)
-
-    async def aclose(self) -> None:
-        """Cleanup propre — unpublish + ferme l'AudioSource. Idempotent.
-
-        Appelé par ``audio_bridge.aclose()`` ou ``Agent._on_shutdown``. Garantit
-        qu'aucune ressource native LiveKit ne fuit après arrêt du worker.
-        """
-        # Capture le source AVANT unpublish (qui le set à None).
-        source = self._source
-        await self.unpublish()
-        if source is not None:
             try:
                 await source.aclose()
             except Exception as exc:  # noqa: BLE001
                 log.debug("voice.publisher.source_aclose_failed", error=str(exc))
+
+        log.info("voice.publisher.unpublished", sid=track.sid)
+
+    async def aclose(self) -> None:
+        """Cleanup propre — alias public d'``unpublish()`` + log final. Idempotent.
+
+        Appelé par ``audio_bridge.aclose()`` ou ``Agent._on_shutdown``. Garantit
+        qu'aucune ressource native LiveKit ne fuit après arrêt du worker.
+
+        Note : depuis le fix review D-1, ``unpublish()`` ferme déjà l'AudioSource
+        FFI. Pas de double-aclose ici — ce serait redondant et déclencherait
+        un warning natif sur certaines versions de livekit-rtc.
+        """
+        await self.unpublish()
         log.info("voice.publisher.closed")
 
     # ------------------------------------------------------------------

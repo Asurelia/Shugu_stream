@@ -245,6 +245,47 @@ async def test_publish_pcm_empty_pcm_is_noop(
 
 
 @pytest.mark.asyncio
+async def test_publish_pcm_zero_sample_rate_is_noop(
+    settings: Settings, mock_room: MagicMock, _patch_audio_primitives: dict[str, Any]
+) -> None:
+    """sample_rate=0 : guard early return, pas de ZeroDivisionError propagée.
+
+    Sans la guard, ``samples_per_frame = 0`` → ``bytes_per_frame = 0`` →
+    ``len(pcm) // 0`` lève ``ZeroDivisionError`` en dehors du try/except.
+    Spec §6.1 mandate "pas de propagation d'exception au caller".
+    """
+    publisher = LiveKitPublisher(settings, mock_room)
+    pcm = b"\x00\x01" * 22_050
+
+    # Ne doit pas raise.
+    await publisher.publish_pcm(pcm, sample_rate=0)
+
+    assert publisher.chunk_started_at_ms is None
+    mock_room.local_participant.publish_track.assert_not_called()
+    fake_source = _patch_audio_primitives["fake_source"]
+    fake_source.capture_frame.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_publish_pcm_low_sample_rate_below_100hz_is_noop(
+    settings: Settings, mock_room: MagicMock, _patch_audio_primitives: dict[str, Any]
+) -> None:
+    """sample_rate < 100 Hz : ``samples_per_frame = int(99 * 0.01) = 0`` → guard.
+
+    Cas limite : caller passerait 50 Hz (impossible Piper, mais possible bug
+    upstream — un mauvais Settings). On ne crash pas, on log + drop.
+    """
+    publisher = LiveKitPublisher(settings, mock_room)
+    pcm = b"\x00\x01" * 22_050
+
+    # Ne doit pas raise.
+    await publisher.publish_pcm(pcm, sample_rate=50)
+
+    assert publisher.chunk_started_at_ms is None
+    mock_room.local_participant.publish_track.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_publish_pcm_pcm_shorter_than_one_frame(
     settings: Settings, mock_room: MagicMock, _patch_audio_primitives: dict[str, Any]
 ) -> None:
@@ -312,12 +353,16 @@ async def test_chunk_started_at_ms_updates_each_call(
     first_ts = publisher.chunk_started_at_ms
     assert first_ts is not None
 
-    # Petite pause pour garantir un monotonic_ns différent.
-    await asyncio.sleep(0.005)
+    # Pause 10 ms pour garantir un monotonic_ns différent même sur OS à
+    # résolution d'horloge dégradée (Windows < 10, certains conteneurs).
+    await asyncio.sleep(0.010)
     await publisher.publish_pcm(pcm)
     second_ts = publisher.chunk_started_at_ms
     assert second_ts is not None
-    assert second_ts >= first_ts
+    # Strict ``>`` : si le test flake ici, c'est que monotonic_ns a la même
+    # valeur sur 2 lectures à 10 ms d'intervalle — pathologique, augmenter
+    # le sleep plutôt que retomber sur ``>=`` qui masque un vrai bug.
+    assert second_ts > first_ts
 
 
 # ---------------------------------------------------------------------------
