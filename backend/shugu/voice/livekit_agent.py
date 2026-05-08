@@ -98,18 +98,13 @@ def _neutralize_delimiters(snippet: str) -> str:
     return snippet.replace(_WEB_CONTEXT_OPEN, "").replace(_WEB_CONTEXT_CLOSE, "")
 
 
-# Tool-call markers emitted by Gemma when it triggers a tool. The raw markers
-# must NEVER reach the TTS — Piper would try to vocalize "<|tool_call>call:..."
-# producing garbage audio AND breaking the régie contract (tool calls are handled
-# by tool_call_parser, not spoken aloud).
-_TOOL_CALL_OPEN: str = "<|tool_call>"
-_TOOL_CALL_CLOSE: str = "<tool_call|>"
-_TOOL_CALL_OPEN_LEN: int = len(_TOOL_CALL_OPEN)
-# Worst-case size of a complete <|tool_call>call:NAME{...}<tool_call|> sequence
-# observed in benches: ~200 chars. We keep a safety bound of 2048 chars so an
-# unclosed opening (LLM truncated mid-call) eventually flushes instead of
-# starving TTS forever.
-_TOOL_CALL_MAX_BUFFER: int = 2048
+# Tool-call markers and streaming filter — moved to regie/tool_call_parser.py
+# in PR3 to prevent circular import from adapters/livekit_llm.py.
+# Re-exported here for backward compatibility with existing tests that import
+# from this module directly.
+from .regie.tool_call_parser import (  # noqa: E402
+    _strip_tool_calls_streaming,
+)
 
 
 class _AgentState(Enum):
@@ -127,69 +122,6 @@ class _AgentState(Enum):
     LISTENING = "listening"
     PROCESSING = "processing"
     SPEAKING = "speaking"
-
-
-async def _strip_tool_calls_streaming(
-    token_stream: AsyncIterator[str],
-) -> AsyncIterator[str]:
-    """Filter Gemma tool_call markers from a token stream before TTS.
-
-    Strategy: maintain a sliding buffer of recently received tokens. After each
-    token, run the tool_call regex on the buffer and remove any complete
-    matches. If an opening marker `<|tool_call>` is present without a matching
-    close, hold back tokens from that point onward until the close arrives or
-    the buffer exceeds `_TOOL_CALL_MAX_BUFFER` (in which case we drop the
-    unclosed sequence — preferring silence over garbled output).
-
-    A `_TOOL_CALL_OPEN_LEN`-char hold-back at the tail prevents flushing a
-    partial opening that crosses a token boundary (e.g. tokens `"<|tool"` then
-    `"_call>"`).
-
-    Same security contract as `_neutralize_delimiters` (Sprint C PR1) and
-    `_strip_tool_calls` (Sprint B): no marker reaches the TTS, regardless of
-    whether the LLM streams or returns one-shot.
-    """
-    buffer = ""
-    async for token in token_stream:
-        if not token:
-            continue
-        buffer += token
-
-        # 1) Strip any complete tool_call sequences first.
-        cleaned = tool_call_parser._TOOL_CALL_RE.sub("", buffer)
-
-        # 2) If an opening marker is still present, it must be unclosed —
-        # withhold everything from the opening onward until close or overflow.
-        open_idx = cleaned.find(_TOOL_CALL_OPEN)
-        if open_idx == -1:
-            # No pending opening: safe to flush except the tail (in case a new
-            # opening is forming across tokens).
-            if len(cleaned) > _TOOL_CALL_OPEN_LEN:
-                yield cleaned[:-_TOOL_CALL_OPEN_LEN]
-                buffer = cleaned[-_TOOL_CALL_OPEN_LEN:]
-            else:
-                buffer = cleaned
-        else:
-            # Yield the safe prefix, hold back the unclosed tool_call.
-            if open_idx > 0:
-                yield cleaned[:open_idx]
-            buffer = cleaned[open_idx:]
-            if len(buffer) > _TOOL_CALL_MAX_BUFFER:
-                log.warning(
-                    "voice.toolcall_filter.unclosed_dropped",
-                    buffer_size=len(buffer),
-                )
-                buffer = ""
-
-    # End-of-stream flush: clean any remaining complete tool_calls and drop
-    # any leftover unclosed opening (refuse to leak partial markers).
-    final = tool_call_parser._TOOL_CALL_RE.sub("", buffer)
-    open_idx = final.find(_TOOL_CALL_OPEN)
-    if open_idx != -1:
-        log.warning("voice.toolcall_filter.unclosed_at_eof", dropped=len(final) - open_idx)
-        final = final[:open_idx]
-    if final:
-        yield final
 
 
 class ShuguVoiceAgent(Agent):
@@ -265,6 +197,138 @@ class ShuguVoiceAgent(Agent):
     async def on_enter(self) -> None:
         """Called by AgentSession on connection. Sprint B: log voice.session.ready."""
         log.info("voice.session.ready")
+
+    async def on_user_turn_completed(
+        self,
+        turn_ctx: object,
+        new_message: object,
+    ) -> None:
+        """AgentSession Voie A hook — called after STT, before LLM.
+
+        Used when voice_use_agentsession=True. Orchestrates:
+        - intent classification (t2)
+        - filler launch + web search (for WEB_SEARCH intent)
+        - web context injection into chat_ctx
+
+        Metrics t4..t7 (LLM first token, sentence first, TTS first, audio)
+        are not hookable from AgentSession 1.5.5 external API. We log
+        voice.metrics.degraded when this path is active.
+
+        If voice_use_agentsession=False, this method is never called
+        (AgentSession.start() is not invoked in the manual path).
+        """
+        await self._handle_turn_agentsession(turn_ctx, new_message)
+
+    async def _handle_turn_agentsession(
+        self,
+        turn_ctx: object,
+        new_message: object,
+    ) -> None:
+        """AgentSession Voie A turn orchestration.
+
+        Intercepts the user turn BEFORE AgentSession routes to LLM.
+        Runs intent classification, filler, and web search enrichment.
+        Injects web context as a system message into the ChatContext so
+        the native AgentSession LLM sees it (avoids re-implementing LLM call).
+
+        Metrics limitation: t4..t7 cannot be stamped from outside the native
+        LLM/TTS pipeline in 1.5.5. t0 and t2 are logged only.
+        """
+
+        # Safely extract transcript from new_message (ChatMessage)
+        transcript: str = ""
+        if hasattr(new_message, "text_content") and new_message.text_content:
+            transcript = new_message.text_content
+
+        if not transcript:
+            return
+
+        # t2: intent classification
+        intent_match = intent_classifier.classify(transcript)
+        log.info(
+            "voice.regie.intent",
+            intent=intent_match.intent.value,
+            matched_terms=intent_match.matched_terms,
+            pipeline="agentsession",
+        )
+        log.warning("voice.metrics.degraded", reason="agentsession path: t4..t7 not hookable")
+
+        if intent_match.intent != intent_classifier.Intent.WEB_SEARCH:
+            return
+
+        # WEB_SEARCH: launch filler + web search
+        filler_task = None
+        if self._settings.voice_filler_enabled:
+            filler_task = asyncio.create_task(
+                self._filler_bank.play_random(self._audio_source)
+            )
+
+        raw_results = await self._web_search.search(transcript)
+
+        if filler_task is not None:
+            try:
+                await filler_task
+            except asyncio.CancelledError:
+                pass
+
+        # Sanitize and build web context string
+        threshold = self._settings.voice_web_injection_threshold
+        web_snippets: list[str] = []
+        for result in raw_results:
+            signals = _injection_scan(result.snippet)
+            score = min(aggregate_weight(signals) / 5.0, 1.0)
+            if score > threshold:
+                log.warning(
+                    "voice.websearch.snippet_dropped",
+                    score=score,
+                    threshold=threshold,
+                    pipeline="agentsession",
+                )
+            else:
+                web_snippets.append(_neutralize_delimiters(result.snippet))
+
+        if not web_snippets:
+            return
+
+        # BLOCK-2 fix: merge web context INTO the existing instructions message
+        # rather than appending a second system-role message. AgentSession's
+        # update_instructions() (called in agent_activity.py before this hook)
+        # injected Agent.instructions at index 0 with INSTRUCTIONS_MESSAGE_ID.
+        # If we add another role="system" entry, the chat_ctx contains TWO
+        # systems — Gemma's chat template produces undefined output, and the
+        # _LocalLLMStream's last-write-wins extraction silently drops the base
+        # "Tu es Shugu..." prompt entirely on WEB_SEARCH turns.
+        #
+        # Correct merge: rebuild the single instructions text as base + web_context
+        # and re-call update_instructions to overwrite the existing entry in-place.
+        joined = " | ".join(web_snippets)
+        web_block = (
+            " Contexte web récupéré pour répondre à la question : "
+            f"[WEB_CONTEXT]{joined}[/WEB_CONTEXT] "
+            "Utilise ce contexte pour répondre factuellement et brièvement."
+        )
+        # Fetch the current instructions (set by AgentSession from Agent.instructions)
+        # and append the web block. update_instructions overwrites the entry at
+        # INSTRUCTIONS_MESSAGE_ID rather than appending a duplicate.
+        # update_instructions lives in livekit.agents.voice.generation in 1.5.5
+        # (NOT in llm package as one might expect from the import name).
+        try:
+            from livekit.agents.voice.generation import update_instructions
+        except ImportError:  # pragma: no cover — defensive
+            update_instructions = None  # type: ignore[assignment]
+
+        base_instructions = self.instructions or ""
+        merged = base_instructions + web_block
+        if update_instructions is not None and hasattr(turn_ctx, "items"):
+            update_instructions(turn_ctx, instructions=merged, add_if_missing=True)
+        elif hasattr(turn_ctx, "add_message"):
+            # Fallback if update_instructions is unavailable in this SDK version —
+            # log a warning and accept the dual-system degradation as last resort.
+            log.warning(
+                "voice.agentsession.update_instructions_unavailable",
+                reason="falling back to add_message — output quality degraded",
+            )
+            turn_ctx.add_message(role="system", content=web_block.strip())
 
     async def _drain_and_transcribe(self, track: rtc.RemoteAudioTrack) -> None:
         """Sprint D PR2 refacto: delegates to VADDriver.
@@ -798,25 +862,78 @@ async def entrypoint(
         settings.voice_metrics_enabled, registry=prom_registry,
     )
 
-    audio_source = rtc.AudioSource(sample_rate=_LIVEKIT_SAMPLE_RATE, num_channels=1)
-    track = rtc.LocalAudioTrack.create_audio_track("shugu-voice", audio_source)
-
     await ctx.connect(auto_subscribe=AutoSubscribe.AUDIO_ONLY)
-    await ctx.room.local_participant.publish_track(track, rtc.TrackPublishOptions())
-
-    agent = ShuguVoiceAgent(
-        stt, llm, tts, settings, audio_source,
-        filler_bank=filler_bank,
-        metrics=voice_metrics,
-    )
-    await agent.on_enter()
 
     if settings.voice_use_agentsession:
-        # Sprint D PR3 Voie A path — AgentSession owns VAD+STT+LLM+TTS (adapters not in PR D1)
+        # Sprint D PR3 Voie A path — AgentSession owns VAD+STT+LLM+TTS via adapters.
+        # CRITICAL (BLOCK-1 fix): we must NOT publish a manual track here.
+        # AgentSession's _ParticipantAudioOutput creates and publishes its own
+        # `roomio_audio` track when start() is called. Publishing a second
+        # `shugu-voice` track on the same room makes every viewer receive both
+        # streams unsynchronized — guaranteed audio bomb.
+        #
+        # Filler is also incompatible with this path (no shared audio_source to
+        # play it through without re-introducing dual-track). Force NullFillerBank.
+        # Re-enabling filler in agentsession path is a Sprint E task.
+        from livekit.agents import AgentSession
+        from livekit.plugins.silero import VAD as SileroVAD
+
+        from .adapters import LiveKitLocalLLM, LiveKitPiperTTS, LiveKitWhisperSTT
+
+        if not isinstance(filler_bank, NullFillerBank):
+            log.warning(
+                "voice.filler.disabled_in_agentsession_path",
+                reason="dual-track risk; agentsession owns audio output",
+            )
+            filler_bank = NullFillerBank()
+
+        # AgentSession owns the audio_source; agent constructor still receives
+        # one for type compatibility, but it must NEVER publish frames in this
+        # path. We pass a pre-created AudioSource that AgentSession will never
+        # see (the agent uses it only when filler is active, which is now Null).
+        agent_audio_source = rtc.AudioSource(
+            sample_rate=_LIVEKIT_SAMPLE_RATE, num_channels=1,
+        )
+        agent = ShuguVoiceAgent(
+            stt, llm, tts, settings, agent_audio_source,
+            filler_bank=filler_bank,
+            metrics=voice_metrics,
+        )
+        await agent.on_enter()
+
+        stt_adapter = LiveKitWhisperSTT(stt)
+        tts_adapter = LiveKitPiperTTS(tts)
+        llm_adapter = LiveKitLocalLLM(llm)
+        silero_vad = SileroVAD.load()
+
+        agent_session = AgentSession(
+            stt=stt_adapter,
+            tts=tts_adapter,
+            llm=llm_adapter,
+            vad=silero_vad,
+        )
         ctx.add_shutdown_callback(agent._on_shutdown)
         log.info("voice.session.start", room=ctx.room.name, pipeline="agentsession")
+        await agent_session.start(agent, room=ctx.room)
     else:
-        # Sprint C path (default) — manual VAD + _handle_turn_streaming
+        # Sprint C path (default) — manual VAD + _handle_turn_streaming. We
+        # create AND publish the shugu-voice track here because the manual path
+        # owns audio output (filler + TTS go through audio_source.capture_frame).
+        audio_source = rtc.AudioSource(
+            sample_rate=_LIVEKIT_SAMPLE_RATE, num_channels=1,
+        )
+        track = rtc.LocalAudioTrack.create_audio_track("shugu-voice", audio_source)
+        await ctx.room.local_participant.publish_track(
+            track, rtc.TrackPublishOptions(),
+        )
+
+        agent = ShuguVoiceAgent(
+            stt, llm, tts, settings, audio_source,
+            filler_bank=filler_bank,
+            metrics=voice_metrics,
+        )
+        await agent.on_enter()
+
         async def _on_track_subscribed(
             remote_track: rtc.Track,
             publication: rtc.RemoteTrackPublication,
