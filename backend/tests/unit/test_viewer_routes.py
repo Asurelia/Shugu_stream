@@ -125,7 +125,7 @@ def test_ws_connect_without_token_rejected(client: TestClient) -> None:
     """Sans token query → close 4401."""
     from starlette.websockets import WebSocketDisconnect
     with pytest.raises(WebSocketDisconnect) as exc:
-        with client.websocket_connect("/viewer/events") as ws:
+        with client.websocket_connect("/ws/viewer/events") as ws:
             ws.receive_text()
     assert exc.value.code == 4401
 
@@ -133,7 +133,7 @@ def test_ws_connect_without_token_rejected(client: TestClient) -> None:
 def test_ws_connect_with_invalid_token_rejected(client: TestClient) -> None:
     from starlette.websockets import WebSocketDisconnect
     with pytest.raises(WebSocketDisconnect) as exc:
-        with client.websocket_connect("/viewer/events?token=not-a-jwt") as ws:
+        with client.websocket_connect("/ws/viewer/events?token=not-a-jwt") as ws:
             ws.receive_text()
     assert exc.value.code == 4401
 
@@ -145,7 +145,7 @@ def test_ws_connect_with_expired_token_rejected(
     expired = _issue_viewer_jwt(settings, ttl=1)
     time.sleep(2)
     with pytest.raises(WebSocketDisconnect) as exc:
-        with client.websocket_connect(f"/viewer/events?token={expired}") as ws:
+        with client.websocket_connect(f"/ws/viewer/events?token={expired}") as ws:
             ws.receive_text()
     assert exc.value.code == 4401
 
@@ -155,7 +155,7 @@ def test_ws_connect_with_valid_token_accepted(
 ) -> None:
     """Token valide → on doit recevoir le `hello` immédiat."""
     token = _issue_viewer_jwt(settings)
-    with client.websocket_connect(f"/viewer/events?token={token}") as ws:
+    with client.websocket_connect(f"/ws/viewer/events?token={token}") as ws:
         hello = ws.receive_json()
         assert hello["type"] == "hello"
         assert hello["session_id"] == "voice-sess-abc"
@@ -171,7 +171,7 @@ def test_ws_receives_scene_apply_event(
 ) -> None:
     """Publish scene.apply sur event_bus → le client connecté le reçoit."""
     token = _issue_viewer_jwt(settings, session_id="voice-sess-abc")
-    with client.websocket_connect(f"/viewer/events?token={token}") as ws:
+    with client.websocket_connect(f"/ws/viewer/events?token={token}") as ws:
         assert ws.receive_json()["type"] == "hello"
 
         # Publish via la loop du TestClient (anyio portal). Le coroutine
@@ -201,7 +201,7 @@ def test_ws_receives_voice_interrupt_event(
 ) -> None:
     """voice.interrupt sur le bus → reçu côté client."""
     token = _issue_viewer_jwt(settings, session_id="voice-sess-abc")
-    with client.websocket_connect(f"/viewer/events?token={token}") as ws:
+    with client.websocket_connect(f"/ws/viewer/events?token={token}") as ws:
         assert ws.receive_json()["type"] == "hello"
 
         envelope = {
@@ -226,7 +226,7 @@ def test_ws_filters_events_by_session_id(
 ) -> None:
     """Un event avec un session_id différent du token claim n'est PAS reçu."""
     token = _issue_viewer_jwt(settings, session_id="voice-sess-mine")
-    with client.websocket_connect(f"/viewer/events?token={token}") as ws:
+    with client.websocket_connect(f"/ws/viewer/events?token={token}") as ws:
         assert ws.receive_json()["type"] == "hello"
 
         # Event 1 — session différente, devrait être filtré
@@ -272,7 +272,7 @@ def test_ws_passes_events_without_session_id(
     doit pas rompre les events legacy. Filter strict = present-and-mismatch.
     """
     token = _issue_viewer_jwt(settings, session_id="voice-sess-mine")
-    with client.websocket_connect(f"/viewer/events?token={token}") as ws:
+    with client.websocket_connect(f"/ws/viewer/events?token={token}") as ws:
         assert ws.receive_json()["type"] == "hello"
 
         # Pas de session_id dans le payload — legacy
@@ -302,7 +302,7 @@ def test_ws_ignores_non_director_origin(
     un event scénique côté viewer.
     """
     token = _issue_viewer_jwt(settings)
-    with client.websocket_connect(f"/viewer/events?token={token}") as ws:
+    with client.websocket_connect(f"/ws/viewer/events?token={token}") as ws:
         assert ws.receive_json()["type"] == "hello"
 
         # Faux event, origin="visitor"
@@ -372,16 +372,16 @@ def test_ws_rate_limit_max_connections_per_user(
 
     with ExitStack() as stack:
         ws1 = stack.enter_context(
-            client.websocket_connect(f"/viewer/events?token={token1}"),
+            client.websocket_connect(f"/ws/viewer/events?token={token1}"),
         )
         assert ws1.receive_json()["type"] == "hello"
         ws2 = stack.enter_context(
-            client.websocket_connect(f"/viewer/events?token={token2}"),
+            client.websocket_connect(f"/ws/viewer/events?token={token2}"),
         )
         assert ws2.receive_json()["type"] == "hello"
 
         with pytest.raises(WebSocketDisconnect) as exc:
-            with client.websocket_connect(f"/viewer/events?token={token3}") as ws3:
+            with client.websocket_connect(f"/ws/viewer/events?token={token3}") as ws3:
                 ws3.receive_text()
         assert exc.value.code == 4429
 
@@ -400,11 +400,11 @@ def test_ws_rejects_second_connection_with_same_token(
     from starlette.websockets import WebSocketDisconnect
 
     token = _issue_viewer_jwt(settings, session_id="voice-sess-abc")
-    with client.websocket_connect(f"/viewer/events?token={token}") as ws1:
+    with client.websocket_connect(f"/ws/viewer/events?token={token}") as ws1:
         assert ws1.receive_json()["type"] == "hello"
         # 2e tentative avec le MÊME token — refusée
         with pytest.raises(WebSocketDisconnect) as exc:
-            with client.websocket_connect(f"/viewer/events?token={token}") as ws2:
+            with client.websocket_connect(f"/ws/viewer/events?token={token}") as ws2:
                 ws2.receive_text()
         assert exc.value.code == 4429
 
@@ -430,10 +430,10 @@ def test_ws_cleanup_decrements_counter_on_disconnect(
     token2 = _issue_viewer_jwt(settings, session_id="s2")
 
     # 1ère connexion — OK
-    with client.websocket_connect(f"/viewer/events?token={token1}") as ws1:
+    with client.websocket_connect(f"/ws/viewer/events?token={token1}") as ws1:
         assert ws1.receive_json()["type"] == "hello"
     # Après disconnect, on doit pouvoir en ouvrir une autre
-    with client.websocket_connect(f"/viewer/events?token={token2}") as ws2:
+    with client.websocket_connect(f"/ws/viewer/events?token={token2}") as ws2:
         assert ws2.receive_json()["type"] == "hello"
 
 
@@ -444,7 +444,7 @@ def test_ws_cleanup_decrements_counter_on_disconnect(
 
 def test_post_voice_token_requires_user_auth(client: TestClient) -> None:
     """Sans cookie user → 401."""
-    resp = client.post("/voice/token", json={"session_id": "voice-sess-abc"})
+    resp = client.post("/api/voice/token", json={"session_id": "voice-sess-abc"})
     assert resp.status_code == 401
 
 
@@ -453,7 +453,7 @@ def test_post_voice_token_returns_jwt_and_livekit_url(
 ) -> None:
     user_jwt = _issue_user_token(settings, user_id="user_alice")
     resp = client.post(
-        "/voice/token",
+        "/api/voice/token",
         json={"session_id": "voice-sess-abc"},
         cookies={"shugu_user_access": user_jwt},
     )
@@ -484,7 +484,7 @@ def test_post_voice_token_503_if_livekit_not_configured(
 
     user_jwt = _issue_user_token(settings, user_id="user_alice")
     resp = client.post(
-        "/voice/token",
+        "/api/voice/token",
         json={"session_id": "voice-sess-abc"},
         cookies={"shugu_user_access": user_jwt},
     )
@@ -497,7 +497,7 @@ def test_post_voice_token_invalid_session_id(
     user_jwt = _issue_user_token(settings)
     # Empty session_id
     resp = client.post(
-        "/voice/token",
+        "/api/voice/token",
         json={"session_id": ""},
         cookies={"shugu_user_access": user_jwt},
     )
@@ -516,7 +516,7 @@ def test_post_voice_token_refresh_returns_new_token(
     old = _issue_viewer_jwt(settings, user_id="u", session_id="voice-sess-abc")
     time.sleep(1)
     resp = client.post(
-        "/voice/token/refresh",
+        "/api/voice/token/refresh",
         headers={"Authorization": f"Bearer {old}"},
     )
     assert resp.status_code == 200, resp.text
@@ -528,7 +528,7 @@ def test_post_voice_token_refresh_returns_new_token(
 
 
 def test_post_voice_token_refresh_without_auth(client: TestClient) -> None:
-    resp = client.post("/voice/token/refresh")
+    resp = client.post("/api/voice/token/refresh")
     assert resp.status_code == 401
 
 
@@ -550,7 +550,7 @@ def test_post_voice_token_refresh_long_expired_rejected(
         algorithm="HS256",
     )
     resp = client.post(
-        "/voice/token/refresh",
+        "/api/voice/token/refresh",
         headers={"Authorization": f"Bearer {forged_old}"},
     )
     assert resp.status_code == 401
@@ -562,7 +562,7 @@ def test_post_voice_token_refresh_long_expired_rejected(
 
 
 def test_get_viewer_state_requires_auth(client: TestClient) -> None:
-    resp = client.get("/viewer/state")
+    resp = client.get("/api/viewer/state")
     assert resp.status_code == 401
 
 
@@ -587,7 +587,7 @@ def test_get_viewer_state_returns_snapshot(
     client.portal.call(_setup)
 
     resp = client.get(
-        "/viewer/state",
+        "/api/viewer/state",
         headers={"Authorization": f"Bearer {token}"},
     )
     assert resp.status_code == 200, resp.text
@@ -601,7 +601,7 @@ def test_get_viewer_state_returns_snapshot(
 
 def test_get_viewer_state_with_invalid_token(client: TestClient) -> None:
     resp = client.get(
-        "/viewer/state",
+        "/api/viewer/state",
         headers={"Authorization": "Bearer bogus"},
     )
     assert resp.status_code == 401

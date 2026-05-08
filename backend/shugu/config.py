@@ -684,6 +684,16 @@ class Settings(BaseSettings):
                 "Génère un secret aléatoire 32+ chars : "
                 "python -c 'import secrets; print(secrets.token_urlsafe(32))'"
             )
+        # D-3 review fix Medium-1 : viewer_jwt_secret doit aussi être validé
+        # en production. Sans, l'app démarre OK et chaque verify_viewer_token
+        # retourne 401 silencieux ("viewer auth not configured") — exactement
+        # le bug class que ce validator est censé prévenir.
+        if not self.viewer_jwt_secret.strip():
+            raise ValueError(
+                "SHUGU_VIEWER_JWT_SECRET obligatoire en production (sécurité auth viewer/avatar bridge). "
+                "Génère un secret aléatoire 32+ chars : "
+                "python -c 'import secrets; print(secrets.token_urlsafe(32))'"
+            )
         return self
 
     @field_validator("ip_hash_salt", mode="after")

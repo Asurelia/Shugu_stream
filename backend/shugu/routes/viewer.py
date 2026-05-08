@@ -38,7 +38,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 import time
 from contextlib import suppress
 from dataclasses import dataclass
@@ -67,7 +66,6 @@ from ..director.state_store import DirectorStateStore
 
 router = APIRouter()
 log = structlog.get_logger(__name__)
-_log_std = logging.getLogger(__name__)
 
 # Topic réutilisé du Scene Editor WS — les workers Director publient déjà ici.
 EDITOR_BROADCAST_TOPIC = "editor:broadcast"
@@ -256,7 +254,7 @@ async def _release_connection_slot(redis, user_id: str) -> None:
 # ─────────────────────────────────────────────────────────────────────────
 
 
-@router.websocket("/viewer/events")
+@router.websocket("/ws/viewer/events")
 async def viewer_events_ws(
     ws: WebSocket,
     token: Optional[str] = Query(None),
@@ -324,7 +322,16 @@ async def viewer_events_ws(
         )
         return
 
-    await ws.accept()
+    # Critical fix review D-3 : echo le sous-protocole reçu pour rendre le
+    # path Sec-WebSocket-Protocol fonctionnel (RFC 6455 §4.2.2 — sans echo,
+    # Chrome/Firefox rejettent la connexion). Permet au client navigateur
+    # d'éviter de mettre le JWT en query-string (logué par uvicorn + nginx).
+    # Si le client n'a pas envoyé de subprotocol (path query-string), on
+    # accept normalement sans echo.
+    if sec_websocket_protocol:
+        await ws.accept(subprotocol=sec_websocket_protocol)
+    else:
+        await ws.accept()
     log.info(
         "viewer_ws.connect",
         user_id=claims.sub,
@@ -439,7 +446,7 @@ async def _safe_send_json(ws: WebSocket, data: dict) -> None:
 # ─────────────────────────────────────────────────────────────────────────
 
 
-@router.post("/voice/token", response_model=VoiceTokenResponse)
+@router.post("/api/voice/token", response_model=VoiceTokenResponse)
 async def voice_token_bootstrap(
     body: VoiceTokenRequest,
     request: Request,
@@ -514,7 +521,7 @@ def _extract_bearer(authorization: Optional[str]) -> str:
     return authorization[len("bearer "):].strip()
 
 
-@router.post("/voice/token/refresh", response_model=VoiceTokenRefreshResponse)
+@router.post("/api/voice/token/refresh", response_model=VoiceTokenRefreshResponse)
 async def voice_token_refresh(
     request: Request,
     authorization: Optional[str] = Header(None),
@@ -541,7 +548,7 @@ async def voice_token_refresh(
 # ─────────────────────────────────────────────────────────────────────────
 
 
-@router.get("/viewer/state", response_model=ViewerStateResponse)
+@router.get("/api/viewer/state", response_model=ViewerStateResponse)
 async def get_viewer_state(
     request: Request,
     authorization: Optional[str] = Header(None),

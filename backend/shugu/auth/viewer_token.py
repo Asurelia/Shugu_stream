@@ -176,7 +176,7 @@ def verify_viewer_token(
         # Couvre : mauvais issuer, signature invalide, token malformé,
         # claim required manquante.
         raise HTTPException(
-            status_code=401, detail=f"invalid token: {exc}",
+            status_code=401, detail="invalid token",
         ) from exc
 
     if payload.get("typ") != TYP:
@@ -247,7 +247,7 @@ def refresh_viewer_token(
         )
     except jwt.InvalidTokenError as exc:
         raise HTTPException(
-            status_code=401, detail=f"invalid token: {exc}",
+            status_code=401, detail="invalid token",
         ) from exc
 
     if payload.get("typ") != TYP:
