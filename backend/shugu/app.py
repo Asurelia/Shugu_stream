@@ -47,6 +47,7 @@ from .routes import (
     auth,
     editor_ws,
     health,
+    observatory,
     operator_ws,
     registry_api,
     scene_composer_api,
@@ -343,6 +344,10 @@ async def lifespan(app: FastAPI):
     editor_ws.set_deps(editor_ws.EditorWSDeps(
         event_bus=event_bus, settings=settings, redis=_redis,
     ))
+    # Observatory SSE (Sprint mos-A) — flux temps réel des events workers.
+    # Lit le bus event partagé en read-only ; aucun side effect possible côté
+    # producteurs. Topic set restreint aux flux JSON-safe (pas `stage`).
+    observatory.set_deps(observatory.ObservatoryDeps(event_bus=event_bus))
     # World WS — Phase L4. Broadcast world.delta vers les viewers 3D.
     # `world_store` injecté pour permettre l'envoi du snapshot initial aux
     # late-joiners (régression P1 review #56). None tant que
@@ -644,6 +649,7 @@ def create_app() -> FastAPI:
     app.include_router(account.router)       # /account/* — self-service user auth (v4 Phase 1)
     app.include_router(admin.router)
     app.include_router(admin_users.router)   # /api/admin/users — VIP promote/revoke
+    app.include_router(observatory.router)   # /api/admin/observatory/events — Sprint mos-A SSE
     app.include_router(registry_api.public_router)
     app.include_router(registry_api.admin_router)
     app.include_router(scene_editor_api.router)  # /api/scene-editor/* — Phase C drafts/patterns/layouts/timeline

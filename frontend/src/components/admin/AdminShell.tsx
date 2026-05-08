@@ -26,13 +26,15 @@ type Section =
   | "assets"
   | "schedule"
   | "moderation"
-  | "users";
+  | "users"
+  | "observatory";
 
 type SidebarItem = { section: Section; label: string; path: string; icon: string };
 
 const SIDEBAR: SidebarItem[] = [
   { section: "overview",     label: "Live Control",  path: "",               icon: "◉" },
   { section: "scene-editor", label: "Scene Editor",  path: "/scene-editor-v2",  icon: "◈" },
+  { section: "observatory",  label: "Observatory",   path: "/observatory",   icon: "⌬" },
   { section: "analytics",    label: "Analytics",     path: "/analytics",     icon: "∿" },
   { section: "community",    label: "Community",     path: "/community",     icon: "✦" },
   { section: "assets",       label: "Assets",        path: "/assets",        icon: "◇" },
