@@ -35,6 +35,9 @@ from livekit import rtc
 from livekit.agents import Agent, AutoSubscribe, JobContext, WorkerOptions
 from livekit.agents.worker import AgentServer
 
+from shugu.regie.voice_intent import intent_classifier, tool_call_parser
+from shugu.regie.voice_intent.web_search import WebSearchAggregator, WebSearchProvider
+
 from ..adapters.injection_detector import aggregate_weight
 from ..adapters.injection_detector import scan as _injection_scan
 from ..config import Settings, get_settings
@@ -55,8 +58,6 @@ from .metrics import (
     get_null_recorder,
     make_recorder,
 )
-from .regie import intent_classifier, tool_call_parser
-from .regie.web_search import WebSearchAggregator, WebSearchProvider
 from .stt_local import WhisperSTT
 from .tts_local import PiperTTS
 from .vad_driver import VADDriver
@@ -98,11 +99,11 @@ def _neutralize_delimiters(snippet: str) -> str:
     return snippet.replace(_WEB_CONTEXT_OPEN, "").replace(_WEB_CONTEXT_CLOSE, "")
 
 
-# Tool-call markers and streaming filter — moved to regie/tool_call_parser.py
-# in PR3 to prevent circular import from adapters/livekit_llm.py.
-# Re-exported here for backward compatibility with existing tests that import
-# from this module directly.
-from .regie.tool_call_parser import (  # noqa: E402
+# Tool-call markers and streaming filter — relocated to
+# `shugu.regie.voice_intent.tool_call_parser` (Sprint R.0.5, refactor depuis
+# `shugu.voice.regie.tool_call_parser`) pour éviter l'import circulaire avec
+# `adapters/livekit_llm.py`. Réexporté ici pour compat tests existants.
+from shugu.regie.voice_intent.tool_call_parser import (  # noqa: E402
     _strip_tool_calls_streaming,
 )
 

@@ -17,8 +17,9 @@ import uuid
 from livekit.agents import llm as agents_llm
 from livekit.agents.types import NOT_GIVEN, APIConnectOptions, NotGivenOr
 
+from shugu.regie.voice_intent.tool_call_parser import _strip_tool_calls_streaming
+
 from ..llm_local import LocalLLM
-from ..regie.tool_call_parser import _strip_tool_calls_streaming
 
 
 class _LocalLLMStream(agents_llm.LLMStream):

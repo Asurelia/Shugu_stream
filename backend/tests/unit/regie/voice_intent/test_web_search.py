@@ -15,7 +15,7 @@ import respx
 from httpx import Response
 
 from shugu.config import Settings
-from shugu.voice.regie.web_search import (
+from shugu.regie.voice_intent.web_search import (
     _BRAVE_SEARCH_URL,
     _TAVILY_SEARCH_URL,
     BraveProvider,
