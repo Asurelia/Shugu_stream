@@ -68,6 +68,50 @@ class Settings(BaseSettings):
     user_access_ttl_s: int = 3600      # 1 h
     user_refresh_ttl_s: int = 2592000  # 30 j
 
+    # Auth viewer (voice/avatar bridge) — Sprint D PR D-3
+    # Secret séparé des JWT operator/user pour cloisonnement de la surface
+    # d'attaque /viewer/events. Le claim signe `session_id` pour empêcher
+    # un cross-session spoofing (un token émis pour la session A ne peut pas
+    # consommer les events d'une session B).
+    viewer_jwt_secret: str = Field(
+        default="",
+        validation_alias=AliasChoices("VIEWER_JWT_SECRET", "SHUGU_VIEWER_JWT_SECRET"),
+        description="HS256 secret pour les JWT viewer (auth /viewer/events). "
+                    "Cloisonné du SHUGU_JWT_SECRET (operator) et SHUGU_USER_JWT_SECRET. "
+                    "Spec : docs/specs/2026-05-08-voice-body-pipeline-design.md §6.3. "
+                    "Env : SHUGU_VIEWER_JWT_SECRET (ou VIEWER_JWT_SECRET).",
+    )
+    viewer_token_ttl_s: int = Field(
+        default=300,  # 5 min — TTL court (spec §6.3 + ADR table §2.2)
+        ge=30,
+        le=3600,
+        validation_alias=AliasChoices("VIEWER_TOKEN_TTL_S", "SHUGU_VIEWER_TOKEN_TTL_S"),
+        description="TTL d'un viewer token (secondes). Défaut 300 (5 min). "
+                    "Bornes [30, 3600]. Le frontend refresh à T-60s avant expiration.",
+    )
+    viewer_token_refresh_grace_s: int = Field(
+        default=120,  # 2 min — fenêtre anti-replay refresh
+        ge=10,
+        le=600,
+        validation_alias=AliasChoices(
+            "VIEWER_TOKEN_REFRESH_GRACE_S", "SHUGU_VIEWER_TOKEN_REFRESH_GRACE_S"
+        ),
+        description="Fenêtre (s) après expiration pendant laquelle un viewer token "
+                    "peut encore être refreshed (anti-replay). Défaut 120 (2 min). "
+                    "Bornes [10, 600].",
+    )
+    viewer_max_connections_per_user: int = Field(
+        default=5,
+        ge=1,
+        le=50,
+        validation_alias=AliasChoices(
+            "VIEWER_MAX_CONNECTIONS_PER_USER",
+            "SHUGU_VIEWER_MAX_CONNECTIONS_PER_USER",
+        ),
+        description="Limite de WS /viewer/events concurrentes par user. "
+                    "Défaut 5. Bornes [1, 50]. Spec §6.3 rate limit.",
+    )
+
     # Email (Resend) — envoi des mails de vérification et notifications VIP.
     resend_api_key: str = ""
     email_from: str = "shugu@spoukie.uk"
@@ -637,6 +681,16 @@ class Settings(BaseSettings):
         if not self.user_jwt_secret.strip():
             raise ValueError(
                 "SHUGU_USER_JWT_SECRET obligatoire en production (sécurité auth user). "
+                "Génère un secret aléatoire 32+ chars : "
+                "python -c 'import secrets; print(secrets.token_urlsafe(32))'"
+            )
+        # D-3 review fix Medium-1 : viewer_jwt_secret doit aussi être validé
+        # en production. Sans, l'app démarre OK et chaque verify_viewer_token
+        # retourne 401 silencieux ("viewer auth not configured") — exactement
+        # le bug class que ce validator est censé prévenir.
+        if not self.viewer_jwt_secret.strip():
+            raise ValueError(
+                "SHUGU_VIEWER_JWT_SECRET obligatoire en production (sécurité auth viewer/avatar bridge). "
                 "Génère un secret aléatoire 32+ chars : "
                 "python -c 'import secrets; print(secrets.token_urlsafe(32))'"
             )
