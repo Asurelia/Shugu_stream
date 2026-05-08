@@ -19,6 +19,8 @@ import { useRouter } from "next/navigation";
 
 import { ChatFeed } from "@/components/ChatFeed";
 import { EmoteOverlay, EmoteOverlayHandle } from "@/components/EmoteOverlay";
+import { LiveKitProvider } from "@/features/livekit/LiveKitProvider";
+import { ViewerEventsProvider } from "@/features/viewer/ViewerEventsProvider";
 import { LiquidGlassFilter } from "@/components/LiquidGlassRail";
 import { LoadingScreen } from "@/components/LoadingScreen";
 import { SpeakingRing } from "@/components/SpeakingRing";
@@ -422,7 +424,24 @@ export function HomeClient() {
     setInputValue("");
   };
 
-  return (
+  // Sprint D PR D-8 wiring : LiveKitProvider (audio TTS streaming) +
+  // ViewerEventsProvider (events scéniques scene.apply / voice.interrupt) sont
+  // montés ICI à côté de `<VrmViewer />`. Ils partagent le hook
+  // `useViewerToken` mutualisé qui fetch + refresh proactif T-60s.
+  //
+  // Gate `operator` (passé via `enabled`) : `POST /api/voice/token` exige un
+  // cookie `shugu_user_access` valide (route 401 sans). Sans ce gate, un
+  // visiteur anonyme verrait un toast d'erreur permanent. Pour Sprint D MVP,
+  // voice est réservé aux user authentifiés. Sprint E ouvrira aux visiteurs
+  // (token anonymous-but-rate-limited).
+  //
+  // On wrap INCONDITIONNELLEMENT par les deux Providers (vs swap on/off de
+  // l'arbre racine) pour éviter qu'un login mid-session unmount + remount le
+  // sous-arbre `<VrmViewer />` (28 MB de re-parsing). `enabled` est plumbed
+  // jusqu'au hook `useViewerToken` qui no-op tant qu'il est false.
+  const voiceWiringActive = !!operator;
+
+  const innerStage = (
     <div className="font-quicksand">
       <LiquidGlassFilter />
 
@@ -494,5 +513,16 @@ export function HomeClient() {
         </div>
       )}
     </div>
+  );
+
+  // D-8 wiring : wrap inconditionnel par les deux Providers, qui no-op
+  // (skip fetch token + skip WebSocket) tant que `enabled` est false.
+  // Préserve l'identité du sous-arbre `<VrmViewer />` à travers un login.
+  return (
+    <LiveKitProvider enabled={voiceWiringActive}>
+      <ViewerEventsProvider enabled={voiceWiringActive}>
+        {innerStage}
+      </ViewerEventsProvider>
+    </LiveKitProvider>
   );
 }

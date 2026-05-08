@@ -2,18 +2,23 @@
  * LiveKitProvider — Context React qui gère la session LiveKit côté viewer.
  *
  * Sprint D PR D-6 (voice-body pipeline) : ce Provider est monté dans le
- * viewer page React une fois le VRM chargé. Au mount, il :
+ * viewer page React une fois le VRM chargé.
  *
- *   1. Fetch un JWT viewer-token via `POST /api/voice/token`.
- *   2. Instancie un `LiveKitClient` avec le token + l'URL retournés.
+ * Sprint D PR D-8 (refactor) : le fetch + refresh proactif du token est
+ * désormais délégué au hook `useViewerToken()` mutualisé avec
+ * `ViewerEventsProvider`. Le Provider ne fetche plus directement — il consomme
+ * `{ token, livekitUrl }` depuis le hook et instancie LiveKitClient une seule
+ * fois (pas de re-instantiation sur refresh, sinon l'audio serait silencié
+ * toutes les ~4 minutes).
+ *
+ * Workflow au mount :
+ *   1. `useViewerToken()` fetch `/api/voice/token` (mutualisé entre Providers).
+ *   2. Une fois `token` + `livekitUrl` dispo, instancie un `LiveKitClient`.
  *   3. Quand le client signale un audio track (callback `onAudioTrack`), il
  *      branche le `HTMLAudioElement` sur l'analyser lipSync du viewer via
- *      `viewer.model.attachStreamingAudio(audio)`. Conséquence : les
- *      blendshapes mouth de l'avatar bougent en synchro avec la TTS.
+ *      `viewer.model.attachStreamingAudio(audio)`.
  *   4. Si l'AudioContext est suspendu (Chrome autoplay policy), il affiche
- *      un overlay "Click to start audio" qui appelle `audioContext.resume()`
- *      sur l'AudioContext exposé par le viewer (PAS un nouveau context, sinon
- *      les deux graphs deviendraient désynchronisés).
+ *      un overlay "Click to start audio" qui appelle `audioContext.resume()`.
  *   5. Au unmount, il appelle `client.disconnect()` pour libérer la Room.
  *
  * Les valeurs exposées via le Context :
@@ -39,18 +44,11 @@ import {
 } from "react";
 import { ViewerContext } from "@/features/vrmViewer/viewerContext";
 import { LiveKitClient } from "./LiveKitClient";
-import { buildUrl } from "@/utils/buildUrl";
+import { useViewerToken } from "@/features/viewer/useViewerToken";
 
-/** Réponse attendue de `POST /api/voice/token`. Aligné sur le pattern existant
- *  `mintVIPToken` (services/livekitClient.ts) : `{ token, url, room }`. */
-interface VoiceTokenResponse {
-  token: string;
-  url: string;
-  room?: string;
-}
-
-/** Endpoint pour récupérer un viewer-token TTL court (5 min, cf spec §6.3).
- *  `buildUrl` préfixe le `NEXT_PUBLIC_BASE_PATH` éventuel. */
+/** Endpoint historique exposé pour compat — le fetch concret est désormais
+ *  encapsulé dans `useViewerToken`. Conservé pour les imports externes
+ *  (ne pas supprimer sans audit). */
 export const VOICE_TOKEN_ENDPOINT = "/api/voice/token";
 
 /** Surface du Context React exposée aux consumers via `useLiveKit()`. */
@@ -84,10 +82,13 @@ export function useLiveKit(): LiveKitContextValue {
 interface LiveKitProviderProps {
   children: ReactNode;
   /**
-   * Override l'endpoint de fetch du token (utile pour tests / déploiements
-   * derrière un reverse-proxy avec préfixe non-standard).
+   * Active ou désactive le pipeline voice. Quand `false`, le Provider rend
+   * uniquement les children sans fetcher de token ni instancier de LiveKit
+   * client. Permet de wrap toujours l'arbre par les Providers (évite un
+   * remount du `<VrmViewer />` quand l'user log in mid-session) tout en
+   * gardant le voice pipeline gated derrière l'auth. Défaut : true.
    */
-  tokenEndpoint?: string;
+  enabled?: boolean;
 }
 
 /**
@@ -100,17 +101,30 @@ interface LiveKitProviderProps {
  * ne fire qu'UNE fois par session — sans gestion explicite, l'audio serait
  * perdu pour toute la session avec zéro signal user. On poll donc 100ms x 300
  * (30s cap) jusqu'à ce que le model soit ready, puis on flush l'audio en attente.
+ *
+ * IMPORTANT D-8 : `useViewerToken()` peut update son `state.token` à T-60s avant
+ * exp (refresh proactif). Le Provider ne re-instancie PAS LiveKitClient sur ce
+ * change — sinon l'audio serait silencé toutes les ~4 minutes. Le client conserve
+ * son token initial pour la durée de la session active ; le refresh sert à
+ * fournir un token frais pour le PROCHAIN connect (transient drop, remount).
+ * Cf spec §6.3 + design notes useViewerToken.
  */
 export function LiveKitProvider({
   children,
-  tokenEndpoint = VOICE_TOKEN_ENDPOINT,
+  enabled = true,
 }: LiveKitProviderProps): JSX.Element {
   const { viewer } = useContext(ViewerContext);
+  const { token, livekitUrl, error: tokenError } = useViewerToken({ enabled });
 
   const [isConnected, setIsConnected] = useState(false);
   const [isReconnecting, setIsReconnecting] = useState(false);
   const [needsUserGesture, setNeedsUserGesture] = useState(false);
-  const [error, setError] = useState<Error | null>(null);
+  const [connectError, setConnectError] = useState<Error | null>(null);
+
+  // L'erreur affichée à l'user est la première qui survient : token (priorité
+  // haute, bloque tout) sinon la connect error (Room.connect KO mais token OK).
+  // Dérivation pure → pas d'effect de synchro qui forcerait un re-render.
+  const error: Error | null = tokenError ?? connectError;
 
   // On garde une ref vers le client pour le cleanup au unmount sans
   // re-render inutile.
@@ -150,45 +164,30 @@ export function LiveKitProvider({
   useEffect(() => {
     let cancelled = false;
 
+    if (!enabled) {
+      // Voice gated derrière l'auth. Le hook ne fetch même pas dans cet état.
+      return;
+    }
+    // Garde anti-reinstantiation : si un client existe déjà, on ne re-rentre
+    // PAS dans bootstrap quand `token` change (refresh proactif T-60s).
+    if (clientRef.current) {
+      return;
+    }
+    // Attend que le hook ait délivré le token + l'URL.
+    if (!token || !livekitUrl) {
+      return;
+    }
+
     /**
      * Bootstrap pipeline :
-     *   fetch token → instancie LiveKitClient → connect →
+     *   instancie LiveKitClient → connect →
      *   onAudioTrack câble lipSync.attachStreamingAudio.
      */
     const bootstrap = async (): Promise<void> => {
       try {
-        const resp = await fetch(buildUrl(tokenEndpoint), {
-          method: "POST",
-          credentials: "include",
-          headers: { "Content-Type": "application/json" },
-        });
-        if (cancelled) return;
-
-        if (!resp.ok) {
-          let detail = `HTTP ${resp.status}`;
-          try {
-            const payload = await resp.json();
-            if (payload && typeof payload.detail === "string") {
-              detail = payload.detail;
-            }
-          } catch {
-            // body non-JSON → on garde le détail HTTP générique
-          }
-          throw new Error(`voice-token fetch failed: ${detail}`);
-        }
-
-        const data = (await resp.json()) as VoiceTokenResponse;
-        if (cancelled) return;
-
-        if (!data?.token || !data?.url) {
-          throw new Error(
-            "voice-token response missing required fields (token, url)",
-          );
-        }
-
         const client = new LiveKitClient({
-          url: data.url,
-          token: data.token,
+          url: livekitUrl,
+          token,
           onAudioTrack: (_track, audio) => {
             // Tente l'attach maintenant. Retourne true si succès (model était
             // ready), false si on doit poll en attendant que le VRM finisse
@@ -253,7 +252,7 @@ export function LiveKitProvider({
                 console.error(
                   "[LiveKit] viewer.model never became ready after 30s — audio dropped, session degraded.",
                 );
-                setError(
+                setConnectError(
                   new Error("VRM model never loaded — audio attach failed"),
                 );
               }
@@ -285,7 +284,7 @@ export function LiveKitProvider({
       } catch (err) {
         if (cancelled) return;
         console.error("[LiveKit] bootstrap failed:", err);
-        setError(err instanceof Error ? err : new Error(String(err)));
+        setConnectError(err instanceof Error ? err : new Error(String(err)));
       }
     };
 
@@ -304,14 +303,12 @@ export function LiveKitProvider({
       clientRef.current = null;
     };
     // viewer is a context-singleton (see viewerContext.ts) — stable across
-    // renders. tokenEndpoint is a prop, on re-fetch si parent en change.
-  }, [viewer, tokenEndpoint]);
+    // renders. token + livekitUrl viennent du hook useViewerToken : on
+    // ne re-rentre dans bootstrap() qu'au mount initial (guarded ci-dessus).
+    // `enabled` flip false→true ré-arme le bootstrap.
+  }, [viewer, token, livekitUrl, enabled]);
 
-  // TODO(D-7): proactive token refresh à T-60s avant expiration.
-  // Token TTL = 5 min (spec §6.3). Sans refresh, Room.connect() lors d'un
-  // reconnect après 5min échouera silencieusement (401). Voir spec §3.2.
-  // Implémenter dans le hook `useViewerToken()` proposé par la review D-6
-  // (mutualisable avec ViewerEventsClient).
+  // Token refresh proactif T-60s : géré par `useViewerToken` (D-8).
 
   const value: LiveKitContextValue = {
     isConnected,

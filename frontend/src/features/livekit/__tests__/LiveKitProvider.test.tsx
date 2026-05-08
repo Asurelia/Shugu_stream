@@ -116,7 +116,9 @@ function renderProvider(viewer: FakeViewer): void {
 
 beforeEach(() => {
   liveKitInstances.length = 0;
-  // fetch stub par défaut : token OK
+  // fetch stub par défaut : token OK.
+  // Note D-8 : `useViewerToken` hook attend désormais `expires_at` (epoch s).
+  // Le compat shim `url` est encore accepté en parallèle de `livekit_url`.
   vi.stubGlobal(
     "fetch",
     vi.fn().mockResolvedValue({
@@ -127,6 +129,7 @@ beforeEach(() => {
           token: "test-jwt",
           url: "wss://livekit.test",
           room: "shugu-room",
+          expires_at: Math.floor(Date.now() / 1000) + 300,
         }),
     }),
   );
