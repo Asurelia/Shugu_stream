@@ -6,17 +6,27 @@ Windows + AMD GPU (Vulkan) + Ollama + Gemma 4 26B-A4B existant.
 > **Public** : utilisateur Shugu_stream qui veut faire le **1ère smoke test live**
 > du pipeline voice-body après merge de l'umbrella PR #111.
 
-## TL;DR — 3 commandes
+## TL;DR — 3 double-clicks Windows
+
+| Action | Double-click sur | Description |
+|---|---|---|
+| **1. Setup** (one-shot, ~5-10 min) | `Shugu-VoiceBody-Setup.cmd` | Télécharge tout, génère secrets, lance LiveKit |
+| **2. Démarre le stack** | `Shugu-VoiceBody-Start.cmd` | Backend + frontend dans 2 fenêtres + ouvre Chrome auto |
+| **3. Stop propre** | `Shugu-VoiceBody-Stop.cmd` | Kill processes + stop container LiveKit (préserve Ollama) |
+
+**Alternative ligne de commande (pour devs)** :
 
 ```powershell
-# 1. Setup (one-shot, ~5-10 min de download la 1ère fois)
+# Setup avec rotation de secrets
+.\Shugu-VoiceBody-Setup.cmd --rotate
+
+# Setup en skip downloads (re-run rapide)
+.\Shugu-VoiceBody-Setup.cmd --skip-downloads
+
+# Direct PowerShell (debug)
 pwsh tools/setup-voice-body-env.ps1
-
-# 2. Démarre le stack (backend + frontend dans 2 fenêtres séparées)
-pwsh tools/start-voice-body-stack.ps1
-
-# 3. Ouvre dans Chrome
-# → http://localhost:3100
+pwsh ops/start-voice-body.ps1
+pwsh ops/stop-voice-body.ps1
 ```
 
 ## Ce que tu as déjà (audit effectué)
@@ -145,16 +155,18 @@ Effets :
 
 **Rollback** : `SHUGU_VOICE_USE_NEW_PIPELINE=false` + restart backend → Sprint C legacy reprend (incl. fillers).
 
-## Stop the stack
+## Stop the stack — propre
 
-```powershell
-# Stop backend + frontend (ferme les 2 fenêtres pwsh)
-# Stop LiveKit container
-docker stop shugu-livekit
+**Double-click `Shugu-VoiceBody-Stop.cmd`** — c'est tout. Le script :
 
-# Stop Ollama (optionnel, il tourne en arrière-plan)
-# Win + R → services.msc → Ollama → Stop
-```
+1. Lit `.shugustream/pids-voice-body.json` (PIDs persistés au Start)
+2. Kill backend PID + descendants via `taskkill /T /F`
+3. Kill frontend PID + descendants
+4. `docker stop shugu-livekit`
+5. Supprime le fichier PIDs
+6. **Préserve Ollama** (peut être utilisé par d'autres apps)
+
+**Idempotent** : safe à relancer même si déjà stoppé. Si tu veux aussi stopper Ollama : `Win+R → services.msc → Ollama → Stop`.
 
 ## Références
 
