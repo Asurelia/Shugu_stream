@@ -24,7 +24,7 @@ export function CreatorHomeClient() {
   // `?preview=1` permet de voir le design sans être connecté — utile pour
   // itérer sur le visuel avant d&apos;avoir un backend auth stable.
   const previewMode = searchParams?.get("preview") === "1";
-  const [operator, setOperator] = useState<{ username: string } | null>(null);
+  const [operator, setOperator] = useState<{ username: string; is_operator: boolean } | null>(null);
   const [authChecked, setAuthChecked] = useState(false);
 
   /* eslint-disable react-hooks/set-state-in-effect -- FIXME P5: fetch-on-mount auth check, cancelled flag prevents stale updates */
@@ -44,6 +44,8 @@ export function CreatorHomeClient() {
     if (previewMode) return;
     if (!authChecked || !urlUsername) return;
     if (!operator) { router.replace("/login"); return; }
+    // S1 fix: members who now get a 200 from /auth/me must not reach admin pages.
+    if (!operator.is_operator) { router.replace("/"); return; }
     if (operator.username.toLowerCase() !== urlUsername.toLowerCase()) {
       router.replace(`/${encodeURIComponent(operator.username)}/admin/creator-home`);
     }

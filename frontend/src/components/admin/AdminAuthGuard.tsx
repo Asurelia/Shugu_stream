@@ -31,7 +31,7 @@ import { useRouter, useParams } from "next/navigation";
 import { useEffect, useState, type ReactNode } from "react";
 import { fetchAuthStatus } from "@/services/shuguClient";
 
-export type Operator = { username: string };
+export type Operator = { username: string; is_operator: boolean };
 
 type Props = {
   /** Si fourni, le children n'est monté qu'après auth success. */
@@ -93,6 +93,11 @@ export function AdminAuthGuard({ children, fallback = DEFAULT_FALLBACK }: Props)
       router.replace("/login");
       return;
     }
+    // S1 fix: members who now get a 200 from /auth/me must not reach admin pages.
+    if (!operator.is_operator) {
+      router.replace("/");
+      return;
+    }
     if (!urlUsername) return;
     if (operator.username.toLowerCase() !== urlUsername.toLowerCase()) {
       router.replace(`/${encodeURIComponent(operator.username)}/admin/scene-editor-v2`);
@@ -103,6 +108,7 @@ export function AdminAuthGuard({ children, fallback = DEFAULT_FALLBACK }: Props)
   // reste sur le fallback. `children` n'est jamais monté pour un visiteur
   // non authentifié (évite la fuite des mocks / du chrome IDE).
   if (!authChecked || !operator) return <>{fallback}</>;
+  if (!operator.is_operator) return <>{fallback}</>;
   if (urlUsername && operator.username.toLowerCase() !== urlUsername.toLowerCase()) {
     return <>{fallback}</>;
   }

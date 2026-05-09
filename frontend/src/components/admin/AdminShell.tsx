@@ -63,7 +63,7 @@ export function AdminShell({ active, title, subtitle, headerRight, children }: P
   const params = useParams<{ username?: string | string[] }>();
   const rawUsername = params?.username;
   const urlUsername = Array.isArray(rawUsername) ? rawUsername[0] : rawUsername;
-  const [operator, setOperator] = useState<{ username: string } | null>(null);
+  const [operator, setOperator] = useState<{ username: string; is_operator: boolean } | null>(null);
   const [authChecked, setAuthChecked] = useState(false);
 
   useEffect(() => {
@@ -79,6 +79,8 @@ export function AdminShell({ active, title, subtitle, headerRight, children }: P
   useEffect(() => {
     if (!authChecked) return;
     if (!operator) { router.replace("/login"); return; }
+    // S1 fix: members who now get a 200 from /auth/me must not reach admin pages.
+    if (!operator.is_operator) { router.replace("/"); return; }
     if (!urlUsername) return;
     if (operator.username.toLowerCase() !== urlUsername.toLowerCase()) {
       router.replace(`/${encodeURIComponent(operator.username)}/admin`);
