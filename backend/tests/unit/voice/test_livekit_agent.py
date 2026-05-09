@@ -1964,3 +1964,326 @@ async def test_cancel_speaking_envelope_includes_director_origin_and_scene_id(tm
     payload = envelope.get("payload")
     assert isinstance(payload, dict)
     assert payload.get("type") == "voice.interrupt"
+
+
+# ---------------------------------------------------------------------------
+# Migration Option A — voice_use_new_pipeline flag tests
+# ---------------------------------------------------------------------------
+
+
+class _SpyBridgeForStreaming:
+    """Bridge spy ciblé pour _handle_turn_streaming.
+
+    Capture les sentences passées à publish_sentence dans l'ordre. Permet
+    d'asserter que le path new pipeline (flag=True) route bien chaque phrase
+    via le bridge plutôt que via _resample_and_publish.
+
+    chunk_started_at_ms est mockable séparément pour tester le STAGE_AUDIO_FIRST
+    stamp (l'agent stamp t7 quand bridge.chunk_started_at_ms devient non-None).
+    """
+
+    def __init__(self, chunk_started_at_ms: int | None = 12345) -> None:
+        self.published: list[str] = []
+        self._chunk_started_at_ms = chunk_started_at_ms
+        self.cancel_called: bool = False
+
+    @property
+    def chunk_started_at_ms(self) -> int | None:
+        return self._chunk_started_at_ms
+
+    async def publish_sentence(self, sentence: str) -> None:
+        self.published.append(sentence)
+
+    async def cancel(self) -> None:
+        self.cancel_called = True
+
+
+def _settings_with_flag(tmp_path: Path, *, new_pipeline: bool) -> Settings:
+    """Settings test avec voice_use_new_pipeline configurable.
+
+    Hérite des paths bin/voice de _fake_settings + active streaming et
+    voice_metrics_enabled (NullRecorder par défaut quand non injecté).
+    """
+    base = _fake_settings(tmp_path).model_dump()
+    base["voice_streaming_enabled"] = True
+    base["voice_use_new_pipeline"] = new_pipeline
+    return Settings(**base)
+
+
+@pytest.mark.asyncio
+async def test_handle_turn_streaming_legacy_path_default_flag_false(tmp_path: Path) -> None:
+    """voice_use_new_pipeline=False (default) : _handle_turn_streaming doit
+    consommer ``tts.synthesize_stream`` et invoquer ``_resample_and_publish``
+    pour chaque chunk PCM. Aucun appel à ``bridge.publish_sentence``.
+
+    C'est le path Sprint C legacy — backward-compat 100% garantie.
+    """
+    settings = _settings_with_flag(tmp_path, new_pipeline=False)
+
+    synthesize_stream_called = False
+    captured_sentences: list[str] = []
+    captured_pcm: list[bytes] = []
+
+    async def _synthesize_stream(sentences, **kwargs):
+        nonlocal synthesize_stream_called
+        synthesize_stream_called = True
+        async for sentence in sentences:
+            captured_sentences.append(sentence)
+            if sentence.strip():
+                yield b"\xAA" * 100
+
+    stt = _make_mock_stt("bonjour")
+    llm = _make_mock_llm_with_stream(["Salut", " toi", "."])
+    tts = MagicMock()
+    tts.NATIVE_SAMPLE_RATE = 22_050
+    tts.synthesize_stream = _synthesize_stream
+    tts.aclose = AsyncMock()
+    audio_source = _make_mock_audio_source()
+
+    bridge = _SpyBridgeForStreaming()
+
+    agent = ShuguVoiceAgent(
+        stt, llm, tts, settings, audio_source,
+        bridge=bridge,  # bridge wired, mais flag=False → ne doit PAS être utilisé
+    )
+
+    captured_resample: list[bytes] = []
+    original_resample = agent._resample_and_publish
+
+    async def _spy_resample(pcm: bytes, **kwargs) -> None:
+        captured_resample.append(pcm)
+        await original_resample(pcm, **kwargs)
+
+    agent._resample_and_publish = _spy_resample  # type: ignore[method-assign]
+
+    with patch("livekit.rtc.AudioResampler") as mock_resampler_cls:
+        mock_resampler = MagicMock()
+        mock_resampler.push.return_value = [MagicMock()]
+        mock_resampler_cls.return_value = mock_resampler
+
+        await agent._handle_turn_streaming("bonjour")
+
+    # Path Sprint C : tts.synthesize_stream ET _resample_and_publish appelés.
+    assert synthesize_stream_called, (
+        "Path legacy doit consommer tts.synthesize_stream (pas le bridge)"
+    )
+    assert len(captured_resample) > 0, (
+        "Path legacy doit appeler _resample_and_publish pour chaque chunk PCM"
+    )
+    # Path new pipeline NON utilisé : aucune phrase publiée via bridge.
+    assert bridge.published == [], (
+        f"flag=False : bridge.publish_sentence ne doit JAMAIS être appelé. "
+        f"Got: {bridge.published}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_handle_turn_streaming_new_pipeline_path_when_flag_true(tmp_path: Path) -> None:
+    """voice_use_new_pipeline=True : _handle_turn_streaming route chaque
+    phrase via ``bridge.publish_sentence``. Ni ``tts.synthesize_stream`` ni
+    ``_resample_and_publish`` ne sont appelés.
+
+    Le bridge orchestre tts.synthesize one-shot par sentence + publisher.publish_pcm
+    (track shugu-voice-tts 22kHz natif). Validation du gating Migration Option A.
+    """
+    settings = _settings_with_flag(tmp_path, new_pipeline=True)
+
+    synthesize_stream_called = False
+
+    async def _synthesize_stream(sentences, **kwargs):
+        nonlocal synthesize_stream_called
+        synthesize_stream_called = True
+        async for sentence in sentences:
+            if sentence.strip():
+                yield b"\xAA" * 100
+
+    stt = _make_mock_stt("bonjour")
+    llm = _make_mock_llm_with_stream(["Salut", " toi", "."])
+    tts = MagicMock()
+    tts.NATIVE_SAMPLE_RATE = 22_050
+    tts.synthesize_stream = _synthesize_stream
+    tts.aclose = AsyncMock()
+    audio_source = _make_mock_audio_source()
+
+    bridge = _SpyBridgeForStreaming(chunk_started_at_ms=42)
+
+    agent = ShuguVoiceAgent(
+        stt, llm, tts, settings, audio_source,
+        bridge=bridge,
+    )
+
+    resample_called = False
+    original_resample = agent._resample_and_publish
+
+    async def _spy_resample(pcm: bytes, **kwargs) -> None:
+        nonlocal resample_called
+        resample_called = True
+        await original_resample(pcm, **kwargs)
+
+    agent._resample_and_publish = _spy_resample  # type: ignore[method-assign]
+
+    await agent._handle_turn_streaming("bonjour")
+
+    # Path new pipeline : bridge.publish_sentence appelé pour chaque sentence.
+    assert len(bridge.published) > 0, (
+        "flag=True : bridge.publish_sentence doit être appelé pour chaque sentence"
+    )
+    # Toutes les phrases publiées doivent être non-vides (le chunker filtre).
+    for sentence in bridge.published:
+        assert sentence.strip(), f"Phrase vide publiée: {sentence!r}"
+
+    # Path legacy NON utilisé : tts.synthesize_stream et _resample_and_publish
+    # ne sont JAMAIS appelés.
+    assert not synthesize_stream_called, (
+        "flag=True : tts.synthesize_stream NE DOIT PAS être appelé "
+        "(le bridge orchestre tts.synthesize one-shot par sentence)"
+    )
+    assert not resample_called, (
+        "flag=True : _resample_and_publish NE DOIT PAS être appelé "
+        "(le bridge gère la publication via track shugu-voice-tts 22kHz natif)"
+    )
+
+
+@pytest.mark.asyncio
+async def test_handle_turn_streaming_new_pipeline_stamps_metrics(tmp_path: Path) -> None:
+    """Quand flag=True, STAGE_TTS_FIRST et STAGE_AUDIO_FIRST sont stampés.
+
+    Sémantique adaptée :
+    - STAGE_TTS_FIRST : avant le 1er bridge.publish_sentence (≈ 1ère sentence
+      dispatchée vers bridge, pas le 1er PCM Piper comme en legacy).
+    - STAGE_AUDIO_FIRST : juste après le 1er publish_sentence quand
+      bridge.chunk_started_at_ms devient non-None (1ère frame poussée à LiveKit).
+
+    API utilisée : ``m.stamps`` dict (cf. metrics.py:88), test
+    ``STAGE_AUDIO_FIRST not in m.stamps`` pour la one-shot.
+    """
+    from shugu.voice.metrics import (
+        STAGE_AUDIO_FIRST,
+        STAGE_TTS_FIRST,
+        TurnMetrics,
+    )
+
+    settings = _settings_with_flag(tmp_path, new_pipeline=True)
+
+    stt = _make_mock_stt("bonjour")
+    llm = _make_mock_llm_with_stream(["Hi", "."])
+    tts = MagicMock()
+    tts.NATIVE_SAMPLE_RATE = 22_050
+    tts.aclose = AsyncMock()
+    # tts.synthesize_stream non utilisé en flag=True mais on le mock par sécurité.
+    async def _unused_stream(sentences, **kwargs):
+        async for _ in sentences:
+            yield b""
+    tts.synthesize_stream = _unused_stream
+    audio_source = _make_mock_audio_source()
+
+    bridge = _SpyBridgeForStreaming(chunk_started_at_ms=99)
+
+    agent = ShuguVoiceAgent(
+        stt, llm, tts, settings, audio_source,
+        bridge=bridge,
+    )
+
+    turn_metrics = TurnMetrics(pipeline="streaming")
+
+    await agent._handle_turn_streaming("bonjour", turn_metrics=turn_metrics)
+
+    assert STAGE_TTS_FIRST in turn_metrics.stamps, (
+        "STAGE_TTS_FIRST doit être stampé avant la 1ère publish_sentence"
+    )
+    assert STAGE_AUDIO_FIRST in turn_metrics.stamps, (
+        "STAGE_AUDIO_FIRST doit être stampé après la 1ère publish_sentence "
+        "quand bridge.chunk_started_at_ms est non-None"
+    )
+
+
+@pytest.mark.asyncio
+async def test_handle_turn_streaming_new_pipeline_skips_audio_first_when_chunk_none(
+    tmp_path: Path,
+) -> None:
+    """Si bridge.chunk_started_at_ms reste None (publish failed silently),
+    STAGE_AUDIO_FIRST n'est PAS stampé. STAGE_TTS_FIRST l'est quand même
+    (mesuré côté backend avant la publication LiveKit).
+    """
+    from shugu.voice.metrics import (
+        STAGE_AUDIO_FIRST,
+        STAGE_TTS_FIRST,
+        TurnMetrics,
+    )
+
+    settings = _settings_with_flag(tmp_path, new_pipeline=True)
+
+    stt = _make_mock_stt("bonjour")
+    llm = _make_mock_llm_with_stream(["Salut", "."])
+    tts = MagicMock()
+    tts.NATIVE_SAMPLE_RATE = 22_050
+    tts.aclose = AsyncMock()
+    async def _unused_stream(sentences, **kwargs):
+        async for _ in sentences:
+            yield b""
+    tts.synthesize_stream = _unused_stream
+    audio_source = _make_mock_audio_source()
+
+    bridge = _SpyBridgeForStreaming(chunk_started_at_ms=None)
+
+    agent = ShuguVoiceAgent(
+        stt, llm, tts, settings, audio_source,
+        bridge=bridge,
+    )
+
+    turn_metrics = TurnMetrics(pipeline="streaming")
+
+    await agent._handle_turn_streaming("bonjour", turn_metrics=turn_metrics)
+
+    assert STAGE_TTS_FIRST in turn_metrics.stamps
+    assert STAGE_AUDIO_FIRST not in turn_metrics.stamps, (
+        "STAGE_AUDIO_FIRST ne doit PAS être stampé quand bridge ne reporte "
+        "pas de chunk_started_at_ms (best-effort — frontend reçoit l'event "
+        "sans audio_at_ms et applique immédiatement)."
+    )
+
+
+@pytest.mark.asyncio
+async def test_handle_turn_streaming_new_pipeline_no_bridge_falls_back_silently(
+    tmp_path: Path,
+) -> None:
+    """Si flag=True mais bridge=None (config dégradée), le path legacy est
+    utilisé en fallback silencieux. Garantit qu'on ne crash pas en standalone
+    smoke test.
+    """
+    settings = _settings_with_flag(tmp_path, new_pipeline=True)
+
+    synthesize_stream_called = False
+
+    async def _synthesize_stream(sentences, **kwargs):
+        nonlocal synthesize_stream_called
+        synthesize_stream_called = True
+        async for sentence in sentences:
+            if sentence.strip():
+                yield b"\xAA" * 100
+
+    stt = _make_mock_stt("bonjour")
+    llm = _make_mock_llm_with_stream(["Salut", "."])
+    tts = MagicMock()
+    tts.NATIVE_SAMPLE_RATE = 22_050
+    tts.synthesize_stream = _synthesize_stream
+    tts.aclose = AsyncMock()
+    audio_source = _make_mock_audio_source()
+
+    agent = ShuguVoiceAgent(
+        stt, llm, tts, settings, audio_source,
+        bridge=None,  # explicit None — fallback
+    )
+
+    with patch("livekit.rtc.AudioResampler") as mock_resampler_cls:
+        mock_resampler = MagicMock()
+        mock_resampler.push.return_value = [MagicMock()]
+        mock_resampler_cls.return_value = mock_resampler
+
+        await agent._handle_turn_streaming("bonjour")
+
+    # Fallback path legacy quand bridge=None
+    assert synthesize_stream_called, (
+        "flag=True + bridge=None doit retomber sur le path legacy "
+        "(tts.synthesize_stream)"
+    )

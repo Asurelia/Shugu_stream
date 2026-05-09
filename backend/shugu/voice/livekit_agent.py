@@ -678,12 +678,40 @@ class ShuguVoiceAgent(Agent):
             # The finally of _process_utterance restores LISTENING unconditionally.
             self._state = _AgentState.SPEAKING
 
-            first_tts = True
-            async for pcm_chunk in self._tts.synthesize_stream(_stamped_sentences()):
-                if first_tts and m:
-                    m.stamp(STAGE_TTS_FIRST)  # t6
-                    first_tts = False
-                await self._resample_and_publish(pcm_chunk, turn_metrics=m)
+            # Migration Option A : si voice_use_new_pipeline=True ET bridge wiré,
+            # route TTS via bridge.publish_sentence (track shugu-voice-tts 22kHz
+            # natif, audio_at_ms enrichment côté Workers Director).
+            # Sinon, path Sprint C legacy : tts.synthesize_stream + _resample_and_publish
+            # vers track shugu-voice 48kHz (audio_source pre-publié dans entrypoint).
+            if self._settings.voice_use_new_pipeline and self._bridge is not None:
+                first_tts = True
+                async for sentence in _stamped_sentences():
+                    # Skip empty sentences — chunker peut yield " " ou "" selon
+                    # punctuation. bridge.publish_sentence skip aussi mais on
+                    # économise un await dans le hot path.
+                    if not sentence.strip():
+                        continue
+                    if first_tts and m:
+                        m.stamp(STAGE_TTS_FIRST)  # t6
+                        first_tts = False
+                    await self._bridge.publish_sentence(sentence)
+                    # STAGE_AUDIO_FIRST : 1ère fois que chunk_started_at_ms passe
+                    # à non-None (= 1er frame poussé sur la track LiveKit).
+                    # Cf metrics.py:88 : m.stamps est dict[str, float], stamp
+                    # est idempotent par overwrite (pas via _stages.get).
+                    if (
+                        m
+                        and self._bridge.chunk_started_at_ms is not None
+                        and STAGE_AUDIO_FIRST not in m.stamps
+                    ):
+                        m.stamp(STAGE_AUDIO_FIRST)  # t7
+            else:
+                first_tts = True
+                async for pcm_chunk in self._tts.synthesize_stream(_stamped_sentences()):
+                    if first_tts and m:
+                        m.stamp(STAGE_TTS_FIRST)  # t6
+                        first_tts = False
+                    await self._resample_and_publish(pcm_chunk, turn_metrics=m)
 
             log.info("voice.handle_turn_streaming.done")
 
