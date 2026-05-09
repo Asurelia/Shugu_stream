@@ -679,10 +679,8 @@ class TestLoginPageRedirect:
         """
         import pathlib
 
-        page_path = pathlib.Path(
-            "F:/Dev/Fork/Shugu_stream/.claude/worktrees/agent-auth-unif"
-            "/frontend/src/app/login/page.tsx"
-        )
+        repo_root = pathlib.Path(__file__).resolve().parents[3]
+        page_path = repo_root / "frontend" / "src" / "app" / "login" / "page.tsx"
         content = page_path.read_text(encoding="utf-8")
         # Vérifie que la page redirige vers /account/login
         assert "/account/login" in content, (
@@ -708,10 +706,8 @@ class TestAccountLoginRedirectBehavior:
         """
         import pathlib
 
-        client_path = pathlib.Path(
-            "F:/Dev/Fork/Shugu_stream/.claude/worktrees/agent-auth-unif"
-            "/frontend/src/app/account/login/_client.tsx"
-        )
+        repo_root = pathlib.Path(__file__).resolve().parents[3]
+        client_path = repo_root / "frontend" / "src" / "app" / "account" / "login" / "_client.tsx"
         content = client_path.read_text(encoding="utf-8")
         # Doit appeler /auth/login (unified endpoint)
         assert "/auth/login" in content, (
@@ -726,10 +722,8 @@ class TestAccountLoginRedirectBehavior:
         """
         import pathlib
 
-        client_path = pathlib.Path(
-            "F:/Dev/Fork/Shugu_stream/.claude/worktrees/agent-auth-unif"
-            "/frontend/src/app/account/login/_client.tsx"
-        )
+        repo_root = pathlib.Path(__file__).resolve().parents[3]
+        client_path = repo_root / "frontend" / "src" / "app" / "account" / "login" / "_client.tsx"
         content = client_path.read_text(encoding="utf-8")
         # Doit contenir la logique is_operator
         assert "is_operator" in content, (
