@@ -130,15 +130,34 @@ export function base64ToArrayBuffer(b64: string): ArrayBuffer {
 }
 
 // ─── Auth helpers (cookies are httpOnly, so we probe GET /auth/me) ────────────
-export async function fetchAuthStatus(): Promise<{ username: string } | null> {
+
+/** AUTH-1: unified auth response type — same shape from POST /auth/login and GET /auth/me. */
+export type AuthResponse = {
+  username: string;
+  role: string;
+  is_operator: boolean;
+};
+
+export async function fetchAuthStatus(): Promise<AuthResponse | null> {
   try {
     const r = await fetch("/auth/me", { credentials: "include" });
     if (!r.ok) return null;
-    return (await r.json()) as { username: string };
+    return (await r.json()) as AuthResponse;
   } catch (_) { return null; }
 }
 
-export async function login(username: string, password: string): Promise<string | null> {
+/**
+ * Unified login — calls POST /auth/login.
+ *
+ * On success (2xx): returns { data: AuthResponse, error: null }.
+ *   - is_operator=true: sets shugu_access + shugu_user_access cookies (dual)
+ *   - is_operator=false: sets shugu_user_access cookie only
+ * On failure: returns { data: null, error: string }.
+ */
+export async function login(
+  username: string,
+  password: string,
+): Promise<{ data: AuthResponse | null; error: string | null }> {
   const r = await fetch("/auth/login", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -146,9 +165,12 @@ export async function login(username: string, password: string): Promise<string 
     body: JSON.stringify({ username, password }),
   });
   if (!r.ok) {
-    try { return (await r.json()).detail || `HTTP ${r.status}`; } catch { return `HTTP ${r.status}`; }
+    let msg: string;
+    try { msg = (await r.json()).detail || `HTTP ${r.status}`; } catch { msg = `HTTP ${r.status}`; }
+    return { data: null, error: msg };
   }
-  return null;
+  const data = (await r.json()) as AuthResponse;
+  return { data, error: null };
 }
 
 export async function logout(): Promise<void> {

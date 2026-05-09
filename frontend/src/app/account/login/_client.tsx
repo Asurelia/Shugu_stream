@@ -1,25 +1,30 @@
 "use client";
 
 /**
- * /account/login client island.
+ * /account/login client island — unified auth entry (AUTH-1 sprint).
  *
- * Migration Pages Router → App Router (Sprint E2) :
- *   - `useRouter` import : `next/router` → `next/navigation`. The new API
- *     keeps `.replace(url)` / `.push(url)` but drops `.query` (we don't use
- *     it here, so no impact on this page).
- *   - `<Meta title>` removed — the parent Server Component (page.tsx)
- *     declares `metadata` instead.
- *   - `<Link href>` from `next/link` keeps the same API.
+ * Calls POST /auth/login (unified endpoint) instead of /api/account/login.
+ * The unified endpoint handles both operator and member accounts:
  *
- * Form logic untouched : same accountClient calls, same error UX
- * (resend-verify CTA when "not verified" appears).
+ *   - is_operator=true  → dual cookies set (shugu_access + shugu_user_access)
+ *                         → redirect to / (root activates voiceWiringActive)
+ *   - is_operator=false → user cookie only (shugu_user_access)
+ *                         → redirect to /account/profile
+ *
+ * This is the single canonical login entry point for all users.
+ * The /login page redirects here.
+ *
+ * Error handling:
+ *   - 403 "verify email first" → show resend verification CTA
+ *   - 401 "invalid credentials" → show generic error
+ *   - 429 rate limit → show rate limit message
  */
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
 import { GlassButton, GlassCard, GlassInput } from "@/features/liquid-glass/primitives";
-import { AccountError, login, resendVerify } from "@/services/accountClient";
+import { login } from "@/services/shuguClient";
 
 export function LoginClient() {
   const router = useRouter();
@@ -34,11 +39,22 @@ export function LoginClient() {
     setError(null);
     setLoading(true);
     try {
-      await login({ username_or_email: usernameOrEmail, password });
-      router.replace("/account/profile");
-    } catch (err) {
-      if (err instanceof AccountError) setError(err.detail);
-      else setError("Erreur réseau inattendue.");
+      const { data, error: loginError } = await login(usernameOrEmail, password);
+      if (loginError || !data) {
+        setError(loginError ?? "Erreur réseau inattendue.");
+        return;
+      }
+      // AUTH-1: route based on is_operator flag from unified response.
+      if (data.is_operator) {
+        // Operator: dual cookies are set (shugu_access + shugu_user_access).
+        // Redirect to root which activates voiceWiringActive via /auth/me.
+        router.replace("/");
+      } else {
+        // Regular member/VIP: only shugu_user_access cookie set.
+        router.replace("/account/profile");
+      }
+    } catch {
+      setError("Erreur réseau inattendue.");
     } finally {
       setLoading(false);
     }
@@ -50,9 +66,18 @@ export function LoginClient() {
       return;
     }
     try {
-      await resendVerify(usernameOrEmail);
-      setResendState("sent");
-      setError(null);
+      const r = await fetch("/api/account/resend-verify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ email: usernameOrEmail }),
+      });
+      if (!r.ok) {
+        setResendState("error");
+      } else {
+        setResendState("sent");
+        setError(null);
+      }
     } catch {
       setResendState("error");
     }
@@ -92,7 +117,7 @@ export function LoginClient() {
           {error && (
             <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-sm text-rose-100">
               {error}
-              {error.toLowerCase().includes("not verified") && (
+              {error.toLowerCase().includes("verify email") && (
                 <button
                   type="button"
                   onClick={onResend}
