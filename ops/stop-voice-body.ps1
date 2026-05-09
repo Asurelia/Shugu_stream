@@ -94,6 +94,10 @@ if ($pids.frontend) {
     Stop-ProcessTree -ProcessId $pids.frontend -Label "Frontend"
 }
 
+if ($pids.llama_server) {
+    Stop-ProcessTree -ProcessId $pids.llama_server -Label "llama-server"
+}
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 4. Stop LiveKit container
 # ─────────────────────────────────────────────────────────────────────────────
@@ -120,13 +124,12 @@ if (Test-Path $PidsFile) {
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 6. Note Ollama
+# 6. Note Ollama (non utilisé par voice-body — stack 100% llama-server)
 # ─────────────────────────────────────────────────────────────────────────────
 
 Write-Host ""
-Write-Host "ℹ Ollama NON arrêté (peut être utilisé par d'autres apps)" -ForegroundColor Cyan
-Write-Host "  Pour stopper Ollama manuellement :" -ForegroundColor Gray
-Write-Host "    Win+R → services.msc → Ollama → Stop" -ForegroundColor Gray
+Write-Host "ℹ Ollama (port 11434) NON utilisé par voice-body et NON touché." -ForegroundColor Cyan
+Write-Host "  voice-body utilise llama-server.exe direct (port 11435, perf optim AMD)." -ForegroundColor Gray
 Write-Host ""
 
 Write-Host "╔══════════════════════════════════════════════════════════════════════╗" -ForegroundColor Green

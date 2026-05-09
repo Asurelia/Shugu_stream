@@ -56,21 +56,24 @@ if (-not (Test-Path "$RepoRoot/frontend/.next")) {
 }
 Write-Host "✓ Frontend buildé" -ForegroundColor Green
 
-# Ollama UP + Gemma 4 ?
-try {
-    $r = Invoke-RestMethod -Uri "http://localhost:11434/api/tags" -TimeoutSec 3 -ErrorAction Stop
-    $hasGemma = $r.models | Where-Object { $_.name -like "*gemma4-26b-a4b*" }
-    if (-not $hasGemma) {
-        Write-Host "✗ Ollama UP mais Gemma 4 pas importé" -ForegroundColor Red
-        Write-Host "    → Relance Shugu-VoiceBody-Setup.cmd --skip-downloads" -ForegroundColor Gray
-        exit 1
-    }
-    Write-Host "✓ Ollama UP + Gemma 4 importé" -ForegroundColor Green
+# llama-server.exe + GGUF Gemma 4 ?
+$llamaBin = $env:SHUGU_LLAMA_SERVER_BIN
+if (-not $llamaBin -or -not (Test-Path $llamaBin)) {
+    $dockerAILlama = "$env:USERPROFILE/.docker/bin/inference/llama-server.exe"
+    if (Test-Path $dockerAILlama) { $llamaBin = $dockerAILlama }
 }
-catch {
-    Write-Host "✗ Ollama down — démarre 'ollama serve' dans un terminal séparé" -ForegroundColor Red
+if (-not (Test-Path $llamaBin)) {
+    Write-Host "✗ llama-server.exe introuvable — relance Shugu-VoiceBody-Setup.cmd" -ForegroundColor Red
     exit 1
 }
+Write-Host "✓ llama-server.exe : $llamaBin" -ForegroundColor Green
+
+$gemmaPath = "E:/ai/models/gemma4-26b/gemma-4-26B-A4B-it-UD-IQ4_XS.gguf"
+if (-not (Test-Path $gemmaPath)) {
+    Write-Host "✗ Gemma 4 GGUF introuvable : $gemmaPath" -ForegroundColor Red
+    exit 1
+}
+Write-Host "✓ Gemma 4 GGUF présent" -ForegroundColor Green
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 2. LiveKit container
@@ -99,7 +102,36 @@ if (-not (Test-Path $PidsDir)) { New-Item -ItemType Directory -Path $PidsDir -Fo
 $pids = @{}
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 4. Lance backend FastAPI
+# 4. Lance llama-server (Vulkan AMD, port 11435)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Check si llama-server tourne déjà sur 11435 (re-lance Start après crash)
+$llamaPort = 11435
+$llamaAlreadyUp = $false
+try {
+    $r = Invoke-RestMethod -Uri "http://localhost:$llamaPort/v1/models" -TimeoutSec 1 -ErrorAction Stop
+    if ($r.data) {
+        Write-Host "✓ llama-server déjà UP sur :$llamaPort" -ForegroundColor Green
+        $llamaAlreadyUp = $true
+    }
+}
+catch { }
+
+if (-not $llamaAlreadyUp) {
+    Write-Host "→ Démarrage llama-server (Vulkan AMD, port $llamaPort)" -ForegroundColor Yellow
+    $llamaPid = & "$RepoRoot/ops/run-llama-server.ps1" -Port $llamaPort -Background
+    if ($llamaPid -and $llamaPid -gt 0) {
+        $pids.llama_server = $llamaPid
+        Write-Host "  ✓ llama-server PID $llamaPid" -ForegroundColor Green
+    }
+    else {
+        Write-Host "  ✗ llama-server n'a pas démarré — abort" -ForegroundColor Red
+        exit 1
+    }
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 5. Lance backend FastAPI
 # ─────────────────────────────────────────────────────────────────────────────
 
 Write-Host "→ Démarrage backend FastAPI (port 8701)" -ForegroundColor Yellow
@@ -117,7 +149,7 @@ $pids.backend = $backendProc.Id
 Write-Host "  ✓ Backend PID $($backendProc.Id)" -ForegroundColor Green
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 5. Lance frontend Next.js
+# 6. Lance frontend Next.js
 # ─────────────────────────────────────────────────────────────────────────────
 
 Write-Host "→ Démarrage frontend Next.js (port 3100)" -ForegroundColor Yellow
@@ -134,7 +166,7 @@ $pids.frontend = $frontendProc.Id
 Write-Host "  ✓ Frontend PID $($frontendProc.Id)" -ForegroundColor Green
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 6. Persist PIDs pour Stop
+# 7. Persist PIDs pour Stop
 # ─────────────────────────────────────────────────────────────────────────────
 
 $pids.startedAt = (Get-Date).ToString("o")
@@ -143,7 +175,7 @@ $pids | ConvertTo-Json | Set-Content -Path $PidsFile -Encoding UTF8
 Write-Host "✓ PIDs persistés → $PidsFile" -ForegroundColor Green
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 7. Attente readiness backend
+# 8. Attente readiness backend
 # ─────────────────────────────────────────────────────────────────────────────
 
 Write-Host "→ Attente backend ready (max 30s)..." -ForegroundColor Yellow
@@ -171,7 +203,7 @@ else {
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 8. Ouvre Chrome
+# 9. Ouvre Chrome
 # ─────────────────────────────────────────────────────────────────────────────
 
 Write-Host "→ Ouverture Chrome sur http://localhost:3100" -ForegroundColor Yellow
