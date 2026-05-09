@@ -272,10 +272,13 @@ export type GlassModalProps = {
   footer?: React.ReactNode;
   width?: number | string;
   closeOnScrim?: boolean;
+  /** Optional — wires aria-labelledby on the dialog root to a heading id. */
+  "aria-labelledby"?: string;
 };
 
 export function GlassModal({
   open, onClose, title, children, footer, width = 480, closeOnScrim = true,
+  "aria-labelledby": ariaLabelledby,
 }: GlassModalProps) {
   useEffect(() => {
     if (!open) return;
@@ -290,6 +293,7 @@ export function GlassModal({
       onClick={(e) => closeOnScrim && e.target === e.currentTarget && onClose()}
       role="dialog"
       aria-modal="true"
+      aria-labelledby={ariaLabelledby}
     >
       <div className="lg-modal-wrap" style={{ width, maxWidth: "100%" }}>
         <GlassSurface variant="modal" tone="strong">
