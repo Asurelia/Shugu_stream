@@ -321,8 +321,8 @@ function HudTop({
         <div className="brand-actions" aria-hidden={!open}>
           {!session && (
             <>
-              <button className="hud-btn ghost" onClick={onLogin}>Log in</button>
-              <button className="hud-btn primary" onClick={onSignup}>Sign up</button>
+              <button className="hud-btn ghost" onClick={onLogin}>Connexion</button>
+              <button className="hud-btn primary" onClick={onSignup}>Inscription</button>
             </>
           )}
           {session && (
@@ -338,7 +338,7 @@ function HudTop({
               >
                 {tier === "vip"   && <span className="crown vip"   aria-hidden>♛</span>}
                 {tier === "admin" && <span className="crown admin" aria-hidden>♚</span>}
-                Account
+                Mon compte
                 {(tier === "vip" || tier === "admin") && (
                   <span className="sparkle-layer" aria-hidden>
                     <span className="sparkle s1">✦</span>
@@ -347,7 +347,7 @@ function HudTop({
                   </span>
                 )}
               </button>
-              <button className="hud-btn subtle" onClick={onLogout}>Log out</button>
+              <button className="hud-btn subtle" onClick={onLogout}>Déconnexion</button>
             </>
           )}
         </div>
