@@ -1,0 +1,166 @@
+# Voice-Body Runtime Setup Guide (Smoke Test)
+
+Guide pour démarrer le stack voice-body **end-to-end en runtime** sur ta machine
+Windows + AMD GPU (Vulkan) + Ollama + Gemma 4 26B-A4B existant.
+
+> **Public** : utilisateur Shugu_stream qui veut faire le **1ère smoke test live**
+> du pipeline voice-body après merge de l'umbrella PR #111.
+
+## TL;DR — 3 commandes
+
+```powershell
+# 1. Setup (one-shot, ~5-10 min de download la 1ère fois)
+pwsh tools/setup-voice-body-env.ps1
+
+# 2. Démarre le stack (backend + frontend dans 2 fenêtres séparées)
+pwsh tools/start-voice-body-stack.ps1
+
+# 3. Ouvre dans Chrome
+# → http://localhost:3100
+```
+
+## Ce que tu as déjà (audit effectué)
+
+| Composant | Statut |
+|---|---|
+| Python 3.13 + venv backend | ✅ |
+| Node.js v24 + frontend deps + build | ✅ |
+| Docker Desktop | ✅ |
+| Ollama (port 11434 UP) | ✅ (mais aucun model importé) |
+| llama-server.exe (Docker AI Runtime) | ✅ (`C:/Users/rafai/.docker/bin/inference/`) |
+| **Gemma 4 26B-A4B GGUF** | ✅ (`E:/ai/models/gemma4-26b/gemma-4-26B-A4B-it-UD-IQ4_XS.gguf`) |
+| GPU AMD Radeon RX 7800 XT 16GB | ✅ (Vulkan compatible) |
+
+## Ce que le script `setup-voice-body-env.ps1` fait pour toi
+
+| Étape | Action |
+|---|---|
+| 1. Vérifications | Docker UP, Ollama UP, Gemma 4 GGUF présent |
+| 2. Arborescence | Crée `E:/ai/{tools,models}/{piper,whisper}/` |
+| 3. **Génère `.env.local`** | Secrets autogénérés (JWT × 3, IP_HASH_SALT, VIP, DB pwd, LiveKit secret) |
+| 4. **Télécharge Piper** | Binary Windows AMD64 + voice `fr_FR-siwis-medium.onnx` (féminin français) |
+| 5. **Télécharge Whisper.cpp** | Binary Windows Vulkan + model `ggml-base.bin` |
+| 6. **Importe Gemma 4 dans Ollama** | Modelfile qui pointe sur ton GGUF (zéro re-download) |
+| 7. **Lance LiveKit Docker** | Container `shugu-livekit` sur port 7880 (mode dev) |
+| 8. Smoke check final | `python tools/voice_body_smoke_check.py` valide tout |
+
+**Total disk** : ~2 GB de download (Piper 100 MB + voice 65 MB + Whisper.cpp 80 MB + ggml-base 150 MB + LiveKit Docker image 200 MB + LiveKit volumes).
+
+**Idempotent** : tu peux relancer le script — il skip les fichiers déjà présents.
+
+## Ce que `start-voice-body-stack.ps1` fait
+
+1. Vérifie LiveKit container UP + Ollama UP + Gemma 4 importé
+2. Lance **backend FastAPI + voice agent** dans une nouvelle fenêtre pwsh (port 8701)
+3. Lance **frontend Next.js** dans une autre fenêtre pwsh (port 3100)
+4. T'invite à ouvrir Chrome sur `http://localhost:3100`
+
+## Déroulé du smoke test
+
+Une fois `http://localhost:3100` ouvert dans Chrome :
+
+1. **VRM avatar charge** (~28 MB de modèle 3D, premier load ~5-10s)
+2. Overlay **"Click to start audio"** apparaît (Chrome autoplay policy)
+   → click pour permettre la sortie audio
+3. **Parle dans ton micro** (français) — Shugu écoute via VAD + Whisper STT
+4. Quand tu te tais 0.5s, le pipeline déclenche :
+   - STT → texte transcrit
+   - LLM (Gemma 4) → réponse texte
+   - Director → tags `[say_emotion:joy]` etc.
+   - Piper TTS → audio PCM
+   - LiveKit → transport audio vers le navigateur
+   - Frontend → audio joué + lipSync (bouche bouge) + expressions (joie/surprise/etc.)
+5. **Test barge-in** : pendant que Shugu parle, parle au micro → son audio se coupe en <200ms, expression neutre
+
+## Troubleshoot
+
+### "VRM model never loaded" dans la console browser
+- Le VRM (28 MB) prend trop de temps à charger sur cold cache. Refresh la page.
+
+### "viewer-token fetch failed: 401"
+- Le `.env.local` n'a pas été lu correctement par uvicorn. Vérifie le `--env-file` dans `start-voice-body-stack.ps1`.
+- Ou les secrets JWT ne matchent pas. Régénère avec `pwsh tools/setup-voice-body-env.ps1 -ForceRegenerateEnv`.
+
+### Audio silencieux mais Shugu "parle" (texte dans le director)
+- Le path Sprint C legacy publie sur track `shugu-voice` 48kHz. Vérifie que `SHUGU_VOICE_USE_NEW_PIPELINE=false` dans `.env.local` (default).
+- Vérifie console Chrome → onglet Network → WebSocket frames `/ws/viewer/events` reçoit bien `scene.apply` events.
+
+### LiveKit container fail to start
+```powershell
+docker logs shugu-livekit
+# Souvent : port 7880 déjà utilisé. Stop l'autre service ou change le port.
+```
+
+### Gemma 4 réponse très lente (>10s par mot)
+- GPU offload pas actif. Vérifie `ollama list` : la taille model doit matcher ton GGUF (16 GB).
+- `nvidia-smi` ou `gpu-z` : vérifie que la VRAM est utilisée (>14 GB attendu pour 26B-A4B Q4_K_M).
+- Si pas de GPU : Ollama tombe en CPU mode (très lent). Vérifie ton driver AMD + Vulkan SDK.
+
+### "No audio devices" dans Chrome
+- Permissions micro Chrome : `chrome://settings/content/microphone` → autorise `localhost:3100`.
+- Test rapide : `chrome://settings/content/microphone` → micro test.
+
+## Activer la régie scénique (optionnel)
+
+Par défaut le director est **disabled** (smoke test minimal sans régie).
+
+Pour activer la régie complète (commenter la scène, gérer les expressions, anim, vfx) :
+
+### Option A — Ollama local (gratuit, plus lent)
+
+Édite `.env.local` :
+```bash
+DIRECTOR_ENABLED=true
+DIRECTOR_LLM_PROVIDER=ollama
+```
+
+### Option B — OpenCode Go (clé API, modèles SOTA)
+
+Édite `.env.local`, **décommente et remplis** :
+```bash
+DIRECTOR_ENABLED=true
+DIRECTOR_LLM_PROVIDER=openai
+OPENAI_API_KEY=<ta clé OpenCode Go depuis le dashboard>
+OPENAI_BASE_URL=https://opencode.ai/v1
+DIRECTOR_OPENAI_MODEL=glm-5.1   # ou kimi-k2.6, qwen3.6-plus, deepseek-v4-pro
+```
+
+Restart le backend pour prise en compte.
+
+## Activer le nouveau pipeline (Option A — après merge migration PR)
+
+> **Pré-requis** : la PR `feat/voice-migration-option-a-clean` doit être mergée
+> sur main. Avant ça, `voice_use_new_pipeline=true` n'a aucun effet (le branch
+> dans `_handle_turn_streaming` n'existe pas encore).
+
+Édite `.env.local` :
+```bash
+SHUGU_VOICE_USE_NEW_PIPELINE=true
+```
+
+Effets :
+- TTS routé via `bridge.publish_sentence` (track `shugu-voice-tts` 22kHz natif)
+- `audio_at_ms` enrichment actif → drift expression↔audio <100ms
+- **FillerBank désactivé** (NullFillerBank forcé tant que migration filler pas faite — follow-up sprint)
+
+**Rollback** : `SHUGU_VOICE_USE_NEW_PIPELINE=false` + restart backend → Sprint C legacy reprend (incl. fillers).
+
+## Stop the stack
+
+```powershell
+# Stop backend + frontend (ferme les 2 fenêtres pwsh)
+# Stop LiveKit container
+docker stop shugu-livekit
+
+# Stop Ollama (optionnel, il tourne en arrière-plan)
+# Win + R → services.msc → Ollama → Stop
+```
+
+## Références
+
+- Spec : [`docs/specs/2026-05-08-voice-body-pipeline-design.md`](../specs/2026-05-08-voice-body-pipeline-design.md)
+- Live test checklist : [`docs/ops/voice-body-live-test-checklist.md`](voice-body-live-test-checklist.md)
+- Wiring audit : [`docs/ops/voice-body-wiring-audit-2026-05-08.md`](voice-body-wiring-audit-2026-05-08.md)
+- Smoke check script : [`tools/voice_body_smoke_check.py`](../../tools/voice_body_smoke_check.py)
+- Setup script : [`tools/setup-voice-body-env.ps1`](../../tools/setup-voice-body-env.ps1)
+- Start script : [`tools/start-voice-body-stack.ps1`](../../tools/start-voice-body-stack.ps1)
