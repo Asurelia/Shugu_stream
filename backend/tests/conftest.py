@@ -28,6 +28,10 @@ from typing import AsyncIterator
 # env_file inexistant et retombe sur les env vars du process.
 os.environ.setdefault("SHUGU_ENV_FILE", "/nonexistent/.env")
 os.environ.setdefault("IP_HASH_SALT", "test-salt-32-chars-for-pytest-ok-")
+# SHUGU_ENV=test désactive les validators de production (jwt_secret obligatoire).
+# Sans ce flag, la Settings() initiale au module-load de db/session.py fail
+# si ops/env/.env existe mais est vide (worktrees, CI fresh).
+os.environ.setdefault("SHUGU_ENV", "test")
 
 import pytest_asyncio
 

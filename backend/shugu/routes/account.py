@@ -82,6 +82,10 @@ class MeResponse(BaseModel):
     email_verified: bool
     vip_active: bool
     vip_until: Optional[datetime] = None
+    # AUTH-1: flag operator présent sur tous les comptes. False pour la majorité.
+    # Permet au frontend de détecter un operator après login et de rediriger
+    # vers le bon chemin (voiceWiringActive gate).
+    is_operator: bool = False
 
 
 class RegisterResponse(BaseModel):
@@ -166,6 +170,7 @@ def _me_from_account(account: UserAccount) -> MeResponse:
         email_verified=account.email_verified_at is not None,
         vip_active=vip_active,
         vip_until=account.vip_until,
+        is_operator=getattr(account, "is_operator", False),
     )
 
 
