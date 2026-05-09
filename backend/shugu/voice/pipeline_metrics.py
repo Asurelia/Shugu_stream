@@ -42,9 +42,16 @@ Spec : ``docs/specs/2026-05-08-voice-body-pipeline-design.md`` §7.2.
 """
 from __future__ import annotations
 
-from typing import Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 import structlog
+
+if TYPE_CHECKING:
+    # Audit Context7 fix : tighten type hints sur les paramètres `registry`
+    # (avant : `object | None`, justifié à tort par "import lourd au top-level"
+    # alors que prometheus_client est déjà importé localement dans __init__).
+    # Pattern TYPE_CHECKING : 0 cost runtime + précision statique pour mypy/IDE.
+    from prometheus_client import CollectorRegistry
 
 log = structlog.get_logger(__name__)
 
@@ -308,7 +315,7 @@ class PrometheusPipelineMetricsRecorder:
         (isolation tests).
     """
 
-    def __init__(self, registry: object | None = None) -> None:
+    def __init__(self, registry: CollectorRegistry | None = None) -> None:
         from prometheus_client import CollectorRegistry, Counter, Histogram
 
         self.registry = registry or CollectorRegistry()
@@ -452,7 +459,7 @@ class PrometheusPipelineMetricsRecorder:
 
 def make_pipeline_recorder(
     enabled: bool,
-    registry: object | None = None,
+    registry: CollectorRegistry | None = None,
 ) -> PipelineMetricsRecorder:
     """Factory — retourne ``PrometheusPipelineMetricsRecorder`` si enabled.
 

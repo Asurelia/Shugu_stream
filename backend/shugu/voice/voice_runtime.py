@@ -53,6 +53,33 @@ les attributs Python ne seraient plus partagés. À ce moment-là, le
 ``audio_clock_provider`` deviendra un appel Redis ``GET`` (drift potentiel
 +50 ms).
 
+Divergence vs pattern canonique livekit-agents
+----------------------------------------------
+
+LiveKit Agents recommande de partager du state via :
+
+1. ``AgentSession(userdata=MyUserdata(...))`` — userdata typed object accessible
+   via ``self.session.userdata`` dans les Agent methods.
+2. ``ctx.proc.userdata`` — process-wide dict accessible depuis l'entrypoint.
+
+Ces deux patterns sont **dict-typed** (ou typed via dataclass passé à
+``userdata=``) et fonctionnent dans le scope d'une session/agent ou d'un
+processus worker. Notre cas est différent :
+
+- L'``audio_clock_provider`` est consommé par les Workers Director qui
+  vivent dans le process FastAPI (lifespan), pas dans le scope de l'agent
+  voice. ``self.session.userdata`` n'est donc pas accessible.
+- ``ctx.proc.userdata`` serait techniquement correct mais nécessite que les
+  Workers Director acceptent un ``ctx`` dans leur constructor — couplage
+  inverse (director devient dépendant de livekit JobContext).
+
+Notre choix : container ``VoiceRuntimeState`` typé strict (pas de dict),
+shared par référence directe entre lifespan FastAPI (init) et entrypoint
+worker (mutation). C'est plus typed que ``ctx.proc.userdata`` mais
+fonctionnellement équivalent en mode THREAD executor.
+
+Trade-off documenté en post-merge audit Context7 (cf. commit `8eec104`).
+
 Spec : ``docs/specs/2026-05-08-voice-body-pipeline-design.md`` §3.1, §6.2.
 """
 from __future__ import annotations
