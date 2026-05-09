@@ -43,7 +43,6 @@ import pytest
 from shugu.config import Settings
 from shugu.voice.filler_bank import FillerBank, NullFillerBank
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

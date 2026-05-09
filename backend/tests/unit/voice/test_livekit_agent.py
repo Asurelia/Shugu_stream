@@ -2022,7 +2022,6 @@ async def test_handle_turn_streaming_legacy_path_default_flag_false(tmp_path: Pa
 
     synthesize_stream_called = False
     captured_sentences: list[str] = []
-    captured_pcm: list[bytes] = []
 
     async def _synthesize_stream(sentences, **kwargs):
         nonlocal synthesize_stream_called
