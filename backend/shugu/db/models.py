@@ -91,6 +91,13 @@ class UserAccount(Base):
       - `email_verified_at is None`                      → compte en attente
       - `email_verified_at is not None, vip_since is None` → role = "member"
       - `vip_since <= now < vip_until (ou None)`         → role = "vip"
+      - `is_operator = True`                             → accès voice-body operator
+
+    AUTH-1 : `is_operator` unifie le login operator + user_account.
+    Un user promu operator reçoit DEUX cookies lors du login via POST /auth/login :
+    `shugu_access` (operator JWT, gate voice-body) + `shugu_user_access` (user JWT,
+    accès profil). Promotion via CLI `python -m shugu.cli.promote_operator <username>`
+    ou route admin `POST /auth/admin/promote-operator`.
     """
     __tablename__ = "user_accounts"
 
@@ -110,6 +117,14 @@ class UserAccount(Base):
     last_seen_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
 
+    # AUTH-1 (migration 0012) : flag opérateur. False par défaut pour tous les
+    # users existants. Promotion via CLI ou route admin operator-only.
+    # DÉPRÉCIATION : le path legacy OPERATOR_PASSWORD_HASH reste pour compat ;
+    # il sera retiré dans une PR future une fois tous les operators migrés.
+    is_operator: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false",
+    )
+
     sessions: Mapped[list["UserSession"]] = relationship(
         "UserSession", back_populates="user", cascade="all, delete-orphan",
     )
@@ -119,6 +134,8 @@ class UserAccount(Base):
         UniqueConstraint("email", name="uq_user_accounts_email"),
         Index("idx_user_vip_active", "vip_since", "vip_until"),
         Index("idx_user_active", "is_active"),
+        # idx_user_operator créé via raw SQL dans la migration 0012 (index partiel
+        # WHERE is_operator = true — Alembic ne le génère pas fiablement).
     )
 
 
