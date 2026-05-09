@@ -6,9 +6,15 @@ OperatorIdentity dans le codebase — voir core/identity.py pour le rationale.
 
 `require_member()` / `require_vip()` (v4 Phase 1) font pareil pour les comptes
 user self-service, avec un cookie + secret JWT séparés pour cloisonnement.
+
+`require_operator_or_user()` (S1 fix) accepte soit shugu_access (operator) soit
+shugu_user_access (member/vip) et retourne un `AuthenticatedIdentity` unifié avec
+is_operator + role corrects. Utilisé par GET /auth/me pour corriger le bug où les
+membres non-operators recevaient 401 malgré une connexion valide.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Optional
 
 from fastapi import Cookie, Depends, HTTPException, Request
@@ -159,3 +165,45 @@ async def try_vip(
         return await require_vip(request, shugu_user_access, settings)
     except HTTPException:
         return None
+
+
+# ─── Unified auth (S1 fix) ─────────────────────────────────────────────────
+
+
+@dataclass(frozen=True, slots=True)
+class AuthenticatedIdentity:
+    """Identité unifiée retournée par require_operator_or_user.
+
+    Utilisée par GET /auth/me pour unifier les chemins operator et user.
+    is_operator=True → cookie shugu_access valide (operateur).
+    is_operator=False → cookie shugu_user_access valide (member ou vip).
+    role ∈ {"operator", "vip", "member"}.
+    """
+
+    username: str
+    is_operator: bool
+    role: str  # "operator" | "vip" | "member"
+
+
+async def require_operator_or_user(
+    request: Request,
+    shugu_access: Optional[str] = Cookie(None),
+    shugu_user_access: Optional[str] = Cookie(None),
+    settings: Settings = Depends(get_settings),
+) -> AuthenticatedIdentity:
+    """Accepte shugu_access (operator) OU shugu_user_access (member/vip).
+
+    Priorité: operator d'abord (si les deux cookies sont présents, l'identité
+    operator prime — cloisonnement cryptographique préservé via JWT secrets
+    distincts). Retourne 401 si aucun cookie n'est valide.
+    """
+    op = await try_operator(request, shugu_access, settings)
+    if op:
+        return AuthenticatedIdentity(username=op.username, is_operator=True, role="operator")
+
+    user = await try_member(request, shugu_user_access, settings)
+    if user:
+        role = "vip" if isinstance(user, VIPIdentity) else "member"
+        return AuthenticatedIdentity(username=user.username, is_operator=False, role=role)
+
+    raise HTTPException(status_code=401, detail="not authenticated")

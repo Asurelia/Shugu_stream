@@ -736,3 +736,108 @@ class TestAccountLoginRedirectBehavior:
         assert 'router.replace("/")' in content or "router.replace('/')" in content, (
             "_client.tsx must redirect to '/' when is_operator is true"
         )
+
+
+# ─── Test S1: GET /auth/me accepts shugu_user_access cookie ──────────────────
+
+
+class TestMeAcceptsUserCookie:
+    """S1 — bug fix: /auth/me doit accepter shugu_user_access (user JWT).
+
+    Avant ce fix, /auth/me utilisait require_operator (shugu_access seulement).
+    Les membres réguliers se voyaient retourner 401 même après login réussi,
+    provoquant un affichage HUD "Connexion / Inscription" alors qu'ils étaient
+    authentifiés.
+
+    Après le fix, /auth/me doit accepter operator OU user cookie, et retourner
+    is_operator + role corrects pour chaque type d'identité.
+    """
+
+    def test_me_returns_member_when_user_logged_in(
+        self,
+        settings_no_legacy: Settings,
+        fake_redis,
+        fake_db: _FakeDB,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """GET /auth/me avec shugu_user_access (member non-VIP) → 200 + is_operator=False + role='member'."""
+        fake_db.add_account(_FakeAccount(
+            id="01JS1MEMBER000000000000001",
+            username="alice",
+            email="alice@example.com",
+            password_hash=_hash(TEST_PASSWORD),
+            is_operator=False,
+            email_verified_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            is_active=True,
+            vip_since=None,
+            vip_until=None,
+        ))
+        client = _make_auth_client(settings_no_legacy, fake_redis, fake_db, monkeypatch)
+        # Login as member → sets shugu_user_access only
+        login_resp = client.post(
+            "/auth/login",
+            json={"username": "alice", "password": TEST_PASSWORD},
+        )
+        assert login_resp.status_code == 200, f"Login failed: {login_resp.text}"
+        assert "shugu_user_access" in login_resp.cookies, "Member must receive shugu_user_access cookie"
+        assert "shugu_access" not in login_resp.cookies, "Member must NOT receive operator cookie"
+
+        # /auth/me must work with shugu_user_access
+        me_resp = client.get("/auth/me")
+        assert me_resp.status_code == 200, (
+            f"Expected 200 on /auth/me for member, got {me_resp.status_code}: {me_resp.text}"
+        )
+        body = me_resp.json()
+        assert body["username"] == "alice"
+        assert body["is_operator"] is False, "Member must have is_operator=False"
+        assert body["role"] == "member", f"Expected role='member', got '{body['role']}'"
+
+    def test_me_returns_vip_when_user_vip_logged_in(
+        self,
+        settings_no_legacy: Settings,
+        fake_redis,
+        fake_db: _FakeDB,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """GET /auth/me avec shugu_user_access (VIP) → 200 + is_operator=False + role='vip'."""
+        fake_db.add_account(_FakeAccount(
+            id="01JS1VIP0000000000000000001",
+            username="bob_vip",
+            email="bob@example.com",
+            password_hash=_hash(TEST_PASSWORD),
+            is_operator=False,
+            email_verified_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            is_active=True,
+            vip_since=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            vip_until=None,  # permanent VIP
+        ))
+        client = _make_auth_client(settings_no_legacy, fake_redis, fake_db, monkeypatch)
+        # Login as VIP → sets shugu_user_access only
+        login_resp = client.post(
+            "/auth/login",
+            json={"username": "bob_vip", "password": TEST_PASSWORD},
+        )
+        assert login_resp.status_code == 200, f"Login failed: {login_resp.text}"
+        assert "shugu_user_access" in login_resp.cookies, "VIP must receive shugu_user_access cookie"
+
+        # /auth/me must return role='vip' and is_operator=False
+        me_resp = client.get("/auth/me")
+        assert me_resp.status_code == 200, (
+            f"Expected 200 on /auth/me for VIP, got {me_resp.status_code}: {me_resp.text}"
+        )
+        body = me_resp.json()
+        assert body["username"] == "bob_vip"
+        assert body["is_operator"] is False, "VIP must have is_operator=False"
+        assert body["role"] == "vip", f"Expected role='vip', got '{body['role']}'"
+
+    def test_me_returns_401_when_no_cookies(
+        self,
+        settings_no_legacy: Settings,
+        fake_redis,
+        fake_db: _FakeDB,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """GET /auth/me sans aucun cookie → 401 (complementary to test_auth_routes.py coverage)."""
+        client = _make_auth_client(settings_no_legacy, fake_redis, fake_db, monkeypatch)
+        resp = client.get("/auth/me")
+        assert resp.status_code == 401, f"Expected 401 when no cookies, got {resp.status_code}"

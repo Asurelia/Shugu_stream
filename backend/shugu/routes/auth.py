@@ -51,7 +51,9 @@ from ..auth.dependencies import (
     REFRESH_COOKIE,
     USER_ACCESS_COOKIE,
     USER_REFRESH_COOKIE,
+    AuthenticatedIdentity,
     require_operator,
+    require_operator_or_user,
 )
 from ..auth.rate_limit import enforce_rate_limit
 from ..config import Settings, get_settings
@@ -351,9 +353,14 @@ async def logout(
 
 
 @router.get("/me", response_model=AuthResponse)
-async def me(identity: OperatorIdentity = Depends(require_operator)) -> AuthResponse:
-    """Returns operator identity. is_operator is always True — only operators have shugu_access."""
-    return AuthResponse(username=identity.username, role="operator", is_operator=True)
+async def me(identity: AuthenticatedIdentity = Depends(require_operator_or_user)) -> AuthResponse:
+    """Returns the authenticated identity — operator OR member/vip.
+
+    S1 fix: accepte shugu_access (operator) OU shugu_user_access (member/vip).
+    Retourne is_operator + role corrects selon le cookie présent.
+    Sans ce fix, les membres recevaient 401 et le HUD affichait "Connexion".
+    """
+    return AuthResponse(username=identity.username, role=identity.role, is_operator=identity.is_operator)
 
 
 # ─── Admin: promote user to operator ─────────────────────────────────────────
