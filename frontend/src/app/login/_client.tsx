@@ -64,12 +64,16 @@ export function LoginClient() {
   const handleSignIn = async (e: React.FormEvent) => {
     e.preventDefault();
     reset(); setBusy(true);
-    const err = await login(username, password);
+    // AUTH-1: login() now returns { data, error } instead of string | null.
+    const { data, error: loginErr } = await login(username, password);
     setBusy(false);
-    if (err) { setError(err); return; }
-    const me = await fetchAuthStatus();
-    if (me) router.push(`/${encodeURIComponent(me.username)}/admin`);
-    else router.push("/");
+    if (loginErr) { setError(loginErr); return; }
+    if (data) {
+      if (data.is_operator) router.push("/");
+      else router.push(`/${encodeURIComponent(data.username)}/admin`);
+    } else {
+      router.push("/");
+    }
   };
 
   const handleSignUp = async (e: React.FormEvent) => {
