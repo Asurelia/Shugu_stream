@@ -299,6 +299,52 @@ class TestLogout:
         assert resp.status_code == 200
         assert resp.json() == {"ok": True}
 
+    def test_logout_clears_all_four_cookies(self, client: TestClient) -> None:
+        """S2 P0 — _clear_cookies() doit effacer les 4 cookies (operator + user).
+
+        Bug pré-fix : seuls shugu_access + shugu_refresh étaient effacés.
+        shugu_user_access + shugu_user_refresh survivaient après /auth/logout,
+        laissant une session membre active (fuite de session post-PR #130).
+
+        Test en pre-state injection : on simule des cookies user présents sans
+        passer par un vrai login user (qui nécessiterait une DB complète).
+        On vérifie les Set-Cookie deletion headers dans la réponse logout.
+        """
+        # Pre-state : simuler des cookies présents (operator + user)
+        client.cookies.set("shugu_access", "fake_op_access", path="/")
+        client.cookies.set("shugu_refresh", "fake_op_refresh", path="/auth/")
+        client.cookies.set("shugu_user_access", "fake_user_access", path="/")
+        client.cookies.set("shugu_user_refresh", "fake_user_refresh", path="/api/account/")
+
+        # Logout (les tokens sont invalides donc revoke est skipé silencieusement)
+        logout_resp = client.post("/auth/logout")
+        assert logout_resp.status_code == 200
+
+        # Vérification : les 4 cookies doivent être dans les Set-Cookie deletion headers.
+        # Un cookie est "effacé" quand Max-Age=0 ou expires=0 dans Set-Cookie.
+        set_cookie_headers = logout_resp.headers.get_list("set-cookie")
+        cleared_names = set()
+        for header in set_cookie_headers:
+            # Format : "name=; ..." ou "name=value; Max-Age=0; ..."
+            name = header.split("=", 1)[0].strip()
+            if "max-age=0" in header.lower() or header.split("=", 1)[1].startswith(";"):
+                cleared_names.add(name)
+
+        assert "shugu_access" in cleared_names, (
+            f"shugu_access not cleared. Set-Cookie headers: {set_cookie_headers}"
+        )
+        assert "shugu_refresh" in cleared_names, (
+            f"shugu_refresh not cleared. Set-Cookie headers: {set_cookie_headers}"
+        )
+        assert "shugu_user_access" in cleared_names, (
+            "shugu_user_access not cleared — P0 session leak! "
+            f"Set-Cookie headers: {set_cookie_headers}"
+        )
+        assert "shugu_user_refresh" in cleared_names, (
+            "shugu_user_refresh not cleared — P0 session leak! "
+            f"Set-Cookie headers: {set_cookie_headers}"
+        )
+
 
 # ─── GET /auth/me ────────────────────────────────────────────────────────────
 

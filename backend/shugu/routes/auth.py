@@ -123,6 +123,8 @@ def _set_user_cookies(response: Response, access: str, refresh: str, settings: S
 def _clear_cookies(response: Response) -> None:
     response.delete_cookie(ACCESS_COOKIE, path="/")
     response.delete_cookie(REFRESH_COOKIE, path="/auth/")
+    response.delete_cookie(USER_ACCESS_COOKIE, path="/")
+    response.delete_cookie(USER_REFRESH_COOKIE, path="/api/account/")
 
 
 def _compute_vip_active(account: "object", now: Optional[datetime] = None) -> bool:
