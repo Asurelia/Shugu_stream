@@ -268,19 +268,35 @@
     rgba(6, 6, 14, 0.55);
   backdrop-filter: blur(14px) saturate(140%);
   -webkit-backdrop-filter: blur(14px) saturate(140%);
-  display: flex; align-items: center; justify-content: center;
-  padding: 24px;
+  /*
+   * Note: centering of the modal content is now handled by .lg-modal-wrap
+   * (position:fixed + translate:-50% -50%) since Radix renders Dialog.Overlay
+   * and Dialog.Content as siblings inside the Portal, not parent/child.
+   */
   animation: lg-scrim-in 220ms ease-out both;
 }
 @keyframes lg-scrim-in {
   from { opacity: 0; backdrop-filter: blur(0px); -webkit-backdrop-filter: blur(0px); }
   to   { opacity: 1; }
 }
+/*
+ * Radix Dialog.Content is a Portal sibling of Overlay, not a child.
+ * We must self-center it. translateX(-50%) translateY(-50%) places the
+ * top-left corner at viewport center, then shifts it back by half its own
+ * dimensions. The mount animation starts from translateY(14px) scale(0.98)
+ * relative to the final position, so we compose the two transforms.
+ */
+.lg-modal-wrap {
+  position: fixed;
+  top: 50%; left: 50%;
+  translate: -50% -50%;
+  z-index: 101;
+  animation: lg-modal-in 320ms cubic-bezier(0.4, 1.2, 0.5, 1) both;
+}
 @keyframes lg-modal-in {
   from { opacity: 0; transform: translateY(14px) scale(0.98); }
   to   { opacity: 1; transform: translateY(0)    scale(1); }
 }
-.lg-modal-wrap { animation: lg-modal-in 320ms cubic-bezier(0.4, 1.2, 0.5, 1) both; }
 
 /* ── Sidebar rail (admin) ──────────────────────────────────── */
 

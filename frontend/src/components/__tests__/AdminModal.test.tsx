@@ -1,18 +1,26 @@
 /**
- * AdminModal a11y tests — U2 UX audit 2026-05-09.
+ * AdminModal a11y tests — updated for I3.1 (Radix Dialog backend).
  *
- * Verifies the accessibility guarantees brought by the GlassModal migration:
- *   - role="dialog" + aria-modal="true" present when open
+ * Verifies the accessibility guarantees provided by GlassModal + Radix Dialog:
+ *   - role="dialog" + aria-modal="true" present when open (Dialog.Content)
  *   - aria-labelledby wires the dialog to its heading
- *   - Escape key fires onClose
+ *   - Escape key fires onClose (Radix listens on document, not window)
  *   - Close button has aria-label="Fermer"
+ *   - Clicking the scrim (Overlay) fires onClose
+ *   - Focus trap: Tab cycles within the open dialog (NEW — Radix native)
  *
- * Note: focus trap is NOT tested here — GlassModal does not yet implement
- * one. That is tracked as item I3 (Radix UI migration). This comment should
- * be updated when I3 lands.
+ * Migration notes (I3.1 — Radix Dialog):
+ *   - role="dialog" is now on Dialog.Content, not on the scrim div.
+ *   - aria-modal="true" is explicitly forwarded to Dialog.Content.
+ *   - Radix Escape handling listens on `document` (not `window`); tests use
+ *     fireEvent.keyDown(document, ...) accordingly.
+ *   - Scrim click test fires on the Overlay element (`.lg-scrim`) since
+ *     Radix renders Overlay and Content as siblings inside the Portal.
+ *   - Focus trap is now tested via userEvent.tab() cycling.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { AdminModal } from "../AdminModal";
 
 // Stub fetch so the polling useEffect does not crash in jsdom.
@@ -57,16 +65,42 @@ describe("AdminModal a11y (U2 migration)", () => {
   it("pressing Escape calls onClose", () => {
     const onClose = vi.fn();
     render(<AdminModal open onClose={onClose} />);
-    fireEvent.keyDown(window, { key: "Escape" });
+    // Radix Dialog listens on `document` (not `window`) for Escape.
+    fireEvent.keyDown(document, { key: "Escape" });
     expect(onClose).toHaveBeenCalledOnce();
   });
 
-  it("clicking the scrim calls onClose", () => {
+  it("clicking the scrim (Overlay) calls onClose", async () => {
     const onClose = vi.fn();
     render(<AdminModal open onClose={onClose} />);
-    const dialog = screen.getByRole("dialog");
-    // Click directly on the scrim (the dialog itself, not a child)
-    fireEvent.click(dialog);
+    // Radix's DismissableLayer registers its `pointerdown` listener inside a
+    // setTimeout(0) to avoid conflicts with the opening click. We flush the
+    // microtask queue + one timer tick so the listener is registered before
+    // we fire the event.
+    await new Promise((r) => setTimeout(r, 0));
+    // Radix renders Dialog.Overlay and Dialog.Content as siblings inside the
+    // Portal. The Overlay carries the .lg-scrim class; a pointerdown on it
+    // (outside Content) triggers DismissableLayer → onOpenChange(false) → onClose.
+    const overlay = document.querySelector(".lg-scrim") as HTMLElement;
+    expect(overlay).toBeInTheDocument();
+    fireEvent.pointerDown(overlay);
     expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it("Tab navigation cycles focus within the open dialog (focus trap)", async () => {
+    const user = userEvent.setup();
+    render(<AdminModal open onClose={vi.fn()} />);
+    const dialog = screen.getByRole("dialog");
+    // Collect all focusable elements inside the dialog
+    const focusable = dialog.querySelectorAll<HTMLElement>(
+      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+    );
+    expect(focusable.length).toBeGreaterThan(0);
+    // Tab through all focusable elements + one extra to confirm cycling back
+    for (let i = 0; i <= focusable.length; i++) {
+      await user.tab();
+    }
+    // After cycling, focus must remain inside the dialog
+    expect(dialog).toContainElement(document.activeElement as HTMLElement);
   });
 });
