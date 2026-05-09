@@ -593,10 +593,14 @@ class TestAccountLoginIsOperator:
 
 
 class TestPromoteOperatorCLI:
-    def test_promote_operator_cli_sets_flag(self) -> None:
+    @pytest.mark.asyncio
+    async def test_promote_operator_cli_sets_flag(self) -> None:
         """CLI promote_operator doit set is_operator=True sur le user_account.
 
         Test la fonction principale directement (mock DB) sans réel accès Postgres.
+
+        NOTE: marker asyncio + await direct au lieu de asyncio.run() pour éviter
+        de fermer la default event loop (cassait test_smoke_e2e_pipeline aval).
         """
         from shugu.cli.promote_operator import promote_operator
 
@@ -628,12 +632,12 @@ class TestPromoteOperatorCLI:
         async def _mock_scope():
             yield _MockSession()
 
-        import asyncio
-        asyncio.run(promote_operator("spoukie", session_scope_override=_mock_scope))
+        await promote_operator("spoukie", session_scope_override=_mock_scope)
 
         assert mock_account.is_operator is True, "CLI must set is_operator=True"
 
-    def test_promote_operator_cli_username_not_found_exits_nonzero(self) -> None:
+    @pytest.mark.asyncio
+    async def test_promote_operator_cli_username_not_found_exits_nonzero(self) -> None:
         """CLI doit terminer avec exit code non-zéro si le username est introuvable."""
         from shugu.cli.promote_operator import promote_operator
 
@@ -657,9 +661,8 @@ class TestPromoteOperatorCLI:
 
             yield _EmptySession()
 
-        import asyncio
         with pytest.raises(SystemExit) as exc_info:
-            asyncio.run(promote_operator("nonexistent_user", session_scope_override=_mock_scope_empty))
+            await promote_operator("nonexistent_user", session_scope_override=_mock_scope_empty)
 
         assert exc_info.value.code != 0, "CLI must exit non-zero when user not found"
 
