@@ -32,11 +32,10 @@ Settings avec operator_username="" pour forcer le path fallback user_accounts.
 from __future__ import annotations
 
 import secrets
-import sys
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock
 
 import bcrypt
 import pytest
