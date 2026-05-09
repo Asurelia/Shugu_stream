@@ -21,6 +21,7 @@
     "@dnd-kit/utilities": "^3.2.2",
     "@livekit/components-react": "^2.9.20",
     "@livekit/components-styles": "^1.2.0",
+    "@radix-ui/react-toast": "^1.2.15",
     "@tailwindcss/line-clamp": "^0.4.4",
     "@types/dom-speech-recognition": "^0.0.1",
     "@types/js-cookie": "^3.0.6",

@@ -9,6 +9,8 @@
  */
 import type { ReactNode } from "react";
 
+import { GlassToastProvider } from "@/features/liquid-glass/toast";
+
 export function ClientProviders({ children }: { children: ReactNode }) {
-  return <>{children}</>;
+  return <GlassToastProvider>{children}</GlassToastProvider>;
 }

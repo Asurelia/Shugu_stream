@@ -18,6 +18,9 @@
 
 import React, { forwardRef, useEffect } from "react";
 
+// Re-export toast infra so callers can use a single import path.
+export { useToast, GlassToastProvider } from "./toast";
+
 /* ──────────────────────────────────────────────────────────────
    LiquidLayers — specular + edge + shimmer layers
    Drop as the FIRST child of any `.lg` / `.lg-pill` / `.lg-card`
