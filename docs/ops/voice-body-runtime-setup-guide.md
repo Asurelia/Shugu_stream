@@ -123,6 +123,43 @@ docker logs shugu-livekit
 - Permissions micro Chrome : `chrome://settings/content/microphone` → autorise `localhost:3100`.
 - Test rapide : `chrome://settings/content/microphone` → micro test.
 
+## Première utilisation — Activer voice-body pour un compte user
+
+> **Contexte AUTH-1** : voice-body s'active uniquement quand `voiceWiringActive = true`,
+> ce qui requiert le cookie opérateur (`shugu_access`). Les comptes créés via
+> `/account/register` ne l'ont pas par défaut — il faut les "promouvoir" opérateur.
+
+### Étapes
+
+1. **Crée ton compte** via `http://localhost:3100/account/register`
+
+2. **Vérifie ton email** (clique le lien envoyé ou vérifie les logs backend en dev)
+
+3. **Promeus ton compte opérateur** (sur le serveur / en local) :
+
+   ```bash
+   # Dans le répertoire backend, avec le venv activé
+   python -m shugu.cli.promote_operator <ton_username>
+   # Output attendu : [ok] 'ton_username' is now an operator.
+   ```
+
+4. **Connecte-toi** via `/account/login` avec ton username/email + mot de passe
+
+5. Voice-body s'active automatiquement (`voiceWiringActive = true`) et tu es redirigé vers `/`
+
+### Commande promote_operator
+
+| Cas | Sortie | Exit code |
+|---|---|---|
+| Succès | `[ok] 'username' is now an operator.` | 0 |
+| Déjà opérateur | `[ok] 'username' is already an operator. No change.` | 0 |
+| User non trouvé | `[error] User 'username' not found.` (stderr) | 1 |
+| Erreur DB | `[error] DB error: <msg>` (stderr) | 2 |
+
+**Idempotent** : relancer la commande sur un opérateur existant est sans effet.
+
+---
+
 ## Activer la régie scénique (optionnel)
 
 Par défaut le director est **disabled** (smoke test minimal sans régie).
