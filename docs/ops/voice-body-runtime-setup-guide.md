@@ -36,10 +36,23 @@ pwsh ops/stop-voice-body.ps1
 | Python 3.13 + venv backend | ✅ |
 | Node.js v24 + frontend deps + build | ✅ |
 | Docker Desktop | ✅ |
-| Ollama (port 11434 UP) | ✅ (mais aucun model importé) |
-| llama-server.exe (Docker AI Runtime) | ✅ (`C:/Users/rafai/.docker/bin/inference/`) |
+| **llama-server.exe (Docker AI Runtime, Vulkan)** | ✅ (`C:/Users/rafai/.docker/bin/inference/`) |
 | **Gemma 4 26B-A4B GGUF** | ✅ (`E:/ai/models/gemma4-26b/gemma-4-26B-A4B-it-UD-IQ4_XS.gguf`) |
 | GPU AMD Radeon RX 7800 XT 16GB | ✅ (Vulkan compatible) |
+| Ollama | (non requis par voice-body — port 11434 reste libre pour autres apps) |
+
+## Pourquoi llama-server (pas Ollama)
+
+Le stack voice-body utilise **llama-server.exe** natif llama.cpp directement, pas Ollama.
+
+| Critère | Ollama | llama-server |
+|---|---|---|
+| Performance Vulkan AMD | -10 à -15% (wrapper) | **Optimal natif** |
+| Setup | Modelfile + import (auto) | Args directs (lecture GGUF) |
+| Contrôle Vulkan | Limité | Total (`-ngl`, `--flash-attn`, `--ubatch-size`) |
+| Logs debug | Stack traces masquées | Logs llama.cpp directs |
+
+llama-server tourne sur le **port 11435** (≠ 11434 Ollama → coexistence safe si tu utilises Ollama pour autre chose).
 
 ## Ce que le script `setup-voice-body-env.ps1` fait pour toi
 
@@ -50,7 +63,7 @@ pwsh ops/stop-voice-body.ps1
 | 3. **Génère `.env.local`** | Secrets autogénérés (JWT × 3, IP_HASH_SALT, VIP, DB pwd, LiveKit secret) |
 | 4. **Télécharge Piper** | Binary Windows AMD64 + voice `fr_FR-siwis-medium.onnx` (féminin français) |
 | 5. **Télécharge Whisper.cpp** | Binary Windows Vulkan + model `ggml-base.bin` |
-| 6. **Importe Gemma 4 dans Ollama** | Modelfile qui pointe sur ton GGUF (zéro re-download) |
+| 6. **Détecte llama-server.exe** | Path Docker AI Runtime ou PATH ; pas d'import nécessaire (lecture directe GGUF au runtime) |
 | 7. **Lance LiveKit Docker** | Container `shugu-livekit` sur port 7880 (mode dev) |
 | 8. Smoke check final | `python tools/voice_body_smoke_check.py` valide tout |
 

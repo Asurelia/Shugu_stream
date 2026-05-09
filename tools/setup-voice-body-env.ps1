@@ -182,8 +182,24 @@ Write-Step "Vérification pré-requis"
 $dockerOk = Test-Command "docker"
 if ($dockerOk) { Write-Ok "Docker présent" } else { Write-Fail "Docker absent — install Docker Desktop"; exit 1 }
 
-$ollamaOk = Test-Command "ollama"
-if ($ollamaOk) { Write-Ok "Ollama présent" } else { Write-Warn "Ollama absent — install via https://ollama.com (skip Modelfile import si pas dispo)" }
+# llama-server.exe : binary natif llama.cpp Vulkan (perf optimale AMD).
+# Ollama n'est PAS requis (on n'utilise plus Ollama wrapper — direct llama-server).
+$llamaServerPath = ""
+$dockerAILlama = "$env:USERPROFILE/.docker/bin/inference/llama-server.exe"
+if (Test-Path $dockerAILlama) {
+    $llamaServerPath = (Resolve-Path $dockerAILlama).Path
+    Write-Ok "llama-server.exe trouvé (Docker AI Runtime) : $llamaServerPath"
+}
+elseif (Test-Command "llama-server") {
+    $llamaServerPath = (Get-Command "llama-server").Source
+    Write-Ok "llama-server.exe trouvé (PATH) : $llamaServerPath"
+}
+else {
+    Write-Fail "llama-server.exe introuvable"
+    Write-Host "    → Install Docker Desktop avec AI Runtime (binary à $dockerAILlama)" -ForegroundColor Gray
+    Write-Host "    → Ou compile llama.cpp Vulkan depuis https://github.com/ggml-org/llama.cpp" -ForegroundColor Gray
+    exit 1
+}
 
 $pythonOk = Test-Path "$RepoRoot/backend/.venv/Scripts/python.exe"
 if ($pythonOk) { Write-Ok "Backend venv présent" } else { Write-Fail "Backend venv absent — exécute setup-backend.ps1 d'abord"; exit 1 }
@@ -297,9 +313,12 @@ PIPER_BIN=E:/ai/tools/piper/piper.exe
 PIPER_VOICE=E:/ai/models/piper/fr_FR-siwis-medium.onnx
 
 # Local LLM voice agent (Gemma 4 via Ollama)
-SHUGU_LLM_BASE_URL=http://localhost:11434
+SHUGU_LLM_BASE_URL=http://localhost:11435
 SHUGU_LLM_MODEL=gemma4-26b-a4b-iq4_xs
 SHUGU_LLM_MODEL_PATH=$gemmaPath
+# Path absolu vers llama-server.exe (détecté par setup script).
+# Surchargeable via env var SHUGU_LLAMA_SERVER_BIN au runtime.
+SHUGU_LLAMA_SERVER_BIN=$llamaServerPath
 SHUGU_LLM_N_GPU_LAYERS=99
 SHUGU_LLM_N_CTX=8192
 SHUGU_LLM_FLASH_ATTN=true
@@ -411,55 +430,14 @@ Invoke-DownloadIfMissing `
 Write-Host ""
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 6. Ollama Modelfile pour Gemma 4 (import GGUF existant, pas de re-download)
+# 6. llama-server : pas d'import nécessaire, lecture directe du GGUF au runtime
 # ─────────────────────────────────────────────────────────────────────────────
 
-if ($ollamaOk) {
-    Write-Step "Ollama Modelfile pour Gemma 4 26B-A4B"
-
-    $modelfilePath = "$RepoRoot/tools/Modelfile.gemma4-26b-a4b"
-    $modelfileContent = @"
-# Modelfile généré par setup-voice-body-env.ps1
-# Importe le GGUF Gemma 4 26B-A4B existant dans Ollama sans re-download.
-# Ollama crée un alias `gemma4-26b-a4b-iq4_xs` qui pointe sur le fichier local.
-
-FROM $gemmaPath
-
-PARAMETER num_ctx 8192
-PARAMETER num_gpu 99
-PARAMETER temperature 0.7
-PARAMETER top_p 0.9
-PARAMETER stop "<end_of_turn>"
-
-# Template Gemma 3/4 chat format
-TEMPLATE """{{ if .System }}<start_of_turn>system
-{{ .System }}<end_of_turn>
-{{ end }}{{ range .Messages }}<start_of_turn>{{ .Role }}
-{{ .Content }}<end_of_turn>
-{{ end }}<start_of_turn>model
-"""
-
-SYSTEM """Tu es Shugu, une streameuse virtuelle francophone enthousiaste. Réponds en 1 à 2 phrases concises."""
-"@
-    Set-Content -Path $modelfilePath -Value $modelfileContent -Encoding UTF8
-    Write-Ok "Modelfile créé : $modelfilePath"
-
-    # Check si le model existe déjà dans Ollama
-    $existing = & ollama list 2>$null | Select-String "gemma4-26b-a4b-iq4_xs"
-    if ($existing) {
-        Write-Ok "Model gemma4-26b-a4b-iq4_xs déjà importé dans Ollama"
-    }
-    else {
-        Write-Step "Import du model dans Ollama (link symbolique vers le GGUF, pas de copie)"
-        try {
-            & ollama create gemma4-26b-a4b-iq4_xs -f $modelfilePath
-            Write-Ok "Model importé"
-        }
-        catch {
-            Write-Warn "Ollama create failed: $_ — fallback sur llama-server direct possible"
-        }
-    }
-}
+Write-Step "llama-server (Vulkan AMD natif)"
+Write-Ok "Pas d'import requis — llama-server lit le GGUF directement au start"
+Write-Ok "Args optimaux Vulkan AMD configurés dans ops/run-llama-server.ps1"
+Write-Host "  → -ngl 99 (full GPU offload), --flash-attn, -c 8192, --ubatch-size 512" -ForegroundColor Gray
+Write-Host "  → Port 11435 (≠ 11434 Ollama → coexistence safe)" -ForegroundColor Gray
 Write-Host ""
 
 # ─────────────────────────────────────────────────────────────────────────────
