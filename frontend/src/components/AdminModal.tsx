@@ -1,4 +1,29 @@
+"use client";
+
+/**
+ * AdminModal — admin dashboard modal (tabs: Vue / Bans / Historique).
+ *
+ * A11y migration (U2 — UX audit 2026-05-09):
+ *   - Replaced custom <div> wrapper with <GlassModal> from the design system.
+ *   - role="dialog" + aria-modal="true" : provided by GlassModal.
+ *   - Escape key closes : provided by GlassModal.
+ *   - aria-labelledby pointing to the title heading : provided via the
+ *     `aria-labelledby` prop added (non-breaking) to GlassModal.
+ *   - Close button aria-label="Fermer" : provided by GlassModal's built-in
+ *     close button.
+ *   - NOTE: focus trap NOT implemented here — GlassModal does not yet provide
+ *     one. This is tracked as item I3 (Radix UI migration). See PR body.
+ *
+ * Functionality preserved:
+ *   - Tabs: Vue / Bans (${n}) / Historique (${n})
+ *   - Polling every 5 s while open (stats, bans, performances)
+ *   - Unban action
+ *   - Error banner
+ *   - Public signature: { open: boolean; onClose: () => void }
+ */
+
 import { useEffect, useState } from "react";
+import { GlassModal } from "@/features/liquid-glass/primitives";
 
 type Stats = {
   queue_pending: number;
@@ -31,6 +56,8 @@ async function j<T>(url: string): Promise<T> {
   if (!r.ok) throw new Error(`${url}: ${r.status}`);
   return r.json();
 }
+
+const TITLE_ID = "admin-modal-title";
 
 export function AdminModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [stats, setStats] = useState<Stats | null>(null);
@@ -65,28 +92,36 @@ export function AdminModal({ open, onClose }: { open: boolean; onClose: () => vo
     try { await fetch(`/api/admin/bans/${ip}`, { method: "DELETE", credentials: "include" }); await refresh(); } catch {}
   };
 
-  if (!open) return null;
-
   return (
-    <div className="fixed inset-0 z-40 bg-shugu-ink/85 flex items-center sm:items-center justify-center p-0 sm:p-4 font-quicksand">
-      <div className="w-full h-full sm:h-auto sm:max-w-4xl sm:max-h-[85vh] glass-pink text-shugu-cream rounded-none sm:rounded-3xl flex flex-col overflow-hidden">
-        <div className="flex items-center justify-between px-5 sm:px-7 py-3 sm:py-4 border-b border-shugu-pink-soft/20">
-          <h2 className="text-lg sm:text-xl font-comfortaa font-bold text-shugu-pink-soft">
-            ⚙ Dashboard admin
-          </h2>
-          <button
-            onClick={onClose}
-            className="text-shugu-cream-dim hover:text-shugu-cream text-2xl leading-none w-9 h-9 rounded-full hover:bg-white/10"
-          >
-            ×
-          </button>
-        </div>
-
-        <div className="flex gap-1 px-4 pt-3 border-b border-shugu-pink-soft/10">
+    <GlassModal
+      open={open}
+      onClose={onClose}
+      aria-labelledby={TITLE_ID}
+      width="min(56rem, calc(100vw - 2rem))"
+      title={
+        <span id={TITLE_ID} className="font-comfortaa font-bold text-shugu-pink-soft">
+          ⚙ Dashboard admin
+        </span>
+      }
+    >
+      {/*
+        GlassModal wraps children in `padding: "18px 22px"`.
+        The tabs bar needs full-bleed to the card edge, so we use
+        negative margin to cancel that horizontal padding, then re-apply
+        it inside the scrollable content area.
+      */}
+      <div style={{ margin: "0 -22px" }}>
+        {/* Tabs row — full-bleed, flush against header border */}
+        <div
+          className="flex gap-1 px-4 pt-1"
+          style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}
+        >
           {(["overview", "bans", "history"] as const).map((t) => (
             <button
               key={t}
               onClick={() => setTab(t)}
+              role="tab"
+              aria-selected={tab === t}
               className={`px-3 sm:px-4 py-2 text-xs sm:text-sm rounded-t-lg transition-colors ${
                 tab === t
                   ? "bg-shugu-pink/15 text-shugu-pink-glow border-b-2 border-shugu-pink"
@@ -98,9 +133,17 @@ export function AdminModal({ open, onClose }: { open: boolean; onClose: () => vo
           ))}
         </div>
 
-        {error && <div className="px-6 py-2 bg-shugu-live/30 text-shugu-cream text-sm">{error}</div>}
+        {error && (
+          <div className="px-6 py-2 bg-shugu-live/30 text-shugu-cream text-sm">
+            {error}
+          </div>
+        )}
 
-        <div className="flex-1 overflow-y-auto p-5 sm:p-7 scroll-hidden">
+        {/* Scrollable content area — max-height fits within viewport */}
+        <div
+          className="overflow-y-auto p-5 sm:p-7 scroll-hidden"
+          style={{ maxHeight: "calc(min(85vh, 700px) - 130px)" }}
+        >
           {tab === "overview" && stats && (
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 sm:gap-4">
               <Stat label="Queue en attente" value={stats.queue_pending} />
@@ -113,14 +156,23 @@ export function AdminModal({ open, onClose }: { open: boolean; onClose: () => vo
 
           {tab === "bans" && (
             <div className="space-y-2">
-              {bans.length === 0 && <div className="text-shugu-cream-dim italic text-sm">Aucun ban actif ♡</div>}
+              {bans.length === 0 && (
+                <div className="text-shugu-cream-dim italic text-sm">Aucun ban actif ♡</div>
+              )}
               {bans.map((b) => (
-                <div key={b.ip_hash} className="bg-shugu-ink/50 border border-shugu-pink-soft/10 rounded-xl px-4 py-3 flex items-center justify-between gap-4">
+                <div
+                  key={b.ip_hash}
+                  className="bg-shugu-ink/50 border border-shugu-pink-soft/10 rounded-xl px-4 py-3 flex items-center justify-between gap-4"
+                >
                   <div className="min-w-0 flex-1">
-                    <div className="font-mono text-[11px] text-shugu-cream-dim truncate">{b.ip_hash.slice(0, 16)}…</div>
+                    <div className="font-mono text-[11px] text-shugu-cream-dim truncate">
+                      {b.ip_hash.slice(0, 16)}…
+                    </div>
                     <div className="text-sm mt-1">
                       <span className="text-shugu-live">{b.ban_reason || "(sans motif)"}</span>
-                      <span className="text-shugu-cream-dim"> — jusqu&apos;au {new Date(b.ban_until).toLocaleString("fr-FR")}</span>
+                      <span className="text-shugu-cream-dim">
+                        {" "}— jusqu&apos;au {new Date(b.ban_until).toLocaleString("fr-FR")}
+                      </span>
                     </div>
                   </div>
                   <button
@@ -137,26 +189,37 @@ export function AdminModal({ open, onClose }: { open: boolean; onClose: () => vo
           {tab === "history" && (
             <div className="space-y-2">
               {perfs.map((p) => (
-                <div key={p.performance_id} className="bg-shugu-ink/50 border border-shugu-pink-soft/10 rounded-xl px-4 py-3">
+                <div
+                  key={p.performance_id}
+                  className="bg-shugu-ink/50 border border-shugu-pink-soft/10 rounded-xl px-4 py-3"
+                >
                   <div className="flex items-center gap-2 text-[11px] text-shugu-cream-dim mb-1 flex-wrap">
-                    <span className={`px-2 py-0.5 rounded-full font-semibold ${
-                      p.route === "shugu_filtered" ? "bg-shugu-live/30 text-shugu-live" :
-                      p.author_role === "operator" ? "bg-shugu-lavender/30 text-shugu-lavender" :
-                      "bg-shugu-blue/20 text-shugu-blue"
-                    }`}>
+                    <span
+                      className={`px-2 py-0.5 rounded-full font-semibold ${
+                        p.route === "shugu_filtered"
+                          ? "bg-shugu-live/30 text-shugu-live"
+                          : p.author_role === "operator"
+                          ? "bg-shugu-lavender/30 text-shugu-lavender"
+                          : "bg-shugu-blue/20 text-shugu-blue"
+                      }`}
+                    >
                       {p.route === "shugu_filtered" ? "filtré" : p.author_role}
                     </span>
                     <span>{new Date(p.created_at).toLocaleString("fr-FR")}</span>
-                    {p.duration_ms != null && <span>• {Math.round(p.duration_ms / 100) / 10}s</span>}
+                    {p.duration_ms != null && (
+                      <span>• {Math.round(p.duration_ms / 100) / 10}s</span>
+                    )}
                   </div>
-                  <div className="text-sm text-shugu-cream/90 line-clamp-3">{p.input_text}</div>
+                  <div className="text-sm text-shugu-cream/90 line-clamp-3">
+                    {p.input_text}
+                  </div>
                 </div>
               ))}
             </div>
           )}
         </div>
       </div>
-    </div>
+    </GlassModal>
   );
 }
 
