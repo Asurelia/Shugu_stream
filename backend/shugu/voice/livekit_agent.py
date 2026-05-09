@@ -1172,16 +1172,57 @@ async def entrypoint(
         log.info("voice.session.start", room=ctx.room.name, pipeline="agentsession")
         await agent_session.start(agent, room=ctx.room)
     else:
-        # Sprint C path (default) — manual VAD + _handle_turn_streaming. We
-        # create AND publish the shugu-voice track here because the manual path
-        # owns audio output (filler + TTS go through audio_source.capture_frame).
-        audio_source = rtc.AudioSource(
-            sample_rate=_LIVEKIT_SAMPLE_RATE, num_channels=1,
-        )
-        track = rtc.LocalAudioTrack.create_audio_track("shugu-voice", audio_source)
-        await ctx.room.local_participant.publish_track(
-            track, rtc.TrackPublishOptions(),
-        )
+        # Sprint C path (default) — manual VAD + _handle_turn_streaming.
+        #
+        # VB-A audio bomb fix (2026-05-09):
+        # When voice_use_new_pipeline=True, the bridge (shugu-voice-tts track)
+        # owns audio output. Publishing the legacy shugu-voice track AND letting
+        # FillerBank write to its AudioSource creates two concurrent audio tracks
+        # on the same LiveKit room — frontend receives both overlapping streams
+        # (audio bomb). We mirror the AgentSession path (lines 1090-1095):
+        #   1. Force NullFillerBank — filler would write to an unpublished
+        #      AudioSource and never reach the frontend via shugu-voice-tts.
+        #   2. Skip publish_track for the legacy shugu-voice track — bridge
+        #      lazily publishes its own shugu-voice-tts on the first
+        #      publish_pcm call inside _handle_turn_streaming.
+        #   3. Still create agent_audio_source for ShuguVoiceAgent type-compat
+        #      (constructor expects one; NullFillerBank.play_random is a no-op
+        #      so this source is never written to).
+        # When voice_use_new_pipeline=False: unchanged legacy behaviour (publish
+        # shugu-voice + pass filler_bank as-is).
+        #
+        # Re-enabling filler via bridge is a separate sprint task.
+        if settings.voice_use_new_pipeline:
+            # -- VB-A: new_pipeline=True sub-path --
+            if not isinstance(filler_bank, NullFillerBank):
+                log.warning(
+                    "voice.filler.disabled_in_new_pipeline_path",
+                    reason=(
+                        "dual-track risk; bridge owns audio output via "
+                        "shugu-voice-tts; filler would write to unpublished "
+                        "legacy AudioSource and never reach frontend"
+                    ),
+                )
+                filler_bank = NullFillerBank()
+
+            # Create AudioSource for constructor type-compat (never published,
+            # never written to — NullFillerBank.play_random is a no-op).
+            audio_source = rtc.AudioSource(
+                sample_rate=_LIVEKIT_SAMPLE_RATE, num_channels=1,
+            )
+            # NOTE: no publish_track here. Bridge creates shugu-voice-tts lazily
+            # on the first bridge.publish_sentence call.
+        else:
+            # -- Legacy Sprint C sub-path: publish shugu-voice track --
+            # Manual path owns audio output (filler + TTS go through
+            # audio_source.capture_frame).
+            audio_source = rtc.AudioSource(
+                sample_rate=_LIVEKIT_SAMPLE_RATE, num_channels=1,
+            )
+            track = rtc.LocalAudioTrack.create_audio_track("shugu-voice", audio_source)
+            await ctx.room.local_participant.publish_track(
+                track, rtc.TrackPublishOptions(),
+            )
 
         # D-2 Option B coexistence : LiveKitPublisher + AudioBridge instanciés
         # en parallèle de ``audio_source`` legacy. Le publisher D-1 ne crée

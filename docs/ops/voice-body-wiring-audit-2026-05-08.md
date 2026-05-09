@@ -94,6 +94,13 @@ onInterrupt: (event) => {
 
 **Effort Option B** : 2-3h. Effort Option A : 4-6h + tests régression filler bank.
 
+> **VB-A audio bomb fix — ✅ FIXÉ (2026-05-09, PR #129)** : Quand `voice_use_new_pipeline=True`
+> (migration Option A active), la track legacy `shugu-voice` n'est plus publiée et le
+> `FillerBank` est forcé à `NullFillerBank` (même logique que le path AgentSession,
+> lignes 1090-1095). Le bridge crée lazily sa propre track `shugu-voice-tts` au premier
+> `publish_sentence`. Résout la cacophonie double-track frontend.
+> Ré-activer fillers via bridge = sprint séparé (VB-filler).
+
 ### 2.3. D-4 v3 cancel_speaking — params instanciation (1h après D-2)
 
 **Fichier** : `livekit_agent.py:985-989` et `:1018-1022`
