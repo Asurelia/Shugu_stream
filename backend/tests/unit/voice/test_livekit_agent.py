@@ -1547,11 +1547,12 @@ async def test_cancel_speaking_cancels_filler(tmp_path: Path) -> None:
 
     Regression test for barge-in during filler. If filler is playing when user speaks,
     cancel_speaking() must stop it to prevent audio overlap.
+
+    D-4 v3 order update : tts.aclose() doit être AVANT llm.cancel pour matcher le
+    contrat AudioBridge.cancel docstring (audio_bridge.py:248-265). Le subprocess
+    Piper doit être mort avant que bridge.cancel/llm.cancel ne tournent, sinon des
+    frames TTS résiduelles peuvent encore atteindre le publisher.
     """
-    # Shared call log records the relative ordering of llm.cancel / tts.aclose / filler.cancel.
-    # The contract documented in cancel_speaking() is: llm.cancel() (sync), then await
-    # tts.aclose(), then await filler_bank.cancel(). Inverting the order would let an
-    # in-flight Piper subprocess produce frames that overlap with cancel signaling.
     call_log: list[str] = []
 
     class _SpyFillerBank:
@@ -1590,11 +1591,376 @@ async def test_cancel_speaking_cancels_filler(tmp_path: Path) -> None:
     assert filler_cancel_count == 1, (
         f"filler_bank.cancel() must be called by cancel_speaking(), got {filler_cancel_count}"
     )
-    # Contract: relative ordering matches cancel_speaking() docstring contract.
-    # llm.cancel signals the executor first (sync), then awaits tts subprocess kill,
-    # then awaits filler task cancel. An inverted order could let an in-flight Piper
-    # process emit frames AFTER filler stopped → audible bleed-through.
-    assert call_log == ["llm.cancel", "tts.aclose", "filler.cancel"], (
-        f"cancel_speaking() must invoke llm.cancel → tts.aclose → filler.cancel "
-        f"in that exact order. Got: {call_log}"
+    # Contract D-4 v3 (sans bridge wired) : tts.aclose → llm.cancel → filler.cancel.
+    # tts.aclose en premier garantit que le subprocess Piper est mort avant les
+    # autres signaux (llm.cancel sync + filler.cancel async). bridge.cancel,
+    # absent ici (pas wired), s'intercale entre tts.aclose et llm.cancel quand
+    # le bridge est fourni — voir test_cancel_speaking_calls_bridge_cancel_after_tts_aclose.
+    assert call_log == ["tts.aclose", "llm.cancel", "filler.cancel"], (
+        f"cancel_speaking() must invoke tts.aclose → llm.cancel → filler.cancel "
+        f"in that exact order (D-4 v3 reorder). Got: {call_log}"
     )
+
+
+# ---------------------------------------------------------------------------
+# D-4 v3 — bridge.cancel + voice.interrupt broadcast tests
+# ---------------------------------------------------------------------------
+
+
+class _SpyBridge:
+    """Minimal AudioBridge spy : enregistre cancel() dans un call log partagé."""
+
+    def __init__(self, call_log: list[str], raises: Exception | None = None) -> None:
+        self._call_log = call_log
+        self._raises = raises
+
+    async def cancel(self) -> None:
+        self._call_log.append("bridge.cancel")
+        if self._raises is not None:
+            raise self._raises
+
+
+class _SpyEventBus:
+    """Minimal EventBus spy : enregistre les publishs dans un buffer."""
+
+    def __init__(self, raises: Exception | None = None) -> None:
+        self.published: list[tuple[str, dict]] = []
+        self._raises = raises
+
+    async def publish(self, topic: str, event: dict) -> None:
+        self.published.append((topic, event))
+        if self._raises is not None:
+            raise self._raises
+
+
+def _make_agent_with_d4_wiring(
+    tmp_path: Path,
+    bridge: _SpyBridge | None = None,
+    event_bus: _SpyEventBus | None = None,
+    session_id: str | None = None,
+    call_log: list[str] | None = None,
+) -> ShuguVoiceAgent:
+    """Helper : agent avec mocks recording + bridge/event_bus injectés."""
+    settings = _fake_settings(tmp_path)
+    stt = _make_mock_stt()
+    llm = _make_mock_llm()
+    if call_log is not None:
+        def _llm_cancel_recording() -> None:
+            call_log.append("llm.cancel")
+        llm.cancel = _llm_cancel_recording
+    else:
+        llm.cancel = MagicMock()
+    tts = _make_mock_tts()
+    if call_log is not None:
+        async def _tts_aclose_recording() -> None:
+            call_log.append("tts.aclose")
+        tts.aclose = _tts_aclose_recording
+    else:
+        tts.aclose = AsyncMock()
+    audio_source = _make_mock_audio_source()
+
+    return ShuguVoiceAgent(
+        stt, llm, tts, settings, audio_source,
+        bridge=bridge,
+        event_bus=event_bus,
+        session_id=session_id,
+    )
+
+
+@pytest.mark.asyncio
+async def test_cancel_speaking_calls_bridge_cancel_after_tts_aclose(tmp_path: Path) -> None:
+    """Vérifier l'ordre tts.aclose → bridge.cancel → llm.cancel → filler.cancel.
+
+    Contrat AudioBridge.cancel docstring (audio_bridge.py:248-265) :
+    1. tts.aclose() — kill subprocess Piper d'abord
+    2. bridge.cancel() — flag _cancelled + publisher.unpublish
+    3. llm.cancel() — sync
+    4. filler.cancel() — async
+    """
+    call_log: list[str] = []
+    bridge = _SpyBridge(call_log)
+
+    class _SpyFiller:
+        async def preload(self, phrases: list[str]) -> int:
+            return 0
+
+        async def play_random(self, audio_source: object) -> None:
+            pass
+
+        async def cancel(self) -> None:
+            call_log.append("filler.cancel")
+
+    settings = _fake_settings(tmp_path)
+    stt = _make_mock_stt()
+    llm = _make_mock_llm()
+
+    def _llm_cancel_recording() -> None:
+        call_log.append("llm.cancel")
+    llm.cancel = _llm_cancel_recording
+    tts = _make_mock_tts()
+
+    async def _tts_aclose_recording() -> None:
+        call_log.append("tts.aclose")
+    tts.aclose = _tts_aclose_recording
+    audio_source = _make_mock_audio_source()
+
+    agent = ShuguVoiceAgent(
+        stt, llm, tts, settings, audio_source,
+        filler_bank=_SpyFiller(),
+        bridge=bridge,
+    )
+
+    await agent.cancel_speaking()
+
+    assert call_log == [
+        "tts.aclose",
+        "bridge.cancel",
+        "llm.cancel",
+        "filler.cancel",
+    ], (
+        f"cancel_speaking() doit invoquer tts.aclose → bridge.cancel → llm.cancel "
+        f"→ filler.cancel dans cet ordre exact (D-4 v3). Got: {call_log}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_cancel_speaking_publishes_voice_interrupt_envelope(tmp_path: Path) -> None:
+    """Format EXACT du payload : envelope {origin: director, payload: {...}}.
+
+    Le filter D-3 (routes/viewer.py:_bus_forward_loop) ne forward que :
+    - envelope.origin == "director"
+    - payload.type == "voice.interrupt"
+    - payload.session_id None ou == claims.session_id
+    """
+    event_bus = _SpyEventBus()
+    agent = _make_agent_with_d4_wiring(
+        tmp_path,
+        event_bus=event_bus,
+        session_id="voice-sess-abc123",
+    )
+
+    await agent.cancel_speaking()
+
+    assert len(event_bus.published) == 1, (
+        f"event_bus.publish doit être appelé exactement une fois, got {len(event_bus.published)}"
+    )
+    topic, envelope = event_bus.published[0]
+    assert topic == "editor:broadcast", f"Topic doit être editor:broadcast, got {topic!r}"
+    assert envelope["origin"] == "director", (
+        f"envelope.origin doit être 'director' pour passer le filter D-3, "
+        f"got {envelope.get('origin')!r}"
+    )
+    payload = envelope["payload"]
+    assert payload["type"] == "voice.interrupt", (
+        f"payload.type doit être 'voice.interrupt', got {payload.get('type')!r}"
+    )
+    assert payload["session_id"] == "voice-sess-abc123", (
+        f"payload.session_id doit être propagé du __init__, got {payload.get('session_id')!r}"
+    )
+    assert payload["reason"] == "vad_detected", (
+        f"payload.reason doit être 'vad_detected', got {payload.get('reason')!r}"
+    )
+    # ts au format ISO UTC parsable
+    ts = payload["ts"]
+    assert isinstance(ts, str) and "T" in ts, f"ts doit être un ISO timestamp, got {ts!r}"
+
+
+@pytest.mark.asyncio
+async def test_cancel_speaking_robust_if_bridge_cancel_raises(tmp_path: Path) -> None:
+    """Si bridge.cancel() raise, le push event est quand même fait + cancel global ok."""
+    call_log: list[str] = []
+    bridge = _SpyBridge(call_log, raises=RuntimeError("bridge boom"))
+    event_bus = _SpyEventBus()
+    agent = _make_agent_with_d4_wiring(
+        tmp_path,
+        bridge=bridge,
+        event_bus=event_bus,
+        session_id="sess-xyz",
+        call_log=call_log,
+    )
+
+    # Ne doit PAS propager l'exception
+    await agent.cancel_speaking()
+
+    # bridge.cancel a bien été tenté
+    assert "bridge.cancel" in call_log, "bridge.cancel doit être appelé même s'il raise"
+    # Les autres steps ont continué après le raise
+    assert "llm.cancel" in call_log, "llm.cancel doit être appelé après bridge.cancel raise"
+    # event_bus.publish toujours fait
+    assert len(event_bus.published) == 1, (
+        "voice.interrupt doit être publié même si bridge.cancel a raise"
+    )
+
+
+@pytest.mark.asyncio
+async def test_cancel_speaking_robust_if_tts_aclose_raises(tmp_path: Path) -> None:
+    """Si tts.aclose() raise, la chaîne continue : bridge.cancel + llm.cancel + publish.
+
+    Régression review D-4 v3 PR #116 M-1 : le wrap try/except autour de
+    tts.aclose était nouveau (E3 ne le wrappait pas). Sans test dédié,
+    une régression silencieuse pourrait casser le best-effort §6.1 sur
+    cette branche du code uniquement.
+    """
+    call_log: list[str] = []
+    bridge = _SpyBridge(call_log)  # bridge.cancel sain
+    event_bus = _SpyEventBus()
+    agent = _make_agent_with_d4_wiring(
+        tmp_path,
+        bridge=bridge,
+        event_bus=event_bus,
+        session_id="sess-tts-fail",
+        call_log=call_log,
+    )
+
+    # Patch tts.aclose pour qu'il raise.
+    async def _tts_aclose_raises() -> None:
+        call_log.append("tts.aclose")
+        raise RuntimeError("piper subprocess crashed")
+
+    agent._tts.aclose = _tts_aclose_raises  # type: ignore[method-assign]
+
+    # Ne doit PAS propager l'exception au caller.
+    await agent.cancel_speaking()
+
+    # tts.aclose a été tenté
+    assert "tts.aclose" in call_log, "tts.aclose doit être appelé même s'il raise"
+    # Bridge.cancel exécuté APRÈS tts.aclose (ordre garanti par le contrat)
+    assert "bridge.cancel" in call_log, (
+        "bridge.cancel doit être appelé après tts.aclose raise"
+    )
+    # LLM cancel + filler cancel exécutés ensuite
+    assert "llm.cancel" in call_log, (
+        "llm.cancel doit être appelé après bridge.cancel"
+    )
+    # Push event final atteint malgré le raise tts
+    assert len(event_bus.published) == 1, (
+        "voice.interrupt doit être publié même si tts.aclose a raise"
+    )
+
+
+@pytest.mark.asyncio
+async def test_cancel_speaking_robust_if_event_bus_publish_raises(tmp_path: Path) -> None:
+    """Si event_bus.publish raise, on log mais ne propage pas. cancel_speaking termine."""
+    event_bus = _SpyEventBus(raises=RuntimeError("bus boom"))
+    agent = _make_agent_with_d4_wiring(
+        tmp_path,
+        event_bus=event_bus,
+        session_id="sess-x",
+    )
+
+    # Ne doit PAS propager
+    await agent.cancel_speaking()
+
+    # publish a bien été tenté (ajouté au buffer avant le raise dans le spy)
+    assert len(event_bus.published) == 1
+
+
+@pytest.mark.asyncio
+async def test_cancel_speaking_without_bridge_or_event_bus_works(tmp_path: Path) -> None:
+    """Backward-compat : config sans bridge/event_bus = comportement E3 préservé.
+
+    Aucune exception, llm.cancel + tts.aclose appelés (ordre D-4 v3).
+    """
+    agent, _, llm, tts = _make_agent(tmp_path)
+    llm.cancel = MagicMock()
+    tts.aclose = AsyncMock()
+
+    # Pas d'exception attendue
+    await agent.cancel_speaking()
+
+    llm.cancel.assert_called_once()
+    tts.aclose.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_cancel_speaking_session_id_none_in_payload(tmp_path: Path) -> None:
+    """Si session_id=None à l'init, le payload contient session_id=None.
+
+    Le filter D-3 (routes/viewer.py:421-423) traite session_id=None comme
+    pass-through (legacy events) : `if ev_session is not None and ev_session != claims.session_id: continue`.
+    """
+    event_bus = _SpyEventBus()
+    agent = _make_agent_with_d4_wiring(
+        tmp_path,
+        event_bus=event_bus,
+        session_id=None,
+    )
+
+    await agent.cancel_speaking()
+
+    assert len(event_bus.published) == 1
+    _, envelope = event_bus.published[0]
+    payload = envelope["payload"]
+    assert payload["session_id"] is None, (
+        f"session_id=None à l'init doit produire payload.session_id=None, "
+        f"got {payload.get('session_id')!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_cancel_speaking_preserves_existing_e3_behavior(tmp_path: Path) -> None:
+    """Régression : tts.aclose, llm.cancel, filler_bank.cancel toujours appelés.
+
+    Vérifie que le wrapping D-4 v3 n'a pas accidentellement rendu un de ces
+    appels conditionnel ou silencieux. L'ordre exact est testé ailleurs ;
+    ici on vérifie juste que les 3 cancels E3 existants sont effectifs.
+    """
+    settings = _fake_settings(tmp_path)
+    stt = _make_mock_stt()
+    llm = _make_mock_llm()
+    llm.cancel = MagicMock()
+    tts = _make_mock_tts()
+    tts.aclose = AsyncMock()
+    audio_source = _make_mock_audio_source()
+
+    class _SpyFillerBank:
+        def __init__(self) -> None:
+            self.cancel_count = 0
+
+        async def preload(self, phrases: list[str]) -> int:
+            return 0
+
+        async def play_random(self, audio_source: object) -> None:
+            pass
+
+        async def cancel(self) -> None:
+            self.cancel_count += 1
+
+    filler = _SpyFillerBank()
+
+    agent = ShuguVoiceAgent(
+        stt, llm, tts, settings, audio_source,
+        filler_bank=filler,
+    )
+
+    await agent.cancel_speaking()
+
+    llm.cancel.assert_called_once()
+    tts.aclose.assert_awaited_once()
+    assert filler.cancel_count == 1
+
+
+@pytest.mark.asyncio
+async def test_cancel_speaking_envelope_includes_director_origin_and_scene_id(tmp_path: Path) -> None:
+    """L'envelope doit matcher le pattern Worker.base._publish.
+
+    `director/workers/base.py:112` produit :
+        {"scene_id": "*", "origin": "director", "payload": {...}}
+    Le filter D-3 ne gate pas sur scene_id pour voice.interrupt, mais on
+    aligne le format pour cohérence avec les autres broadcasts directorisés.
+    """
+    event_bus = _SpyEventBus()
+    agent = _make_agent_with_d4_wiring(
+        tmp_path,
+        event_bus=event_bus,
+        session_id="sess-1",
+    )
+
+    await agent.cancel_speaking()
+
+    _, envelope = event_bus.published[0]
+    # Les deux champs gateables côté filter D-3
+    assert envelope.get("origin") == "director"
+    payload = envelope.get("payload")
+    assert isinstance(payload, dict)
+    assert payload.get("type") == "voice.interrupt"

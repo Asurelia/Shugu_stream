@@ -1,0 +1,399 @@
+{
+  "__inputs": [],
+  "__requires": [
+    {"type": "grafana", "id": "grafana", "name": "Grafana", "version": "10.0.0"},
+    {"type": "datasource", "id": "prometheus", "name": "Prometheus", "version": "1.0.0"}
+  ],
+  "annotations": {"list": []},
+  "description": "Sprint D PR D-10C — Voice-body pipeline observability dashboard. Couvre les KPIs §7.2 du spec voice-body-pipeline-design.md : latence end-to-end, drift audio↔anim, barge-in cut-off, WS connections, token refresh outcomes.",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "title": "Publisher publish latency (p50 / p95 / p99)",
+      "description": "Latence wall-clock du publish d'un chunk PCM Piper vers LiveKit (capture_frame loop). Cible §7.2 : <100ms moyenne, <500ms p95. Une dégradation indique un Piper saturé ou un reconnect LiveKit en cours.",
+      "type": "timeseries",
+      "id": 1,
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "unit": "ms",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "yellow", "value": 100},
+              {"color": "red", "value": 500}
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {"displayMode": "table", "placement": "bottom", "calcs": ["last", "max"]},
+        "tooltip": {"mode": "multi"}
+      },
+      "targets": [
+        {
+          "datasource": {"type": "prometheus"},
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(voice_publisher_publish_duration_ms_bucket[5m])))",
+          "legendFormat": "p50",
+          "refId": "A"
+        },
+        {
+          "datasource": {"type": "prometheus"},
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(voice_publisher_publish_duration_ms_bucket[5m])))",
+          "legendFormat": "p95",
+          "refId": "B"
+        },
+        {
+          "datasource": {"type": "prometheus"},
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(voice_publisher_publish_duration_ms_bucket[5m])))",
+          "legendFormat": "p99",
+          "refId": "C"
+        }
+      ]
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "title": "Bridge sentence publish latency (p50 / p95 / p99)",
+      "description": "Latence end-to-end pour publier UNE phrase TTS complète : Piper synth + LiveKit publish. Cible §7.2 : <500ms p50, <800ms p95 (cible end-to-end voix).",
+      "type": "timeseries",
+      "id": 2,
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "unit": "ms",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "yellow", "value": 500},
+              {"color": "red", "value": 1000}
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {"displayMode": "table", "placement": "bottom", "calcs": ["last", "max"]},
+        "tooltip": {"mode": "multi"}
+      },
+      "targets": [
+        {
+          "datasource": {"type": "prometheus"},
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(voice_bridge_publish_sentence_duration_ms_bucket[5m])))",
+          "legendFormat": "p50",
+          "refId": "A"
+        },
+        {
+          "datasource": {"type": "prometheus"},
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(voice_bridge_publish_sentence_duration_ms_bucket[5m])))",
+          "legendFormat": "p95",
+          "refId": "B"
+        },
+        {
+          "datasource": {"type": "prometheus"},
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(voice_bridge_publish_sentence_duration_ms_bucket[5m])))",
+          "legendFormat": "p99",
+          "refId": "C"
+        }
+      ]
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "title": "Audio↔anim drift (audio_at_ms distribution par kind)",
+      "description": "Distribution du delta entre publish audio LiveKit et émission scene.apply (face / say_emotion). Mesuré côté backend dans SayWorker / FaceWorker. Cible §7.2 : drift <100ms p95. NB Option B coexistence (PR #122) : tant que la migration Option A n'est pas faite, la plupart des chunks ont chunk_started_at_ms=None → ce panel reste à zéro. À surveiller après bascule audio_bridge → publish_stream.",
+      "type": "timeseries",
+      "id": 3,
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "unit": "ms",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "yellow", "value": 100},
+              {"color": "red", "value": 200}
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {"displayMode": "table", "placement": "bottom", "calcs": ["last"]},
+        "tooltip": {"mode": "multi"}
+      },
+      "targets": [
+        {
+          "datasource": {"type": "prometheus"},
+          "expr": "histogram_quantile(0.95, sum by (le, kind) (rate(director_audio_at_ms_distribution_bucket[5m])))",
+          "legendFormat": "p95 {{kind}}",
+          "refId": "A"
+        },
+        {
+          "datasource": {"type": "prometheus"},
+          "expr": "histogram_quantile(0.50, sum by (le, kind) (rate(director_audio_at_ms_distribution_bucket[5m])))",
+          "legendFormat": "p50 {{kind}}",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "title": "Barge-in cut-off latency (p50 / p95 / p99)",
+      "description": "Latence du cancel_speaking complet (tts.aclose + bridge.cancel + llm.cancel + filler.cancel + broadcast voice.interrupt). Cible §7.2 : <200ms p95. Au-delà, l'utilisateur perçoit un overlap audio Shugu↔user gênant.",
+      "type": "timeseries",
+      "id": 4,
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "unit": "ms",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "yellow", "value": 100},
+              {"color": "red", "value": 200}
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {"displayMode": "table", "placement": "bottom", "calcs": ["last", "max"]},
+        "tooltip": {"mode": "multi"}
+      },
+      "targets": [
+        {
+          "datasource": {"type": "prometheus"},
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(voice_cancel_speaking_duration_ms_bucket[5m])))",
+          "legendFormat": "p50",
+          "refId": "A"
+        },
+        {
+          "datasource": {"type": "prometheus"},
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(voice_cancel_speaking_duration_ms_bucket[5m])))",
+          "legendFormat": "p95",
+          "refId": "B"
+        },
+        {
+          "datasource": {"type": "prometheus"},
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(voice_cancel_speaking_duration_ms_bucket[5m])))",
+          "legendFormat": "p99",
+          "refId": "C"
+        }
+      ]
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "title": "Cancel speaking rate (per reason)",
+      "description": "Taux de cancel_speaking par motif. ``barge_in`` est le cas nominal (user interrompt Shugu) ; ``external`` indique un cancel programmatique (test ou API admin) ; ``shutdown`` (réservé) couvre un arrêt propre du worker. Une explosion de ``unknown`` indique un appelant qui passe une reason hors-whitelist (bug).",
+      "type": "timeseries",
+      "id": 5,
+      "gridPos": {"h": 6, "w": 12, "x": 0, "y": 16},
+      "fieldConfig": {
+        "defaults": {"color": {"mode": "palette-classic"}, "unit": "reqps"},
+        "overrides": []
+      },
+      "options": {
+        "legend": {"displayMode": "table", "placement": "bottom", "calcs": ["last", "sum"]},
+        "tooltip": {"mode": "multi"}
+      },
+      "targets": [
+        {
+          "datasource": {"type": "prometheus"},
+          "expr": "sum by (reason) (rate(voice_cancel_speaking_total[1m]))",
+          "legendFormat": "{{reason}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "title": "Bridge sentences skipped (per reason)",
+      "description": "Phrases TTS skippées par AudioBridge, par cause. Permet de distinguer les skips nominaux (``empty``, ``cancelled_pre_synth`` après barge-in) des erreurs structurelles (``tts_failed`` Piper crash, ``publish_failed`` LiveKit dead). Une augmentation de ``stream_iterator_failed`` pointe un LLM stream qui raise.",
+      "type": "timeseries",
+      "id": 6,
+      "gridPos": {"h": 6, "w": 12, "x": 12, "y": 16},
+      "fieldConfig": {
+        "defaults": {"color": {"mode": "palette-classic"}, "unit": "reqps"},
+        "overrides": []
+      },
+      "options": {
+        "legend": {"displayMode": "table", "placement": "bottom", "calcs": ["last", "sum"]},
+        "tooltip": {"mode": "multi"}
+      },
+      "targets": [
+        {
+          "datasource": {"type": "prometheus"},
+          "expr": "sum by (reason) (rate(voice_bridge_sentences_skipped_total[1m]))",
+          "legendFormat": "{{reason}}",
+          "refId": "A"
+        },
+        {
+          "datasource": {"type": "prometheus"},
+          "expr": "rate(voice_bridge_sentences_published_total[1m])",
+          "legendFormat": "published (success)",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "title": "Publisher chunks dropped",
+      "description": "Chunks PCM perdus côté publisher (PCM trop court, sample_rate invalide, reconnect LiveKit failed, capture_frame raise mid-stream). Une dérive croissante = problème de connectivité LiveKit ou bug d'orchestration.",
+      "type": "timeseries",
+      "id": 7,
+      "gridPos": {"h": 6, "w": 8, "x": 0, "y": 22},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"fixedColor": "red", "mode": "fixed"},
+          "unit": "reqps",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "red", "value": 0.01}
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {"displayMode": "list"},
+        "tooltip": {"mode": "single"}
+      },
+      "targets": [
+        {
+          "datasource": {"type": "prometheus"},
+          "expr": "rate(voice_publisher_chunks_dropped_total[1m])",
+          "legendFormat": "dropped/s",
+          "refId": "A"
+        },
+        {
+          "datasource": {"type": "prometheus"},
+          "expr": "rate(voice_publisher_chunks_published_total[1m])",
+          "legendFormat": "published/s",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "title": "Viewer WS connections + disconnects",
+      "description": "Connexions WS /ws/viewer/events ouvertes vs disconnects par cause. Un ratio sain : ``client_close`` ≈ ``connections_total`` (chaque visiteur ferme proprement). ``rate_limited`` indique un user qui dépasse viewer_max_connections_per_user. ``auth_failed`` signale tentatives invalides ou révoquées (à corréler avec token_refresh{outcome=auth_failed}).",
+      "type": "timeseries",
+      "id": 8,
+      "gridPos": {"h": 6, "w": 8, "x": 8, "y": 22},
+      "fieldConfig": {
+        "defaults": {"color": {"mode": "palette-classic"}, "unit": "reqps"},
+        "overrides": []
+      },
+      "options": {
+        "legend": {"displayMode": "table", "placement": "bottom", "calcs": ["last", "sum"]},
+        "tooltip": {"mode": "multi"}
+      },
+      "targets": [
+        {
+          "datasource": {"type": "prometheus"},
+          "expr": "rate(viewer_ws_connections_total[1m])",
+          "legendFormat": "connections",
+          "refId": "A"
+        },
+        {
+          "datasource": {"type": "prometheus"},
+          "expr": "sum by (reason) (rate(viewer_ws_disconnects_total[1m]))",
+          "legendFormat": "disconnect {{reason}}",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "title": "Token refresh outcomes",
+      "description": "Rotation des viewer JWT. ``success`` est nominal (proactive refresh T-60s côté frontend). ``expired_grace`` indique un client qui dépasse la grace window (typique d'un onglet en background longtemps) — frontend retombe sur full bootstrap. ``auth_failed`` ou ``missing_token`` répétés : potentielle attaque brute force.",
+      "type": "timeseries",
+      "id": 9,
+      "gridPos": {"h": 6, "w": 8, "x": 16, "y": 22},
+      "fieldConfig": {
+        "defaults": {"color": {"mode": "palette-classic"}, "unit": "reqps"},
+        "overrides": []
+      },
+      "options": {
+        "legend": {"displayMode": "table", "placement": "bottom", "calcs": ["last", "sum"]},
+        "tooltip": {"mode": "multi"}
+      },
+      "targets": [
+        {
+          "datasource": {"type": "prometheus"},
+          "expr": "sum by (outcome) (rate(viewer_token_refresh_total[1m]))",
+          "legendFormat": "{{outcome}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "title": "End-to-end voice latency (TTFB voice — p50 / p95 / p99)",
+      "description": "Latence de bout en bout d'un tour de parole : VAD END_OF_SPEECH → premier frame audio LiveKit publié. Mesuré via voice_turn_latency_seconds (Sprint D PR1). Cibles §7.2 : <500ms p50, <800ms p95. Réutilise le histogram déjà publié ; cohabite avec ce dashboard pour vue end-to-end complète.",
+      "type": "timeseries",
+      "id": 10,
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 28},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "yellow", "value": 0.5},
+              {"color": "red", "value": 0.8}
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {"displayMode": "table", "placement": "bottom", "calcs": ["last", "max"]},
+        "tooltip": {"mode": "multi"}
+      },
+      "targets": [
+        {
+          "datasource": {"type": "prometheus"},
+          "expr": "histogram_quantile(0.50, sum by (le, stage) (rate(voice_turn_latency_seconds_bucket[5m])))",
+          "legendFormat": "p50 {{stage}}",
+          "refId": "A"
+        },
+        {
+          "datasource": {"type": "prometheus"},
+          "expr": "histogram_quantile(0.95, sum by (le, stage) (rate(voice_turn_latency_seconds_bucket[5m])))",
+          "legendFormat": "p95 {{stage}}",
+          "refId": "B"
+        }
+      ]
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 38,
+  "style": "dark",
+  "tags": ["voice", "body", "pipeline", "shugu"],
+  "templating": {"list": []},
+  "time": {"from": "now-30m", "to": "now"},
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Shugu — Voice-body pipeline (Sprint D)",
+  "uid": "shugu-voice-body-pipeline",
+  "version": 1,
+  "weekStart": ""
+}

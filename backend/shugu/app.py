@@ -54,6 +54,7 @@ from .routes import (
     scene_composer_api,
     scene_editor_api,
     test_director_api,
+    viewer,
     visitor_ws,
     world_ws,
 )
@@ -133,6 +134,22 @@ async def lifespan(app: FastAPI):
     log.info(
         "observability.prometheus_recorder_ready",
         metrics_enabled=settings.metrics_enabled,
+    )
+
+    # D-10B — Pipeline metrics recorder (voice↔body). Branché sur le MÊME
+    # registry que l'agent-loop recorder pour que les compteurs voice
+    # apparaissent dans /metrics aux côtés des compteurs agent-loop. Gated
+    # par settings.voice_metrics_enabled (cohérent avec voice/metrics.py
+    # turn metrics — le même flag active les deux).
+    from .voice.pipeline_metrics import make_pipeline_recorder
+    _pipeline_metrics = make_pipeline_recorder(
+        enabled=settings.voice_metrics_enabled,
+        registry=_prom_recorder.registry,
+    )
+    app.state.pipeline_metrics = _pipeline_metrics  # exposé pour tests + extensions
+    log.info(
+        "observability.pipeline_metrics_ready",
+        enabled=settings.voice_metrics_enabled,
     )
     # ── Fin Phase 8.2 ─────────────────────────────────────────────────────
 
@@ -345,6 +362,19 @@ async def lifespan(app: FastAPI):
     editor_ws.set_deps(editor_ws.EditorWSDeps(
         event_bus=event_bus, settings=settings, redis=_redis,
     ))
+    # Viewer WS + REST — Sprint D PR D-3. Push director events (scene.apply +
+    # voice.interrupt) vers le frontend React + bootstrap/refresh JWT viewer +
+    # snapshot SceneState pour resync reconnect. Cf routes/viewer.py.
+    # Le state_store est un singleton in-memory déjà instancié par get_director_state_store()
+    # ailleurs dans le wiring (Director ou pas, le store existe pour servir GET /viewer/state).
+    from .director.state_store import get_director_state_store as _get_state_store
+    viewer.set_deps(viewer.ViewerDeps(
+        event_bus=event_bus,
+        settings=settings,
+        redis=_redis,
+        state_store=_get_state_store(),
+        pipeline_metrics=_pipeline_metrics,
+    ))
     # Observatory SSE (Sprint mos-A) — flux temps réel des events workers.
     # Lit le bus event partagé en read-only ; aucun side effect possible côté
     # producteurs. Topic set restreint aux flux JSON-safe (pas `stage`).
@@ -361,8 +391,33 @@ async def lifespan(app: FastAPI):
     # Director workers (Phase E3) — registry tag_name -> Worker injecté avec le bus.
     # Utilisé par l'orchestrator E2 pour dispatcher les tags inline vers les workers
     # déterministes (outfit, vfx, anim, face, say_emotion, camera, scene).
+    #
+    # Sprint integration D-5 (2026-05-09) : wiring audio_clock_provider via
+    # ``VoiceRuntimeState`` partagé entre lifespan FastAPI et worker LiveKit.
+    # Le worker LiveKit tourne dans le même process (livekit-agents 1.5.5
+    # default = JobExecutorType.THREAD), donc une référence Python suffit —
+    # pas de Redis IPC, pas de drift 50 ms.
+    #
+    # IMPORTANT (honest scope) : avec D-2 Option B (bridge créé mais
+    # ``_handle_turn_streaming`` continue d'utiliser ``audio_source`` legacy),
+    # ``bridge.publish_pcm`` n'est jamais appelé → ``chunk_started_at_ms``
+    # reste ``None`` à vie → ``audio_at_ms`` est absent des payloads
+    # say_emotion/face. La cible drift §7.2 <100ms p95 sera effective
+    # uniquement après migration Option A (bascule
+    # ``_handle_turn_streaming → bridge.publish_stream``, à faire dans un PR
+    # ultérieur). Ce wiring prépare l'infrastructure ; le bénéfice arrive
+    # plus tard.
+    #
+    # Voir backend/shugu/director/workers/__init__.py docstring pour exemple.
     from .director.workers import make_workers
-    app.state.director_workers = make_workers(event_bus)
+    from .voice.voice_runtime import VoiceRuntimeState
+    _voice_runtime = VoiceRuntimeState()
+    app.state.voice_runtime = _voice_runtime  # exposé pour tests + extensions futures
+    app.state.director_workers = make_workers(
+        event_bus,
+        audio_clock_provider=_voice_runtime.chunk_started_at_ms,
+        pipeline_metrics=_pipeline_metrics,
+    )
 
     # Scene Composer ScenePlayer (Phase E5.1) — exécuteur déterministe.
     # OFF par défaut (`scene_player_enabled=False`), aucun impact prod sans le flag.
@@ -561,8 +616,19 @@ async def lifespan(app: FastAPI):
         # histograms appear in GET /metrics alongside agent-loop counters
         # (PrometheusMetricsRecorder.registry is the registry passed to /metrics).
         _voice_prom_registry = getattr(_prom_recorder, "registry", None)
+        # Sprint integration D-4 v3 + D-5 (2026-05-09) : on injecte event_bus
+        # et voice_runtime au worker LiveKit. event_bus permet à
+        # ``ShuguVoiceAgent.cancel_speaking`` de publier ``voice.interrupt``
+        # sur ``editor:broadcast`` (relayé au frontend via D-3). voice_runtime
+        # est le container partagé pour exposer le ``bridge`` actif au
+        # ``audio_clock_provider`` injecté à ``make_workers`` ci-dessus.
         _worker_opts = _build_worker_options(
-            settings, _voice_llm_instance, prom_registry=_voice_prom_registry,
+            settings,
+            _voice_llm_instance,
+            prom_registry=_voice_prom_registry,
+            event_bus=event_bus,
+            voice_runtime=_voice_runtime,
+            pipeline_metrics=_pipeline_metrics,
         )
         _agent_server = _AgentServer.from_server_options(_worker_opts)
         _voice_worker_task = asyncio.create_task(
@@ -661,6 +727,7 @@ def create_app() -> FastAPI:
     app.include_router(operator_ws.router)
     app.include_router(editor_ws.router)   # /ws/editor — Phase D collab
     app.include_router(world_ws.router)    # /ws/world — Phase L4 world.delta viewer
+    app.include_router(viewer.router)      # /viewer/events + /voice/token* — Sprint D PR D-3
     # Phase E4 — route de test Director (gated par settings.test_triggers_enabled).
     # La route retourne 404 si le flag est OFF, donc on peut toujours l'inclure —
     # pas de risque de surface d'attaque en prod. L'inclusion inconditionnelle

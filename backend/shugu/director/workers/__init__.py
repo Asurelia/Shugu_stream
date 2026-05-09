@@ -48,6 +48,9 @@ strictement compatible avec l'orchestrator E2 prévu.
 """
 from __future__ import annotations
 
+from typing import Callable, Optional
+
+from ...voice.pipeline_metrics import PipelineMetricsRecorder
 from .anim import AnimWorker
 from .base import (
     DIRECTOR_SCENE_ID_SENTINEL,
@@ -78,7 +81,12 @@ __all__ = [
 ]
 
 
-def make_workers(event_bus) -> dict[str, Worker]:
+def make_workers(
+    event_bus,
+    *,
+    audio_clock_provider: Optional[Callable[[], Optional[int]]] = None,
+    pipeline_metrics: Optional[PipelineMetricsRecorder] = None,
+) -> dict[str, Worker]:
     """Construit le registry `tag_name -> Worker` avec la DI du bus.
 
     Appelé une fois côté `app.lifespan` quand l'`EventBus` est prêt.
@@ -89,13 +97,59 @@ def make_workers(event_bus) -> dict[str, Worker]:
     `core/identity.py` au boot du module workers (ralentit les tests
     qui n'instancient que des workers isolés). Les usages réels passent
     par `make_event_bus()` côté `core.event_bus_factory`.
+
+    # D-5 — audio_clock_provider (sync audio↔anim)
+
+    Le `audio_clock_provider` est un callable qui retourne le
+    `chunk_started_at_ms` du `LiveKitPublisher` courant (via le
+    `AudioBridge` D-2), ou `None` si aucune chunk TTS n'est active.
+
+    Il est injecté UNIQUEMENT à `SayWorker` et `FaceWorker` (les seuls
+    workers dont les events scéniques sont synchronisés sur l'audio TTS,
+    cf. spec §4.1). Les autres workers (anim/vfx/camera/outfit/scene) sont
+    appliqués immédiatement à réception côté frontend et n'utilisent pas
+    ce timestamp.
+
+    Si `audio_clock_provider` est `None` (défaut, pas de wiring voice),
+    Say/Face publient des payloads sans `audio_at_ms` — le route
+    `/viewer/events` (D-3) accepte les events sans ce champ pour
+    rester rétro-compatible.
+
+    Wiring effectif (à compléter quand bridge sera wiré dans
+    ShuguVoiceAgent runtime / lifespan voice) :
+
+        bridge: AudioBridge = ...  # créé par voice/livekit_agent
+        workers = make_workers(
+            event_bus,
+            audio_clock_provider=lambda: bridge.chunk_started_at_ms,
+        )
+
+    Args:
+        event_bus: Bus d'events partagé (DI pattern E3).
+        audio_clock_provider: Callable optionnel `() -> int | None` qui
+            retourne le ``chunk_started_at_ms`` (monotonic ms) de la
+            publication audio courante. Wiré par le lifespan voice
+            quand l'``AudioBridge`` est actif. ``None`` (défaut) =
+            pas de sync audio (config sans LiveKit / voice désactivé).
+
+    Returns:
+        Dict `tag_name -> Worker` complet (7 entries : outfit, vfx, anim,
+        face, say_emotion, camera, scene).
     """
     workers = (
         OutfitWorker(event_bus=event_bus),
         VfxWorker(event_bus=event_bus),
         AnimWorker(event_bus=event_bus),
-        FaceWorker(event_bus=event_bus),
-        SayWorker(event_bus=event_bus),
+        FaceWorker(
+            event_bus=event_bus,
+            audio_clock_provider=audio_clock_provider,
+            pipeline_metrics=pipeline_metrics,
+        ),
+        SayWorker(
+            event_bus=event_bus,
+            audio_clock_provider=audio_clock_provider,
+            pipeline_metrics=pipeline_metrics,
+        ),
         CameraWorker(event_bus=event_bus),
         SceneWorker(event_bus=event_bus),
     )
