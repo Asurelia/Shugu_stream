@@ -259,6 +259,28 @@ class Settings(BaseSettings):
                     "Env: SHUGU_VOICE_USE_AGENTSESSION.",
     )
 
+    # Migration Option A — runtime flag pour activer le nouveau pipeline
+    # voice-body (D-1/D-2/D-4/D-5 mergés via PR #111) en runtime sur le path
+    # Sprint C manual. OFF par défaut = path Sprint C legacy intact (audio_source
+    # 48kHz publié + filler bank classique). N'a PAS de surface sur le path
+    # voice_use_agentsession (AgentSession possède sa propre track roomio_audio).
+    voice_use_new_pipeline: bool = Field(
+        default=False,
+        validation_alias=AliasChoices(
+            "VOICE_USE_NEW_PIPELINE", "SHUGU_VOICE_USE_NEW_PIPELINE"
+        ),
+        description=(
+            "Sprint integration runtime flag (post voice-body merge). "
+            "Si True : TTS routé via bridge.publish_sentence (track shugu-voice-tts "
+            "22kHz natif), audio_at_ms enrichment actif côté Workers, FillerBank "
+            "force-Null (pas de fillers tant que migration filler pas faite). "
+            "Si False (default) : path Sprint C legacy preserved (audio_source 48kHz "
+            "+ filler bank classique). Active progressivement après smoke test runtime. "
+            "S'applique uniquement au path manual (voice_use_agentsession=False). "
+            "Env: SHUGU_VOICE_USE_NEW_PIPELINE."
+        ),
+    )
+
     # LLM (Shugu shares the MiniMax account; can diverge later)
     minimax_api_key: str = ""
     minimax_base_url: str = "https://api.minimax.io/v1"
