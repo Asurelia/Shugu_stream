@@ -16,7 +16,8 @@
  * change with no impact on the legacy code path.
  */
 
-import React, { forwardRef, useEffect } from "react";
+import React, { forwardRef, useId } from "react";
+import * as Dialog from "@radix-ui/react-dialog";
 
 // Re-export toast infra so callers can use a single import path.
 export { useToast, GlassToastProvider } from "./toast";
@@ -283,63 +284,73 @@ export function GlassModal({
   open, onClose, title, children, footer, width = 480, closeOnScrim = true,
   "aria-labelledby": ariaLabelledby,
 }: GlassModalProps) {
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
-  if (!open) return null;
+  // Generate a stable heading id when no external id is provided.
+  const generatedId = useId();
+  const titleId = ariaLabelledby ?? (title ? `lg-modal-title-${generatedId}` : undefined);
+
   return (
-    <div
-      className="lg-scrim"
-      onClick={(e) => closeOnScrim && e.target === e.currentTarget && onClose()}
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby={ariaLabelledby}
-    >
-      <div className="lg-modal-wrap" style={{ width, maxWidth: "100%" }}>
-        <GlassSurface variant="modal" tone="strong">
-          {title && (
-            <div
-              style={{
-                padding: "18px 22px 0",
-                display: "flex", alignItems: "center", justifyContent: "space-between",
-              }}
-            >
-              <h2
+    <Dialog.Root open={open} onOpenChange={(isOpen) => { if (!isOpen) onClose(); }}>
+      <Dialog.Portal>
+        {/* Liquid Glass scrim — backdrop blur + purple vignette, mount animation */}
+        <Dialog.Overlay className="lg-scrim" />
+        {/*
+         * Dialog.Content is rendered as a sibling of Overlay inside the Portal.
+         * .lg-modal-wrap is now position:fixed + centered via CSS (see liquid-glass.css).
+         * Radix provides: focus trap, aria-labelledby, Escape close, role="dialog", aria-modal.
+         */}
+        <Dialog.Content
+          className="lg-modal-wrap"
+          style={{ width, maxWidth: "calc(100vw - 48px)" }}
+          aria-labelledby={titleId}
+          aria-modal="true"
+          onInteractOutside={(e) => { if (!closeOnScrim) e.preventDefault(); }}
+        >
+          <GlassSurface variant="modal" tone="strong">
+            {title && (
+              <div
                 style={{
-                  margin: 0, fontSize: 16, fontWeight: 700,
-                  color: "var(--on-surface)", letterSpacing: "0.02em",
+                  padding: "18px 22px 0",
+                  display: "flex", alignItems: "center", justifyContent: "space-between",
                 }}
               >
-                {title}
-              </h2>
-              <button
-                aria-label="Fermer"
-                onClick={onClose}
-                className="lgb lgb-subtle lgb-sm"
-                style={{ padding: "4px 8px", minWidth: 0 }}
+                <Dialog.Title asChild>
+                  <h2
+                    id={titleId}
+                    style={{
+                      margin: 0, fontSize: 16, fontWeight: 700,
+                      color: "var(--on-surface)", letterSpacing: "0.02em",
+                    }}
+                  >
+                    {title}
+                  </h2>
+                </Dialog.Title>
+                <Dialog.Close asChild>
+                  <button
+                    aria-label="Fermer"
+                    className="lgb lgb-subtle lgb-sm"
+                    style={{ padding: "4px 8px", minWidth: 0 }}
+                  >
+                    ✕
+                  </button>
+                </Dialog.Close>
+              </div>
+            )}
+            <div style={{ padding: "18px 22px" }}>{children}</div>
+            {footer && (
+              <div
+                style={{
+                  padding: "14px 22px 20px",
+                  display: "flex", gap: 8, justifyContent: "flex-end",
+                  borderTop: "1px solid rgba(255,255,255,0.06)",
+                }}
               >
-                ✕
-              </button>
-            </div>
-          )}
-          <div style={{ padding: "18px 22px" }}>{children}</div>
-          {footer && (
-            <div
-              style={{
-                padding: "14px 22px 20px",
-                display: "flex", gap: 8, justifyContent: "flex-end",
-                borderTop: "1px solid rgba(255,255,255,0.06)",
-              }}
-            >
-              {footer}
-            </div>
-          )}
-        </GlassSurface>
-      </div>
-    </div>
+                {footer}
+              </div>
+            )}
+          </GlassSurface>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
   );
 }
 
