@@ -11,8 +11,10 @@
  *   toast.info("...");
  *   toast.warning("...");
  *
- * a11y: role="status" aria-live="polite"  (success/info/warning via type="background")
- *       role="alert"  aria-live="assertive" (error — explicit role override)
+ * a11y: Radix manages ARIA semantics via a hidden ToastAnnounce element.
+ *       type="background" → aria-live="polite"  (success/info/warning)
+ *       type="foreground" → aria-live="assertive" (error)
+ *       No explicit role= is set on Toast.Root (<li>) — Radix handles it.
  */
 import * as Toast from "@radix-ui/react-toast";
 import React, { createContext, useCallback, useContext, useRef, useState } from "react";
@@ -77,14 +79,16 @@ export function GlassToastProvider({ children }: { children: React.ReactNode }) 
               !open && setItems((p) => p.filter((i) => i.id !== item.id))
             }
             /**
-             * a11y:
-             * - error → type="foreground" sets aria-live="assertive"; we add
-             *   role="alert" explicitly because Radix defaults to role="status".
-             * - all others → type="background" gives aria-live="polite" and
-             *   role="status", which Radix sets by default.
+             * a11y: Radix manages ARIA via a hidden ToastAnnounce element
+             * (role="status" + aria-live) — NOT via role on the visible <li>.
+             * - type="foreground" → aria-live="assertive" (errors)
+             * - type="background" → aria-live="polite"    (others)
+             *
+             * Do NOT pass role= explicitly: Toast.Root renders as <li> inside
+             * the <ol> Viewport, and role="status"|"alert" are not allowed on
+             * <li> per ARIA spec (axe-core: aria-allowed-role + list).
              */
             type={item.variant === "error" ? "foreground" : "background"}
-            role={item.variant === "error" ? "alert" : "status"}
           >
             <Toast.Title className="lg-toast-title">{item.title}</Toast.Title>
             {item.description && (

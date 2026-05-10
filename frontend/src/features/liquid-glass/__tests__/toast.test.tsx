@@ -4,8 +4,8 @@
  * Covers:
  *  1. useToast throws outside provider
  *  2. toast.success renders title in viewport
- *  3. toast.error gets role="alert" (a11y assertive)
- *  4. toast.info / warning / success get role="status" (a11y polite)
+ *  3. toast.error announces assertively (a11y assertive via aria-live)
+ *  4. toast.info / warning / success announce politely (a11y polite via role="status")
  *  5. Auto-dismiss via fake timers
  *  6. Close button removes the toast
  */
@@ -65,29 +65,36 @@ describe("GlassToastProvider", () => {
     expect(screen.getByText("Saved successfully")).toBeInTheDocument();
   });
 
-  it("toast.error renders with role='alert' (a11y assertive)", () => {
+  it("toast.error announces assertively (a11y assertive)", () => {
     renderWithProvider((t) => t.error("Something failed"));
-    // Radix renders Toast.Root as an <li>; we pass role="alert" explicitly.
-    expect(screen.getByRole("alert")).toBeInTheDocument();
+    // Radix manages ARIA via a hidden ToastAnnounce element — NOT via role= on
+    // the visible <li>. For type="foreground" (errors), Radix renders a hidden
+    // element with role="status" + aria-live="assertive". The <li> itself has
+    // no explicit role (role= on <li> is invalid per ARIA spec — axe-core
+    // aria-allowed-role). We verify the a11y guarantee via aria-live, not role.
+    const assertiveRegion = document.querySelector('[aria-live="assertive"]');
+    expect(assertiveRegion).not.toBeNull();
     expect(screen.getByText("Something failed")).toBeInTheDocument();
   });
 
-  it("toast.info renders with role='status' (a11y polite)", () => {
+  it("toast.info announces politely (a11y polite)", () => {
     renderWithProvider((t) => t.info("Loading complete"));
-    // Radix default role for type="background" is "status".
+    // Radix manages ARIA via a hidden ToastAnnounce element with role="status"
+    // + aria-live="polite" for type="background". The same guarantee (polite
+    // announcement to assistive tech) is verified here via the live region.
     const statuses = screen.getAllByRole("status");
     expect(statuses.length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText("Loading complete")).toBeInTheDocument();
   });
 
-  it("toast.warning renders with role='status'", () => {
+  it("toast.warning announces politely (a11y polite)", () => {
     renderWithProvider((t) => t.warning("Low memory"));
     const statuses = screen.getAllByRole("status");
     expect(statuses.length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText("Low memory")).toBeInTheDocument();
   });
 
-  it("toast.success renders with role='status'", () => {
+  it("toast.success announces politely (a11y polite)", () => {
     renderWithProvider((t) => t.success("Done"));
     const statuses = screen.getAllByRole("status");
     expect(statuses.length).toBeGreaterThanOrEqual(1);
@@ -121,35 +128,31 @@ describe("GlassToastProvider", () => {
     expect(screen.queryByText("Closeable toast")).not.toBeInTheDocument();
   });
 
-  // ── axe-core a11y gate (I3.6) ─────────────────────────────────────────
+  // ── axe-core a11y gate (I3.7) ─────────────────────────────────────────
   //
-  // FINDING: Two genuine axe-core violations detected in GlassToast (I3.6):
+  // FIX (I3.7, closes #150): Two axe-core violations were detected in I3.6:
   //
-  // 1. aria-allowed-role: Radix Toast renders Toast.Root as <li> inside the
-  //    <ol> Viewport. We pass role="status" / role="alert" explicitly, but
-  //    these roles are NOT allowed on <li> elements per ARIA spec.
+  // 1. aria-allowed-role: We passed role="status"|"alert" explicitly on
+  //    Toast.Root, which Radix renders as <li>. These roles are NOT allowed
+  //    on <li> elements per ARIA spec.
   //    Rule: https://dequeuniversity.com/rules/axe/4.10/aria-allowed-role
   //
-  // 2. list: The <ol> Viewport directly contains <li role="status/alert">
-  //    children. axe flags this because list elements may only contain
-  //    "listitem"-role children directly.
+  // 2. list: <ol> Viewport contained <li role="status/alert"> children, which
+  //    violates the requirement that list elements only directly contain
+  //    listitem-role children.
   //    Rule: https://dequeuniversity.com/rules/axe/4.10/list
   //
-  // Root cause: Radix Toast.Root renders as <li> natively. Passing an explicit
-  // role= override that is incompatible with <li> creates the ARIA violation.
+  // Root cause: explicit role= override on Toast.Root (<li>).
   //
-  // Decision (I3.6): SKIP these tests, document the finding.
-  // Fix must be tracked as a separate issue (GlassToast ARIA role fix):
-  //   Option A — remove explicit role= from Toast.Root and rely on Radix
-  //              defaults (role="status") + the Toast.Provider type prop to
-  //              control aria-live assertiveness.
-  //   Option B — wrap toast items in a <div role="region" aria-live="polite">
-  //              outside the Radix <ol> and suppress the Viewport.
-  //   Option C — file a Radix issue / upgrade if fixed upstream.
+  // Fix (Option A): Remove explicit role= from Toast.Root. Radix manages ARIA
+  // via a hidden ToastAnnounce element (role="status" + aria-live), not via
+  // role on the visible <li>. The type prop controls assertiveness:
+  //   - type="foreground" → aria-live="assertive" (errors)
+  //   - type="background" → aria-live="polite"    (others)
   //
-  // This is OUT OF SCOPE for I3.6 (infra-only PR). Fix tracked as follow-up.
+  // Tests below were skipped in I3.6 and are now re-enabled (I3.7).
 
-  it.skip("GlassToastProvider viewport has no axe-core violations with a visible toast [FINDING: aria-allowed-role on <li> — see comment above]", async () => {
+  it("GlassToastProvider viewport has no axe-core violations with a visible toast", async () => {
     const { container } = renderWithProvider((t) => t.success("A11y toast check"));
     const results = await axe(container, {
       rules: { "color-contrast": { enabled: false } },
@@ -157,7 +160,7 @@ describe("GlassToastProvider", () => {
     expect(results).toHaveNoViolations();
   });
 
-  it.skip("GlassToastProvider has no axe-core violations for error toast (assertive) [FINDING: aria-allowed-role on <li> — see comment above]", async () => {
+  it("GlassToastProvider has no axe-core violations for error toast (assertive)", async () => {
     const { container } = renderWithProvider((t) => t.error("Error a11y check"));
     const results = await axe(container, {
       rules: { "color-contrast": { enabled: false } },
