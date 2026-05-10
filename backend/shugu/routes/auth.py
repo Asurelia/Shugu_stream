@@ -333,10 +333,14 @@ async def logout(
     response: Response,
     shugu_access: Optional[str] = Cookie(None),
     shugu_refresh: Optional[str] = Cookie(None),
+    shugu_user_access: Optional[str] = Cookie(None),
+    shugu_user_refresh: Optional[str] = Cookie(None),
     settings: Settings = Depends(get_settings),
 ):
     from ..app import get_redis
     redis = get_redis()
+
+    # Operator JWTs (existing — unchanged)
     for token, ttype in ((shugu_access, "access"), (shugu_refresh, "refresh")):
         if not token:
             continue
@@ -350,6 +354,22 @@ async def logout(
                 token_type=ttype,
                 reason=str(exc),
             )
+
+    # User JWTs (S3 fix — symmetric with operator loop above)
+    for token, ttype in ((shugu_user_access, "access"), (shugu_user_refresh, "refresh")):
+        if not token:
+            continue
+        try:
+            payload = await user_tokens.verify(token, settings=settings, redis=redis, expected_type=ttype)
+            remaining = max(payload.exp - int(time.time()), 60)
+            await user_tokens.revoke(payload.jti, ttl_s=remaining, redis=redis)
+        except AuthError as exc:
+            log.info(
+                "auth.logout_skip_revoke_user",
+                token_type=ttype,
+                reason=str(exc),
+            )
+
     _clear_cookies(response)
     return {"ok": True}
 
