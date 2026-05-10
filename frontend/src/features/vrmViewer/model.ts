@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { VRM, VRMExpressionPresetName, VRMLoaderPlugin, VRMUtils } from "@pixiv/three-vrm";
-import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+import { GLTFLoader, type GLTF } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { VRMLookAtSmootherLoaderPlugin } from "@/lib/VRMLookAtSmootherLoaderPlugin/VRMLookAtSmootherLoaderPlugin";
 import { LipSync } from "../lipSync/lipSync";
 import { EmoteController } from "../emoteController/emoteController";
@@ -60,7 +60,13 @@ export class Model {
     return this._lastVolume;
   }
 
-  public async loadVRM(url: string): Promise<void> {
+  public async loadVRM(
+    url: string,
+    opts?: {
+      onProgress?: (loaded: number, total: number) => void;
+      onError?: (err: Error) => void;
+    },
+  ): Promise<void> {
     const loader = new GLTFLoader();
     loader.register(
       (parser) =>
@@ -69,7 +75,30 @@ export class Model {
         })
     );
 
-    const gltf = await loader.loadAsync(url);
+    // loader.loadAsync() does not surface byte-level progress. Use the
+    // three-arg `loader.load(url, onLoad, onProgress, onError)` wrapped in a
+    // Promise so callers can still await it while getting ProgressEvent bytes.
+    const gltf = await new Promise<GLTF>(
+      (resolve, reject) => {
+        loader.load(
+          url,
+          (result) => resolve(result),
+          (event: ProgressEvent) => {
+            if (opts?.onProgress) {
+              // Guard: total may be 0 if server omits Content-Length
+              const loaded = event.loaded;
+              const total = event.lengthComputable && event.total > 0 ? event.total : 0;
+              opts.onProgress(loaded, total);
+            }
+          },
+          (err: unknown) => {
+            const error = err instanceof Error ? err : new Error(String(err));
+            opts?.onError?.(error);
+            reject(error);
+          },
+        );
+      },
+    );
 
     const vrm = (this.vrm = gltf.userData.vrm);
     vrm.scene.name = "VRMRoot";

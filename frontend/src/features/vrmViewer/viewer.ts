@@ -73,7 +73,13 @@ export class Viewer {
     this._clock.start();
   }
 
-  public async loadVrm(url: string): Promise<void> {
+  public async loadVrm(
+    url: string,
+    opts?: {
+      onProgress?: (loaded: number, total: number) => void;
+      onError?: (err: Error) => void;
+    },
+  ): Promise<void> {
     if (this.model?.vrm) {
       this.unloadVRM();
     }
@@ -83,7 +89,7 @@ export class Viewer {
     this._avatarRestCaptured = false;
 
     this.model = new Model(this._camera || new THREE.Object3D());
-    await this.model.loadVRM(url);
+    await this.model.loadVRM(url, opts);
     if (!this.model?.vrm) return;
 
     this.model.vrm.scene.traverse((obj) => {
