@@ -112,9 +112,10 @@ async def test_persist_failure_does_not_break_pipeline(monkeypatch):
 @pytest.mark.asyncio
 async def test_inner_verdict_returned_unchanged_for_refused(monkeypatch):
     """Le verdict refused est renvoyé tel quel même si persist réussit."""
-    from shugu.adapters import moderation_logging as mod
     from contextlib import asynccontextmanager
     from unittest.mock import AsyncMock, MagicMock
+
+    from shugu.adapters import moderation_logging as mod
 
     @asynccontextmanager
     async def fake_scope():
@@ -135,9 +136,10 @@ async def test_inner_verdict_returned_unchanged_for_refused(monkeypatch):
 @pytest.mark.asyncio
 async def test_inner_is_called_for_both_phases(monkeypatch):
     """check_ingress et check_egress délèguent bien à l'inner."""
-    from shugu.adapters import moderation_logging as mod
     from contextlib import asynccontextmanager
     from unittest.mock import AsyncMock, MagicMock
+
+    from shugu.adapters import moderation_logging as mod
 
     @asynccontextmanager
     async def fake_scope():

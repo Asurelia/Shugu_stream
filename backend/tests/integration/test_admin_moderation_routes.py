@@ -15,11 +15,9 @@ Couvre (Tasks 4-5 persistence + Tasks 6-11 routes) :
 from __future__ import annotations
 
 import pytest
-import pytest_asyncio
 from sqlalchemy import select
 
 from shugu.services import moderation_events as svc
-
 
 # ─── LoggingModeration persistence tests (nécessitent PG + session_scope) ────
 

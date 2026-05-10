@@ -109,9 +109,12 @@ export function ModerationClient() {
   }, [phaseFilter, detectorFilter, windowFilter, offset, toast]);
 
   useEffect(() => {
-    void load();
+    const tid = setTimeout(() => void load(), 0);
     const id = setInterval(() => void load(), POLL_MS);
-    return () => clearInterval(id);
+    return () => {
+      clearTimeout(tid);
+      clearInterval(id);
+    };
   }, [load]);
 
   const topDetector = useMemo(() => {

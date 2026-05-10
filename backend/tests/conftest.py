@@ -162,7 +162,9 @@ async def seed_redis_bans(redis_client):
 async def seed_events(db_session):
     """Insère 20 ModerationEvent variés (3 detectors, 2 phases, sur 24h)."""
     from datetime import datetime, timedelta, timezone
+
     from sqlalchemy import insert
+
     from shugu.db.models import ModerationEvent
 
     now = datetime.now(timezone.utc)
@@ -214,6 +216,7 @@ async def operator_cookie(settings_for_tests, monkeypatch):
     require_operator puisse vérifier la révocation sans Redis réel.
     """
     import fakeredis
+
     import shugu.app
     from shugu.auth import jwt_tokens
 
@@ -257,8 +260,8 @@ async def patch_session_scope(monkeypatch, db_session):
         yield db_session
         await db_session.commit()
 
-    import shugu.db.session as db_sess_mod
     import shugu.adapters.moderation_logging as mod_log
+    import shugu.db.session as db_sess_mod
     monkeypatch.setattr(db_sess_mod, "session_scope", _test_scope)
     monkeypatch.setattr(mod_log, "session_scope", _test_scope)
 
@@ -279,12 +282,15 @@ async def api_client(settings_for_tests, monkeypatch, redis_client, db_session):
     partagent la même connexion Postgres que le router. Si Postgres absent,
     db_session skipera le test.
     """
-    import shugu.app
     from contextlib import asynccontextmanager
+
     from fastapi import FastAPI
-    from httpx import AsyncClient, ASGITransport
+    from httpx import ASGITransport, AsyncClient
+
+    import shugu.app
     from shugu.config import get_settings
-    from shugu.routes.admin_moderation import router as admin_moderation_router, _get_redis
+    from shugu.routes.admin_moderation import _get_redis
+    from shugu.routes.admin_moderation import router as admin_moderation_router
 
     # Monkeypatch get_redis (utilisé par require_operator via import différé)
     monkeypatch.setattr(shugu.app, "get_redis", lambda: redis_client)
@@ -295,7 +301,6 @@ async def api_client(settings_for_tests, monkeypatch, redis_client, db_session):
         yield db_session
 
     import shugu.routes.admin_moderation as mod_route
-    import shugu.db.session as db_sess_mod
     monkeypatch.setattr(mod_route, "session_scope", _test_session_scope)
 
     app = FastAPI()
