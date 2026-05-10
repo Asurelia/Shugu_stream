@@ -123,6 +123,32 @@ export class Model {
     }
     this.animationManager?.dispose();
     this.animationManager = undefined;
+
+    // Tear-down du graph WebAudio. Sans ça, chaque retry de `loadVrm`
+    // (cf vrmViewer.tsx onError → onRetry) crée un AudioContext supplémentaire
+    // que le browser garde vivant — Chrome plafonne à ~6 contexts/page avant
+    // de jeter NotAllowedError. Cf U4 audit follow-up.
+    //
+    // Ordre :
+    //  1. Clear le `_fadeStopTimer` AVANT close — sinon le setTimeout fire un
+    //     `audio.pause()` sur un élément orphelin (benign mais pollue les tests).
+    //  2. `close()` est async et fire-and-forget : on tear-down un model
+    //     remplacé, l'appelant n'attend pas. Le `.catch()` swallow l'éventuel
+    //     `InvalidStateError` si le contexte est déjà fermé (idempotence).
+    //  3. Null le `_lipSync` après pour que `update()` short-circuite via le
+    //     guard existant `if (this._lipSync)`.
+    if (this._fadeStopTimer !== null) {
+      clearTimeout(this._fadeStopTimer);
+      this._fadeStopTimer = null;
+    }
+    if (this._lipSync) {
+      this._lipSync.audio.close().catch(() => {
+        // Already closed or unsupported — safe to ignore.
+      });
+      this._lipSync = undefined;
+    }
+    this._streamingGain = null;
+    this._streamingAudio = null;
   }
 
   public async loadIdleAnimation(url: string): Promise<void> {
