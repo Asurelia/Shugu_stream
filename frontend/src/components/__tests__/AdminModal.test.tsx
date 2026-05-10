@@ -21,6 +21,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, cleanup } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { axe } from "jest-axe";
 import { AdminModal } from "../AdminModal";
 
 // Stub fetch so the polling useEffect does not crash in jsdom.
@@ -102,5 +103,17 @@ describe("AdminModal a11y (U2 migration)", () => {
     }
     // After cycling, focus must remain inside the dialog
     expect(dialog).toContainElement(document.activeElement as HTMLElement);
+  });
+
+  // ── axe-core a11y gate (I3.6) ─────────────────────────────────────────
+  // Color contrast is disabled: JSDOM has no canvas — axe cannot measure
+  // computed colors reliably (may produce false positives). Tracked for
+  // Playwright-based I3.7 follow-up.
+  it("has no axe-core violations when open (excluding color-contrast)", async () => {
+    const { container } = render(<AdminModal open onClose={vi.fn()} />);
+    const results = await axe(container, {
+      rules: { "color-contrast": { enabled: false } },
+    });
+    expect(results).toHaveNoViolations();
   });
 });
