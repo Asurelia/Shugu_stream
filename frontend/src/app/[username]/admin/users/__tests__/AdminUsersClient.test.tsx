@@ -123,11 +123,13 @@ describe("AdminUsersClient", () => {
 
     renderComponent();
 
+    // Radix Toast duplicates text into a hidden ToastAnnounce region for a11y
+    // — use getAllByText which handles 1+ instances for both title and description.
     await waitFor(() =>
-      expect(screen.getByText("Chargement échoué")).toBeInTheDocument()
+      expect(screen.getAllByText("Chargement échoué").length).toBeGreaterThanOrEqual(1)
     );
 
-    expect(screen.getByText("Accès opérateur requis")).toBeInTheDocument();
+    expect(screen.getAllByText("Accès opérateur requis").length).toBeGreaterThanOrEqual(1);
   });
 
   it("fires toast.error with 'Erreur réseau' when listUsers rejects with a generic error", async () => {
@@ -136,10 +138,12 @@ describe("AdminUsersClient", () => {
     renderComponent();
 
     await waitFor(() =>
-      expect(screen.getByText("Chargement échoué")).toBeInTheDocument()
+      expect(screen.getAllByText("Chargement échoué").length).toBeGreaterThanOrEqual(1)
     );
 
-    expect(screen.getByText("Erreur réseau")).toBeInTheDocument();
+    // Radix Toast duplicates text into a hidden ToastAnnounce region for a11y
+    // — use getAllByText which handles 1+ instances.
+    expect(screen.getAllByText("Erreur réseau").length).toBeGreaterThanOrEqual(1);
   });
 
   it("fires toast.error('Action échouée') when commitAction rejects, modal stays open", async () => {
@@ -166,11 +170,14 @@ describe("AdminUsersClient", () => {
     });
 
     // Toast should appear with error title and description.
+    // Radix Toast duplicates text into hidden ToastAnnounce — use getAllByText.
     await waitFor(() =>
-      expect(screen.getByText("Action échouée")).toBeInTheDocument()
+      expect(screen.getAllByText("Action échouée").length).toBeGreaterThanOrEqual(1)
     );
 
-    expect(screen.getByText("Quota VIP dépassé")).toBeInTheDocument();
+    // Radix Toast duplicates text into a hidden ToastAnnounce region for a11y
+    // — use getAllByText which handles 1+ instances.
+    expect(screen.getAllByText("Quota VIP dépassé").length).toBeGreaterThanOrEqual(1);
 
     // Modal stays open — pendingAction not cleared in catch.
     expect(screen.getByRole("button", { name: "Confirmer" })).toBeInTheDocument();
