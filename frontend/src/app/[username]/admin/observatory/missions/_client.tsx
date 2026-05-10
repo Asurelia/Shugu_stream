@@ -30,7 +30,7 @@ import { DndContext, type DragEndEvent, PointerSensor, useSensor, useSensors } f
 import { useEffect, useMemo, useState } from "react";
 
 import { AdminShell } from "@/components/admin/AdminShell";
-import { GlassPill } from "@/features/liquid-glass/primitives";
+import { GlassPill, useToast } from "@/features/liquid-glass/primitives";
 import {
   fetchMissions,
   MISSION_STATUSES,
@@ -52,10 +52,10 @@ const COLUMN_LABELS: Record<MissionStatus, string> = {
 type AgentFilter = string | null;
 
 export function MissionsClient() {
+  const toast = useToast();
   const [missions, setMissions] = useState<Mission[]>([]);
   const [agentFilter, setAgentFilter] = useState<AgentFilter>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [isMock, setIsMock] = useState(true);
 
   // PointerSensor avec activationConstraint=8px : un simple click sur la
@@ -66,7 +66,7 @@ export function MissionsClient() {
   );
 
   useEffect(() => {
-    // `loading=true` et `error=null` sont déjà l'état initial via `useState` —
+    // `loading=true` est déjà l'état initial via `useState` —
     // on n'écrit pas ces valeurs synchrones dans l'effect (règle
     // react-hooks/set-state-in-effect). Si en iter 3 on rajoute un refetch
     // manuel, on les set côté handler de l'utilisateur (pas ici).
@@ -81,13 +81,13 @@ export function MissionsClient() {
       .catch((err: unknown) => {
         if (cancelled) return;
         const msg = err instanceof Error ? err.message : "erreur inconnue";
-        setError(msg);
+        toast.error("Chargement échoué", { description: msg });
         setLoading(false);
       });
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [toast]);
 
   // Liste des agents distincts (extraite des missions reçues) — alimente
   // le dropdown de filtre. Triée alpha pour stabilité visuelle.
@@ -158,15 +158,6 @@ export function MissionsClient() {
       }
     >
       <section className="flex flex-col gap-5">
-        {error !== null && (
-          <div
-            data-testid="missions-error"
-            className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-sm text-rose-100"
-          >
-            Erreur de chargement : {error}
-          </div>
-        )}
-
         <MissionFilters
           agents={agents}
           selected={agentFilter}

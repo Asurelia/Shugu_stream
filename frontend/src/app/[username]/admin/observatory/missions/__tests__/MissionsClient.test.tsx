@@ -1,18 +1,23 @@
 /**
  * Test — MissionsClient (Sprint mos-A iter 2b Kanban).
  *
- * Couverture (MVP, 1 test) :
+ * Couverture :
  *   - `fetchMissions()` est appelé au mount, payload mocké rendu.
  *   - Les 4 colonnes Kanban sont présentes.
  *   - Les missions sont distribuées dans la bonne colonne (status match).
  *   - Le filtre par agent fonctionne (cliquer une pill réduit la liste).
  *   - Les stats header reflètent les totaux filtrés.
+ *   - En cas d'erreur fetch, toast.error("Chargement échoué") est déclenché
+ *     (I3.5 — migration error div → useToast, batch missions).
  *
  * Stratégie de mock :
- *   - `fetch` global stubbé via `vi.stubGlobal`. On retourne un payload
- *     synthétique avec 2 missions dans 2 statuts différents.
+ *   - `@/services/adminObservatoryMissionsClient` est mocké via vi.mock pour
+ *     contrôler fetchMissions(). Le mock retourne soit le payload synthétique
+ *     soit rejette — même approche que AdminUsersClient.test.tsx (batch 1).
  *   - `AdminShell` stubbé pour rendre uniquement `children` — évite de
- *     pull `next/navigation` + `fetchAuthStatus` (cf. test iter 1).
+ *     pull `next/navigation` + `fetchAuthStatus`.
+ *   - Render wrappé dans `GlassToastProvider` pour que `useToast()` fonctionne
+ *     (pattern identique à AdminUsersClient.test.tsx).
  *   - dnd-kit n'est PAS mocké : ses handlers s'attachent au DOM mais ne
  *     se déclenchent pas en jsdom (pas de PointerEvent), c'est OK pour
  *     un test de rendu.
@@ -20,7 +25,9 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import React from "react";
 
+import { GlassToastProvider } from "@/features/liquid-glass/primitives";
 import { MissionsClient } from "../_client";
 
 vi.mock("@/components/admin/AdminShell", () => ({
@@ -40,6 +47,18 @@ vi.mock("@/components/admin/AdminShell", () => ({
     </div>
   ),
 }));
+
+vi.mock("@/services/adminObservatoryMissionsClient", async (importActual) => {
+  const actual = await importActual<typeof import("@/services/adminObservatoryMissionsClient")>();
+  return {
+    ...actual,
+    fetchMissions: vi.fn(),
+  };
+});
+
+import { fetchMissions } from "@/services/adminObservatoryMissionsClient";
+
+const mockFetchMissions = fetchMissions as ReturnType<typeof vi.fn>;
 
 const MOCK_PAYLOAD = {
   total: 3,
@@ -78,25 +97,32 @@ const MOCK_PAYLOAD = {
   ],
 };
 
-beforeEach(() => {
-  const fetchMock = vi.fn(async () =>
-    new Response(JSON.stringify(MOCK_PAYLOAD), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    }),
+function renderComponent() {
+  return render(
+    <GlassToastProvider>
+      <MissionsClient />
+    </GlassToastProvider>,
   );
-  vi.stubGlobal("fetch", fetchMock);
+}
+
+beforeEach(() => {
+  // Default: resolve with empty list — individual tests override via mockResolvedValueOnce.
+  // Required because restoreMocks:true in vitest.config resets vi.fn() implementations
+  // between tests. Without a default, the mock returns undefined (not a Promise) and
+  // causes "Cannot read properties of undefined (reading 'then')".
+  mockFetchMissions.mockResolvedValue({ total: 0, mock: true, items: [] });
 });
 
 afterEach(() => {
   cleanup();
-  vi.unstubAllGlobals();
 });
 
 describe("MissionsClient", () => {
   it("rend les 4 colonnes Kanban + cartes par status + filtre agent", async () => {
+    mockFetchMissions.mockResolvedValueOnce(MOCK_PAYLOAD);
+
     await act(async () => {
-      render(<MissionsClient />);
+      renderComponent();
     });
 
     // Le board apparaît une fois le fetch résolu (loading → done).
@@ -134,5 +160,19 @@ describe("MissionsClient", () => {
 
     // Stats reflètent le filtre.
     expect(screen.getByTestId("missions-stat-count").textContent).toContain("1 missions");
+  });
+
+  it("déclenche toast.error('Chargement échoué') quand fetchMissions rejette", async () => {
+    mockFetchMissions.mockRejectedValueOnce(new Error("Réseau indisponible"));
+
+    renderComponent();
+
+    // Radix Toast duplique le texte dans une région ToastAnnounce pour a11y
+    // — getAllByText gère 1+ instances (titre + region cachée).
+    await waitFor(() =>
+      expect(screen.getAllByText("Chargement échoué").length).toBeGreaterThanOrEqual(1),
+    );
+
+    expect(screen.getAllByText("Réseau indisponible").length).toBeGreaterThanOrEqual(1);
   });
 });
