@@ -1,3 +1,12 @@
+> **⚠️ Document obsolète**
+>
+> Cette doc décrit une ancienne architecture (`SceneComposerApp`).
+> Le code vivant est dans `frontend/src/features/scene-editor-v2/`.
+> Naming canonique : **Scene Studio** (UI) / `scene-editor-v2` (code).
+>
+> Conservé en référence historique. Ne pas suivre les recommandations
+> de ce document pour de nouveaux développements.
+
 # Scene Composer Frontend — Phase E5.2
 
 Documentation de l'implémentation du Scene Composer frontend.

@@ -35,7 +35,7 @@ type SidebarItem = { section: Section; label: string; path: string; icon: string
 
 const SIDEBAR: SidebarItem[] = [
   { section: "overview",     label: "Live Control",  path: "",               icon: "◉" },
-  { section: "scene-editor", label: "Scene Editor",  path: "/scene-editor-v2",  icon: "◈" },
+  { section: "scene-editor", label: "Scene Studio",  path: "/scene-editor-v2",  icon: "◈" },
   { section: "observatory",  label: "Observatory",   path: "/observatory",   icon: "⌬" },
   { section: "observatory-mesh",     label: "Mesh",     path: "/observatory/mesh",     icon: "⊛" },
   { section: "observatory-missions", label: "Missions", path: "/observatory/missions", icon: "▦" },
