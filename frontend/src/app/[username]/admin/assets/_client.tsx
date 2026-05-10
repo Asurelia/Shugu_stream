@@ -7,21 +7,39 @@
  *   - `<Meta>` supprimé — métadonnées déclarées côté Server (`page.tsx`).
  *   - `AdminShell` migré vers `next/navigation` ; fonctionne uniquement App Router.
  *   - `export default` renommé en `export function AssetsClient`.
+ *
+ * Refonte design system (audit UX P0) :
+ *   - Tous les inline-styles remplacés par Glass primitives.
+ *   - confirm() natif → GlassModal de confirmation.
+ *   - setError() → useToast().error().
+ *   - flash → toast.success().
+ *   - Skeleton loading + empty state cohérents.
  */
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 
 import { AdminShell } from "@/components/admin/AdminShell";
+import {
+  GlassSection,
+  GlassCard,
+  GlassRow,
+  GlassPill,
+  GlassButton,
+  GlassInput,
+  GlassTabs,
+  GlassModal,
+  useToast,
+} from "@/features/liquid-glass/primitives";
+import {
+  listAssets,
+  createAsset,
+  toggleAsset,
+  deleteAsset,
+  AdminAssetsError,
+  type RegistryRow,
+} from "@/services/adminAssetsClient";
 
-type RegistryRow = {
-  id: string;
-  kind: string;
-  slug: string;
-  display_name: string;
-  payload: Record<string, unknown>;
-  is_active: boolean;
-  created_at: string;
-  updated_at: string;
-};
+// ─── Re-export type for external consumers ────────────────────────────────────
+export type { RegistryRow };
 
 type KindKey = "gesture" | "scene" | "emote" | "shot" | "expression" | "mood";
 
@@ -115,8 +133,13 @@ const KINDS: KindDef[] = [
     label: "Expressions",
     summary: "Blendshapes VRM faciaux (contrainte par le modèle).",
     fields: [
-      { name: "vrm_blendshape", label: "Blendshape VRM", placeholder: "happy", required: true,
-        help: "Doit correspondre à un blendshape réel du modèle VRM chargé." },
+      {
+        name: "vrm_blendshape",
+        label: "Blendshape VRM",
+        placeholder: "happy",
+        required: true,
+        help: "Doit correspondre à un blendshape réel du modèle VRM chargé.",
+      },
     ],
     buildPayload: (v) => ({ vrm_blendshape: v.vrm_blendshape }),
     renderRow: (p) => String(p.vrm_blendshape ?? ""),
@@ -133,7 +156,9 @@ const KINDS: KindDef[] = [
   },
 ];
 
-const KIND_MAP: Record<KindKey, KindDef> = Object.fromEntries(KINDS.map((k) => [k.key, k])) as Record<KindKey, KindDef>;
+const KIND_MAP: Record<KindKey, KindDef> = Object.fromEntries(
+  KINDS.map((k) => [k.key, k]),
+) as Record<KindKey, KindDef>;
 
 function numOr(s: string | undefined, fallback: number): number {
   if (!s) return fallback;
@@ -144,31 +169,28 @@ function numOr(s: string | undefined, fallback: number): number {
 // ─── Page component ───────────────────────────────────────────────────────
 
 export function AssetsClient() {
+  const toast = useToast();
   const [activeKind, setActiveKind] = useState<KindKey>("gesture");
   const [rows, setRows] = useState<RegistryRow[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [flash, setFlash] = useState<string | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<RegistryRow | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   const kindDef = KIND_MAP[activeKind];
 
   const load = useCallback(async () => {
     setLoading(true);
-    setError(null);
     try {
-      const res = await fetch(
-        `/api/admin/registry?kind=${encodeURIComponent(activeKind)}&include_inactive=true`,
-        { credentials: "include" },
-      );
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = (await res.json()) as { items: RegistryRow[] };
+      const data = await listAssets(activeKind);
       setRows(data.items);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "fetch failed");
+      const detail =
+        err instanceof AdminAssetsError ? err.detail : "Erreur réseau";
+      toast.error("Chargement échoué", { description: detail });
     } finally {
       setLoading(false);
     }
-  }, [activeKind]);
+  }, [activeKind, toast]);
 
   /* eslint-disable react-hooks/set-state-in-effect -- FIXME P5: fetch-on-mount pattern, refactor to useReducer when adopting data lib */
   useEffect(() => { void load(); }, [load]);
@@ -176,185 +198,163 @@ export function AssetsClient() {
 
   const handleToggle = async (row: RegistryRow) => {
     try {
-      const res = await fetch(`/api/admin/registry/${row.id}`, {
-        method: "PATCH",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ is_active: !row.is_active }),
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      await toggleAsset(row.id, !row.is_active);
       void load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "patch failed");
+      const detail =
+        err instanceof AdminAssetsError ? err.detail : "Erreur réseau";
+      toast.error("Action échouée", { description: detail });
     }
   };
 
-  const handleDelete = async (row: RegistryRow) => {
-    if (!confirm(`Désactiver ${row.slug} ?`)) return;
+  const handleConfirmDelete = async () => {
+    if (!pendingDelete) return;
+    setDeleting(true);
     try {
-      const res = await fetch(`/api/admin/registry/${row.id}`, {
-        method: "DELETE",
-        credentials: "include",
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      await deleteAsset(pendingDelete.id);
+      setPendingDelete(null);
+      toast.success("Asset désactivé", { description: pendingDelete.slug });
       void load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "delete failed");
+      const detail =
+        err instanceof AdminAssetsError ? err.detail : "Erreur réseau";
+      toast.error("Action échouée", { description: detail });
+    } finally {
+      setDeleting(false);
     }
   };
+
+  const handleCreated = (slug: string) => {
+    toast.success("Asset créé", { description: slug });
+    void load();
+  };
+
+  const KINDS_TABS = KINDS.map((k) => ({ value: k.key, label: k.label }));
 
   return (
     <AdminShell
       active="assets"
       title="Asset Registry"
       subtitle="Données-fiées : le LLM voit toute addition au prochain appel, sans redéploiement."
+      headerRight={
+        <GlassPill tone="primary" dot>
+          {rows.filter((r) => r.is_active).length} actifs / {rows.length} total
+        </GlassPill>
+      }
     >
-      {/* Tabs kinds ──────────────────────────────────────────────── */}
-      <div style={{ display: "flex", gap: 6, marginBottom: 20, flexWrap: "wrap" }}>
-        {KINDS.map((k) => (
-          <button
-            key={k.key}
-            onClick={() => setActiveKind(k.key)}
-            style={{
-              background: activeKind === k.key
-                ? "linear-gradient(135deg, var(--primary), var(--primary-container))"
-                : "rgba(36,36,52,0.45)",
-              color: activeKind === k.key ? "#1a0a24" : "var(--on-surface-variant)",
-              border: "none",
-              borderRadius: 999,
-              padding: "8px 16px",
-              fontFamily: "var(--font-display)",
-              fontWeight: 700,
-              fontSize: "0.78rem",
-              letterSpacing: "0.04em",
-              textTransform: "uppercase",
-              cursor: "pointer",
-              boxShadow: activeKind === k.key
-                ? "0 10px 30px -10px rgba(224,142,254,0.6)"
-                : "inset 0 0 0 1px rgba(71,71,84,0.25)",
-              transition: "all 0.2s ease",
-            }}
-          >
-            {k.label}
-          </button>
-        ))}
-      </div>
-
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 360px", gap: 24, alignItems: "flex-start" }}>
-        {/* Table ──────────────────────────────────────────────── */}
-        <section
-          style={{
-            background: "rgba(36,36,52,0.45)",
-            borderRadius: 16,
-            padding: 20,
-            boxShadow: "inset 0 0 0 1px rgba(71,71,84,0.25)",
-            minHeight: 360,
-          }}
-        >
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
-            <div style={{
-              fontFamily: "var(--font-display)", letterSpacing: "0.14em",
-              textTransform: "uppercase", color: "var(--on-surface-variant)",
-              fontSize: "0.72rem", fontWeight: 600,
-            }}>
-              {kindDef.label} · {rows.filter((r) => r.is_active).length} actifs / {rows.length} total
-            </div>
-            <button
-              onClick={() => void load()}
-              style={{
-                background: "transparent", border: "none", cursor: "pointer",
-                color: "var(--on-surface-variant)", fontFamily: "var(--font-mono)", fontSize: "0.72rem",
-              }}
-            >↻ refresh</button>
-          </div>
-          <div style={{ fontFamily: "var(--font-mono)", fontSize: "0.68rem", color: "var(--on-surface-muted)", marginBottom: 12 }}>
-            {kindDef.summary}
-          </div>
-
-          {loading && <div style={{ color: "var(--on-surface-muted)", padding: 12 }}>chargement…</div>}
-          {error && (
-            <div style={{
-              background: "rgba(255,106,138,0.12)",
-              color: "var(--danger, #ff6a8a)",
-              borderRadius: 8, padding: 10, marginBottom: 12, fontSize: "0.8rem",
-            }}>
-              ✕ {error}
-            </div>
-          )}
-
-          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-            {rows.map((r) => (
-              <div
-                key={r.id}
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "auto 1fr 1.4fr auto auto",
-                  alignItems: "center",
-                  gap: 12, padding: "8px 10px",
-                  background: r.is_active ? "rgba(9,9,18,0.4)" : "rgba(9,9,18,0.15)",
-                  opacity: r.is_active ? 1 : 0.55,
-                  borderRadius: 8,
-                  boxShadow: "inset 0 0 0 1px rgba(71,71,84,0.18)",
-                }}
-              >
-                <span style={{
-                  width: 6, height: 6, borderRadius: "50%",
-                  background: r.is_active ? "var(--tertiary)" : "var(--on-surface-muted)",
-                }} />
-                <span style={{
-                  fontFamily: "var(--font-display)", fontWeight: 700,
-                  fontSize: "0.82rem", color: "var(--on-surface)",
-                }}>
-                  {r.slug}
-                </span>
-                <span style={{
-                  fontFamily: "var(--font-mono)", fontSize: "0.72rem",
-                  color: "var(--on-surface-variant)",
-                  overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-                }}>
-                  {kindDef.renderRow(r.payload)}
-                </span>
-                <button
-                  onClick={() => void handleToggle(r)}
-                  style={{
-                    background: "transparent", border: "none", cursor: "pointer",
-                    color: "var(--on-surface-variant)",
-                    fontFamily: "var(--font-mono)", fontSize: "0.7rem",
-                    padding: "4px 8px",
-                  }}
-                >
-                  {r.is_active ? "désactiver" : "activer"}
-                </button>
-                <button
-                  onClick={() => void handleDelete(r)}
-                  style={{
-                    background: "transparent", border: "none", cursor: "pointer",
-                    color: "var(--danger, #ff6a8a)",
-                    fontFamily: "var(--font-mono)", fontSize: "0.7rem",
-                    padding: "4px 8px",
-                  }}
-                  disabled={!r.is_active}
-                >✕</button>
-              </div>
-            ))}
-            {!loading && rows.length === 0 && (
-              <div style={{ color: "var(--on-surface-muted)", padding: 16, textAlign: "center" }}>
-                Aucun {kindDef.label.toLowerCase().slice(0, -1)} — utilise le formulaire à droite.
-              </div>
-            )}
-          </div>
-        </section>
-
-        {/* Formulaire ──────────────────────────────────────────── */}
-        <DynamicForm
-          key={kindDef.key}
-          kindDef={kindDef}
-          onCreated={() => { setFlash(`✓ ${kindDef.label.slice(0, -1)} ajouté`); void load(); }}
-          onError={setError}
-          flash={flash}
-          clearFlash={() => setFlash(null)}
+      <section className="flex flex-col gap-5">
+        {/* Tabs kinds */}
+        <GlassTabs
+          aria-label="Catégorie d'asset"
+          tabs={KINDS_TABS}
+          value={activeKind}
+          onChange={(v) => setActiveKind(v as KindKey)}
         />
-      </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-[1fr_360px] gap-6 items-start">
+          {/* Liste assets */}
+          <GlassSection
+            title={kindDef.label}
+            subtitle={kindDef.summary}
+            right={
+              <GlassButton variant="ghost" size="sm" onClick={() => void load()}>
+                {loading ? "…" : "Rafraîchir"}
+              </GlassButton>
+            }
+          >
+            {loading ? (
+              <GlassCard>
+                <div className="py-6 text-center text-sm opacity-60">Chargement…</div>
+              </GlassCard>
+            ) : rows.length === 0 ? (
+              <GlassCard>
+                <div className="py-6 text-center text-sm opacity-60">
+                  Aucun {kindDef.label.toLowerCase().slice(0, -1)} — utilise le formulaire à droite.
+                </div>
+              </GlassCard>
+            ) : (
+              rows.map((r) => (
+                <GlassRow
+                  key={r.id}
+                  label={
+                    <span className="flex items-center gap-2">
+                      <span className="font-semibold">{r.slug}</span>
+                      <GlassPill tone={r.is_active ? "tertiary" : "default"} dot>
+                        {r.is_active ? "actif" : "inactif"}
+                      </GlassPill>
+                    </span>
+                  }
+                  sub={
+                    <span className="font-mono text-[11px] opacity-65 truncate block">
+                      {kindDef.renderRow(r.payload)}
+                    </span>
+                  }
+                  trailing={
+                    <div className="flex items-center gap-2 shrink-0">
+                      <GlassButton
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => void handleToggle(r)}
+                      >
+                        {r.is_active ? "Désactiver" : "Activer"}
+                      </GlassButton>
+                      <GlassButton
+                        variant="danger"
+                        size="sm"
+                        onClick={() => setPendingDelete(r)}
+                        disabled={!r.is_active}
+                      >
+                        Désactiver
+                      </GlassButton>
+                    </div>
+                  }
+                />
+              ))
+            )}
+          </GlassSection>
+
+          {/* Formulaire */}
+          <DynamicForm
+            key={kindDef.key}
+            kindDef={kindDef}
+            onCreated={handleCreated}
+          />
+        </div>
+      </section>
+
+      {/* Modal de confirmation désactivation */}
+      <GlassModal
+        open={pendingDelete !== null}
+        onClose={() => { if (!deleting) setPendingDelete(null); }}
+        title="Désactiver l'asset"
+        footer={
+          <>
+            <GlassButton
+              variant="ghost"
+              size="sm"
+              onClick={() => setPendingDelete(null)}
+              disabled={deleting}
+            >
+              Annuler
+            </GlassButton>
+            <GlassButton
+              variant="danger"
+              size="sm"
+              onClick={() => void handleConfirmDelete()}
+              disabled={deleting}
+            >
+              {deleting ? "…" : "Désactiver"}
+            </GlassButton>
+          </>
+        }
+      >
+        <p className="text-sm opacity-80">
+          Désactiver{" "}
+          <strong>&quot;{pendingDelete?.slug}&quot;</strong> ?
+          <br />
+          <span className="opacity-60 text-xs">L&apos;asset reste en base et peut être réactivé via le bouton de bascule.</span>
+        </p>
+      </GlassModal>
     </AdminShell>
   );
 }
@@ -362,14 +362,13 @@ export function AssetsClient() {
 // ─── DynamicForm (une instance par kind) ───────────────────────────────────
 
 function DynamicForm({
-  kindDef, onCreated, onError, flash, clearFlash,
+  kindDef,
+  onCreated,
 }: {
   kindDef: KindDef;
-  onCreated: () => void;
-  onError: (msg: string) => void;
-  flash: string | null;
-  clearFlash: () => void;
+  onCreated: (slug: string) => void;
 }) {
+  const toast = useToast();
   const [slug, setSlug] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [values, setValues] = useState<Record<string, string>>({});
@@ -384,162 +383,106 @@ function DynamicForm({
     e.preventDefault();
     if (!slug || !displayName) return;
     setSubmitting(true);
-    clearFlash();
     try {
-      const res = await fetch("/api/admin/registry", {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          kind: kindDef.key,
-          slug: slug.trim(),
-          display_name: displayName.trim(),
-          payload: kindDef.buildPayload(values),
-        }),
+      await createAsset({
+        kind: kindDef.key,
+        slug: slug.trim(),
+        display_name: displayName.trim(),
+        payload: kindDef.buildPayload(values),
       });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.detail || `HTTP ${res.status}`);
-      }
       setSlug("");
       setDisplayName("");
       setValues({});
-      onCreated();
+      onCreated(slug.trim());
     } catch (err) {
-      onError(err instanceof Error ? err.message : "create failed");
+      const detail =
+        err instanceof AdminAssetsError ? err.detail : "create failed";
+      toast.error("Création échouée", { description: detail });
     } finally {
       setSubmitting(false);
     }
   };
 
   return (
-    <aside
-      style={{
-        background: "rgba(18,18,30,0.75)",
-        borderRadius: 16, padding: 20,
-        boxShadow: "inset 0 0 0 1px rgba(224,142,254,0.28)",
-        backdropFilter: "blur(20px)",
-      }}
-    >
-      <div style={{
-        fontFamily: "var(--font-display)", letterSpacing: "0.14em",
-        textTransform: "uppercase", color: "var(--on-surface-variant)",
-        fontSize: "0.72rem", fontWeight: 600, marginBottom: 14,
-      }}>
-        Nouveau {kindDef.label.slice(0, -1).toLowerCase()}
-      </div>
+    <GlassCard as="aside">
+      <div className="flex flex-col gap-4">
+        <div className="text-xs font-semibold tracking-widest uppercase opacity-70">
+          Nouveau {kindDef.label.slice(0, -1).toLowerCase()}
+        </div>
 
-      <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-        <Field label="Slug">
-          <input
+        <form onSubmit={(e) => void handleSubmit(e)} className="flex flex-col gap-3">
+          <GlassInput
+            label="Slug"
             value={slug}
             onChange={(e) => setSlug(e.target.value)}
             placeholder="my_new_item"
             pattern="[a-zA-Z0-9_\-]{1,64}"
             required
-            style={fieldStyle}
           />
-        </Field>
-        <Field label="Display name">
-          <input
+          <GlassInput
+            label="Display name"
             value={displayName}
             onChange={(e) => setDisplayName(e.target.value)}
             placeholder="My new item"
             required
-            style={fieldStyle}
           />
-        </Field>
 
-        {kindDef.fields.map((f) => (
-          <Field key={f.name} label={f.label} help={f.help}>
-            {f.type === "select" ? (
-              <select
-                value={values[f.name] ?? (f.options?.[0] ?? "")}
-                onChange={(e) => update(f.name, e.target.value)}
-                style={{ ...fieldStyle, cursor: "pointer" }}
-              >
-                {(f.options ?? []).map((o) => <option key={o} value={o}>{o}</option>)}
-              </select>
-            ) : f.type === "textarea" ? (
-              <textarea
-                value={values[f.name] ?? ""}
-                onChange={(e) => update(f.name, e.target.value)}
-                placeholder={f.placeholder}
-                required={f.required}
-                rows={3}
-                style={{ ...fieldStyle, resize: "vertical" }}
-              />
-            ) : (
-              <input
-                type={f.type === "number" ? "number" : "text"}
-                step={f.type === "number" ? "any" : undefined}
-                value={values[f.name] ?? ""}
-                onChange={(e) => update(f.name, e.target.value)}
-                placeholder={f.placeholder}
-                required={f.required}
-                style={fieldStyle}
-              />
-            )}
-          </Field>
-        ))}
+          {kindDef.fields.map((f) => (
+            <div key={f.name} className="flex flex-col gap-1">
+              {f.type === "select" ? (
+                <div className="lgi-group">
+                  <label className="lgi-label">{f.label}</label>
+                  <select
+                    value={values[f.name] ?? (f.options?.[0] ?? "")}
+                    onChange={(e) => update(f.name, e.target.value)}
+                    className="lgi lgi-select lg-focus-ring"
+                  >
+                    {(f.options ?? []).map((o) => (
+                      <option key={o} value={o}>
+                        {o}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              ) : f.type === "textarea" ? (
+                /* textarea fallback — no GlassTextarea primitive exists yet */
+                <div className="lgi-group">
+                  <label className="lgi-label">{f.label}</label>
+                  <textarea
+                    value={values[f.name] ?? ""}
+                    onChange={(e) => update(f.name, e.target.value)}
+                    placeholder={f.placeholder}
+                    required={f.required}
+                    rows={3}
+                    className="lgi lg-focus-ring resize-y"
+                  />
+                </div>
+              ) : (
+                <GlassInput
+                  label={f.label}
+                  type={f.type === "number" ? "number" : "text"}
+                  step={f.type === "number" ? "any" : undefined}
+                  value={values[f.name] ?? ""}
+                  onChange={(e) => update(f.name, e.target.value)}
+                  placeholder={f.placeholder}
+                  required={f.required}
+                  hint={f.help}
+                />
+              )}
+            </div>
+          ))}
 
-        {flash && (
-          <div style={{
-            background: "rgba(129,236,255,0.12)",
-            color: "var(--tertiary)",
-            borderRadius: 8, padding: 8, fontSize: "0.75rem",
-          }}>
-            {flash}
-          </div>
-        )}
-
-        <button
-          type="submit"
-          disabled={submitting || !slug || !displayName}
-          style={{
-            background: "linear-gradient(135deg, var(--primary), var(--primary-container))",
-            color: "#1a0a24", border: "none", borderRadius: 12,
-            padding: "10px 16px",
-            fontFamily: "var(--font-display)", fontWeight: 700,
-            fontSize: "0.82rem", letterSpacing: "0.02em",
-            cursor: submitting ? "wait" : "pointer",
-            opacity: submitting ? 0.7 : 1, marginTop: 4,
-            boxShadow: "0 10px 30px -10px rgba(224,142,254,0.6)",
-          }}
-        >
-          {submitting ? "…" : "✦ Ajouter"}
-        </button>
-      </form>
-    </aside>
+          <GlassButton
+            type="submit"
+            variant="primary"
+            size="md"
+            block
+            disabled={submitting || !slug || !displayName}
+          >
+            {submitting ? "…" : "✦ Ajouter"}
+          </GlassButton>
+        </form>
+      </div>
+    </GlassCard>
   );
 }
-
-function Field({ label, children, help }: { label: string; children: React.ReactNode; help?: string }) {
-  return (
-    <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-      <span style={{
-        fontFamily: "var(--font-display)", fontSize: "0.68rem",
-        letterSpacing: "0.08em", textTransform: "uppercase",
-        color: "var(--on-surface-muted)",
-      }}>{label}</span>
-      {children}
-      {help && (
-        <span style={{
-          fontFamily: "var(--font-mono)", fontSize: "0.62rem",
-          color: "var(--on-surface-muted)", marginTop: 2,
-        }}>{help}</span>
-      )}
-    </label>
-  );
-}
-
-const fieldStyle: React.CSSProperties = {
-  background: "rgba(9,9,18,0.55)",
-  border: "none", borderRadius: 10,
-  padding: "8px 10px",
-  color: "var(--on-surface)",
-  fontFamily: "var(--font-body)", fontSize: "0.82rem",
-  outline: "none",
-  boxShadow: "inset 0 0 0 1px rgba(71,71,84,0.3)",
-  width: "100%",
-};
