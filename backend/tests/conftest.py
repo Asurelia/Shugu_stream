@@ -92,19 +92,27 @@ async def db_session():
     """Session async PostgreSQL avec rollback par test.
 
     Skip propre si TEST_DATABASE_URL / DATABASE_URL absent (CI sans Postgres).
-    La session est wrappée dans un rollback — seules les writes effectuées via
-    session_scope() (LoggingModeration._persist) seront commitées et devront
-    être nettoyées par _clean_moderation_events.
+
+    Construit un engine frais depuis TEST_DATABASE_URL / DATABASE_URL pour
+    éviter de dépendre du SessionLocal module-level (qui se lie au DSN de
+    prod via get_settings() au boot — potentiellement différent).
+
+    La session est wrappée dans un rollback pour les writes explicites du test.
+    Les writes de LoggingModeration._persist() passent par session_scope()
+    (commit indépendant) et sont nettoyés par _clean_moderation_events.
     """
     dsn = _test_dsn()
     if not dsn:
         pytest.skip("no TEST_DATABASE_URL / DATABASE_URL — DB-bound test skipped")
-    from shugu.db.session import SessionLocal
-    async with SessionLocal() as session:
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+    engine = create_async_engine(dsn, pool_pre_ping=True)
+    SessionFactory = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+    async with SessionFactory() as session:
         try:
             yield session
         finally:
             await session.rollback()
+    await engine.dispose()
 
 
 @pytest_asyncio.fixture(autouse=True)
@@ -115,6 +123,7 @@ async def _clean_moderation_events():
     transaction. Le rollback du db_session fixture ne peut pas défaire ces
     commits. Sans ce garde-fou, les tests s'accumulent entre eux.
 
+    Utilise le même DSN que db_session (TEST_DATABASE_URL > DATABASE_URL).
     Gated sur la présence du DSN — no-op si pas de Postgres.
     """
     dsn = _test_dsn()
@@ -122,10 +131,13 @@ async def _clean_moderation_events():
         yield
         return
     from sqlalchemy import text
-    from shugu.db.session import SessionLocal
-    async with SessionLocal() as s:
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+    engine = create_async_engine(dsn, pool_pre_ping=True)
+    SessionFactory = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+    async with SessionFactory() as s:
         await s.execute(text("DELETE FROM moderation_events"))
         await s.commit()
+    await engine.dispose()
     yield
 
 
@@ -218,6 +230,30 @@ async def member_cookie(settings_for_tests):
         vip_active=False,
     )
     return {"shugu_user_access": access}
+
+
+@pytest_asyncio.fixture
+async def patch_session_scope(monkeypatch, db_session):
+    """Patche shugu.db.session.session_scope pour utiliser le db_session du test.
+
+    Indispensable pour les tests LoggingModeration._persist() : sans ce patch,
+    _persist() écrit via le SessionLocal module-level (qui peut pointer vers un
+    DSN différent du db_session du test).
+
+    Patche également shugu.adapters.moderation_logging.session_scope (import à
+    l'initialisation du module).
+    """
+    from contextlib import asynccontextmanager
+
+    @asynccontextmanager
+    async def _test_scope():
+        yield db_session
+        await db_session.commit()
+
+    import shugu.db.session as db_sess_mod
+    import shugu.adapters.moderation_logging as mod_log
+    monkeypatch.setattr(db_sess_mod, "session_scope", _test_scope)
+    monkeypatch.setattr(mod_log, "session_scope", _test_scope)
 
 
 @pytest_asyncio.fixture

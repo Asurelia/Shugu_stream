@@ -14,6 +14,7 @@ from fastapi import FastAPI
 # Phase 8.2 — observability foundation (Prometheus metrics + structlog JSON)
 from .adapters.brain_shugu import ShuguPersonaBrain
 from .adapters.moderation_basic import BasicModeration
+from .adapters.moderation_logging import LoggingModeration
 from .adapters.personality_loader import MarkdownPersonalityLoader
 from .adapters.smtp_resend import EmailSender, NullSender, ResendSender
 from .adapters.tts_edge import EdgeTTS
@@ -42,6 +43,7 @@ from .pipeline.workers import PrepWorker
 from .routes import (
     account,
     admin,
+    admin_moderation,
     admin_users,
     assets_catalog_api,
     auth,
@@ -272,7 +274,7 @@ async def lifespan(app: FastAPI):
                           secondary_voice=settings.edge_tts_voice,
                           metrics=_prom_recorder)
 
-    moderation = BasicModeration(settings, _redis, metrics=_prom_recorder)
+    moderation = LoggingModeration(BasicModeration(settings, _redis, metrics=_prom_recorder))
     queue = RedisQueue(_redis, pending_cap=settings.queue_pending_cap)
 
     prep_worker = PrepWorker(
@@ -716,6 +718,7 @@ def create_app() -> FastAPI:
     app.include_router(account.router)       # /account/* — self-service user auth (v4 Phase 1)
     app.include_router(admin.router)
     app.include_router(admin_users.router)   # /api/admin/users — VIP promote/revoke
+    app.include_router(admin_moderation.router)  # /api/admin/moderation/* — moderation hub pivot
     app.include_router(observatory.router)   # /api/admin/observatory/events — Sprint mos-A SSE
     app.include_router(observatory_missions.router)  # /api/admin/observatory/missions — Sprint mos-A iter 2b Kanban
     app.include_router(registry_api.public_router)
