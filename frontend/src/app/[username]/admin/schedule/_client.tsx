@@ -7,8 +7,26 @@
  *   - `<Meta>` supprimé — métadonnées déclarées côté Server (`page.tsx`).
  *   - `AdminShell` migré vers `next/navigation` ; fonctionne uniquement App Router.
  *   - `export default` renommé en `export function ScheduleClient`.
+ *
+ * Sprint E5 DnD (audit UX 2026-05-09) :
+ *   - Le sous-titre promettait "Glisse une case pour bouger un évènement" sans
+ *     aucun handler DnD — promesse UI non tenue.
+ *   - Implémentation jour-only via `@dnd-kit/core` (déjà installé) :
+ *     PointerSensor + KeyboardSensor (a11y), DragOverlay, applyScheduleDayDrag.
+ *   - Scope strict : jour-only. Cross-week et horaire sont des PRs séparées.
  */
+
 import { useState } from "react";
+import {
+  DndContext,
+  DragOverlay,
+  KeyboardSensor,
+  PointerSensor,
+  type DragEndEvent,
+  type DragStartEvent,
+  useSensor,
+  useSensors,
+} from "@dnd-kit/core";
 
 import { AdminShell } from "@/components/admin/AdminShell";
 import {
@@ -22,7 +40,12 @@ import {
   GlassSwitch,
 } from "@/features/liquid-glass/primitives";
 
-const DAY_OPTIONS: ReadonlyArray<{ value: Event["day"]; label: string }> = [
+import { WEEK_DAYS, type ScheduleEvent, type WeekDay } from "./types";
+import { applyScheduleDayDrag } from "./scheduleDndLogic";
+import { DroppableDayColumn } from "./DroppableDayColumn";
+import { EventCardStatic } from "./DraggableEventCard";
+
+const DAY_OPTIONS: ReadonlyArray<{ value: WeekDay; label: string }> = [
   { value: "Lun", label: "Lundi" },
   { value: "Mar", label: "Mardi" },
   { value: "Mer", label: "Mercredi" },
@@ -32,16 +55,7 @@ const DAY_OPTIONS: ReadonlyArray<{ value: Event["day"]; label: string }> = [
   { value: "Dim", label: "Dimanche" },
 ];
 
-type Event = {
-  id: string;
-  day: "Lun" | "Mar" | "Mer" | "Jeu" | "Ven" | "Sam" | "Dim";
-  hour: string;
-  title: string;
-  category: string;
-  ritual: boolean;
-};
-
-const INITIAL: Event[] = [
+const INITIAL: ScheduleEvent[] = [
   { id: "1", day: "Lun", hour: "20:00", title: "Chill Coding",          category: "IRL",  ritual: true  },
   { id: "2", day: "Mer", hour: "21:00", title: "Baldur's Gate 3",       category: "Game", ritual: false },
   { id: "3", day: "Jeu", hour: "20:30", title: "Just Chatting — AMA",   category: "JC",   ritual: true  },
@@ -51,14 +65,41 @@ const INITIAL: Event[] = [
 
 export function ScheduleClient() {
   const [view, setView] = useState<"week" | "month">("week");
-  const [events, setEvents] = useState(INITIAL);
-  const [draft, setDraft] = useState<Partial<Event>>({ day: "Lun", hour: "20:00", ritual: false });
+  const [events, setEvents] = useState<ScheduleEvent[]>(INITIAL);
+  const [draft, setDraft] = useState<Partial<ScheduleEvent>>({ day: "Lun", hour: "20:00", ritual: false });
+  const [activeId, setActiveId] = useState<string | null>(null);
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
+    useSensor(KeyboardSensor),
+  );
 
   const addEvent = () => {
     if (!draft.title) return;
-    setEvents([...events, { ...draft, id: String(Date.now()), category: draft.category ?? "Game" } as Event]);
+    setEvents([
+      ...events,
+      { ...draft, id: String(Date.now()), category: draft.category ?? "Game" } as ScheduleEvent,
+    ]);
     setDraft({ day: "Lun", hour: "20:00", ritual: false });
   };
+
+  const handleDragStart = (event: DragStartEvent) => {
+    setActiveId(String(event.active.id));
+  };
+
+  const handleDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event;
+    setActiveId(null);
+    setEvents((prev) =>
+      applyScheduleDayDrag(prev, String(active.id), over ? String(over.id) : null),
+    );
+  };
+
+  const handleDragCancel = () => {
+    setActiveId(null);
+  };
+
+  const activeEvent = activeId ? events.find((e) => e.id === activeId) : null;
 
   return (
     <AdminShell
@@ -78,41 +119,30 @@ export function ScheduleClient() {
         <section className="flex flex-col gap-5">
           {/* Week grid */}
           <GlassSection title="Cette semaine" subtitle="Glisse une case pour bouger un évènement.">
-            <div className="grid grid-cols-7 gap-2 mt-1">
-              {(["Lun","Mar","Mer","Jeu","Ven","Sam","Dim"] as const).map((d) => {
-                const dayEvents = events.filter((e) => e.day === d);
-                return (
-                  <div key={d} className="flex flex-col">
-                    <div className="font-mono text-[10px] text-shugu-cream-dim uppercase tracking-[0.16em] text-center py-2">
-                      {d}
-                    </div>
-                    <div
-                      className="flex-1 min-h-[160px] rounded-xl p-2 flex flex-col gap-1.5"
-                      style={{ background: "rgba(255,255,255,0.02)", boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.05)" }}
-                    >
-                      {dayEvents.map((e) => (
-                        <div
-                          key={e.id}
-                          className="rounded-lg px-2 py-1.5 cursor-grab"
-                          style={{
-                            background: e.ritual
-                              ? "linear-gradient(135deg, rgba(224,142,254,0.18), rgba(253,108,156,0.14))"
-                              : "rgba(18,14,30,0.6)",
-                            boxShadow: e.ritual
-                              ? "inset 0 0 0 1px rgba(224,142,254,0.35)"
-                              : "inset 0 0 0 1px rgba(255,255,255,0.06)",
-                          }}
-                        >
-                          <div className="font-mono text-[9px] text-shugu-cream-dim">{e.hour}</div>
-                          <div className="text-[11px] text-shugu-cream font-semibold leading-tight">{e.title}</div>
-                          <div className="font-mono text-[9px] text-shugu-pink-soft">{e.category}{e.ritual ? " · ♺" : ""}</div>
-                        </div>
-                      ))}
-                    </div>
+            <DndContext
+              sensors={sensors}
+              onDragStart={handleDragStart}
+              onDragEnd={handleDragEnd}
+              onDragCancel={handleDragCancel}
+            >
+              <div className="grid grid-cols-7 gap-2 mt-1">
+                {(WEEK_DAYS as readonly WeekDay[]).map((d) => (
+                  <DroppableDayColumn
+                    key={d}
+                    day={d}
+                    events={events.filter((e) => e.day === d)}
+                  />
+                ))}
+              </div>
+
+              <DragOverlay>
+                {activeEvent ? (
+                  <div className="opacity-90 rotate-1 scale-105 pointer-events-none">
+                    <EventCardStatic event={activeEvent} />
                   </div>
-                );
-              })}
-            </div>
+                ) : null}
+              </DragOverlay>
+            </DndContext>
           </GlassSection>
 
           {/* Editor */}
@@ -130,7 +160,7 @@ export function ScheduleClient() {
                 onChange={(e) => setDraft({ ...draft, category: e.target.value })}
                 placeholder="Game, JC, Art…"
               />
-              <GlassSelect<Event["day"]>
+              <GlassSelect<WeekDay>
                 label="Jour"
                 options={DAY_OPTIONS}
                 value={draft.day ?? "Lun"}
