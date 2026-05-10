@@ -8,11 +8,13 @@ Fixtures présentes :
 - `settings_test` — instance `Settings` avec env file pointant vers un path
   inexistant, pour éviter tout side-effect sur .env local.
 - `redis_client` — client fakeredis async (pub/sub inclus), flushé au teardown.
-
-Fixtures à venir (ajoutées par les briques correspondantes) :
 - `db_session` — session Postgres réelle avec rollback par test (intégration).
-- `event_bus_inproc` / `event_bus_redis` — backends EventBus pour Brique 1.1.
-- `internal_vip_app` — TestClient FastAPI monté sur `/internal/vip/*`.
+  Skip propre si TEST_DATABASE_URL / DATABASE_URL absent.
+- `seed_redis_bans` — insère 2 bans Redis dans redis_client.
+- `seed_events` — insère 20 ModerationEvent variés via db_session.
+- `operator_cookie` — cookie JWT operator valide pour les tests routes.
+- `api_client` — AsyncClient ASGI sur une FastAPI minimaliste (admin moderation).
+- `member_cookie` — cookie JWT user/member pour tests non-régression sécurité.
 
 Garde-fou : on set `SHUGU_ENV_FILE` au **module load** (pas dans une fixture)
 parce que `shugu.config.Settings` lit le fichier dès le premier `get_settings()`
@@ -22,6 +24,7 @@ si `shugu.app` est importé en premier par un test.
 from __future__ import annotations
 
 import os
+import secrets
 from typing import AsyncIterator
 
 # IMPORTANT : set AVANT tout import de shugu.*. pydantic-settings tolère un
@@ -33,7 +36,13 @@ os.environ.setdefault("IP_HASH_SALT", "test-salt-32-chars-for-pytest-ok-")
 # si ops/env/.env existe mais est vide (worktrees, CI fresh).
 os.environ.setdefault("SHUGU_ENV", "test")
 
+import pytest
 import pytest_asyncio
+
+
+def _test_dsn() -> str | None:
+    """DSN Postgres pour les tests. TEST_DATABASE_URL a priorité sur DATABASE_URL."""
+    return os.environ.get("TEST_DATABASE_URL") or os.environ.get("DATABASE_URL")
 
 
 @pytest_asyncio.fixture
@@ -73,3 +82,184 @@ async def redis_client() -> AsyncIterator["object"]:
             await client.flushall()
         finally:
             await client.aclose()
+
+
+# ─── Moderation Hub fixtures ──────────────────────────────────────────────────
+
+
+@pytest_asyncio.fixture
+async def db_session():
+    """Session async PostgreSQL avec rollback par test.
+
+    Skip propre si TEST_DATABASE_URL / DATABASE_URL absent (CI sans Postgres).
+    La session est wrappée dans un rollback — seules les writes effectuées via
+    session_scope() (LoggingModeration._persist) seront commitées et devront
+    être nettoyées par _clean_moderation_events.
+    """
+    dsn = _test_dsn()
+    if not dsn:
+        pytest.skip("no TEST_DATABASE_URL / DATABASE_URL — DB-bound test skipped")
+    from shugu.db.session import SessionLocal
+    async with SessionLocal() as session:
+        try:
+            yield session
+        finally:
+            await session.rollback()
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def _clean_moderation_events():
+    """Nettoie la table moderation_events avant chaque test (autouse).
+
+    LoggingModeration._persist() utilise session_scope() qui commit sa propre
+    transaction. Le rollback du db_session fixture ne peut pas défaire ces
+    commits. Sans ce garde-fou, les tests s'accumulent entre eux.
+
+    Gated sur la présence du DSN — no-op si pas de Postgres.
+    """
+    dsn = _test_dsn()
+    if not dsn:
+        yield
+        return
+    from sqlalchemy import text
+    from shugu.db.session import SessionLocal
+    async with SessionLocal() as s:
+        await s.execute(text("DELETE FROM moderation_events"))
+        await s.commit()
+    yield
+
+
+@pytest_asyncio.fixture
+async def seed_redis_bans(redis_client):
+    """Insère 2 bans Redis : 1 avec TTL 3600s, 1 perma (-1)."""
+    a = "a" * 64  # SHA-256 hex factice
+    b = "b" * 64
+    await redis_client.set(f"ban:{a}", b"1", ex=3600)
+    await redis_client.set(f"ban:{b}", b"1")  # no TTL → ttl = -1
+    return {"ttl_60min": a, "perma": b}
+
+
+@pytest_asyncio.fixture
+async def seed_events(db_session):
+    """Insère 20 ModerationEvent variés (3 detectors, 2 phases, sur 24h)."""
+    from datetime import datetime, timedelta, timezone
+    from sqlalchemy import insert
+    from shugu.db.models import ModerationEvent
+
+    now = datetime.now(timezone.utc)
+    rows = []
+    detectors = ["profanity", "injection", "rate_limit"]
+    phases = ["ingress", "egress"]
+    for i in range(20):
+        rows.append({
+            "phase": phases[i % 2],
+            "detector": detectors[i % 3],
+            "verdict": "refused",
+            "details": {
+                "reason": f"reason-{i}",
+                "identity_kind": "visitor",
+                "ip_hash": "c" * 64,
+                "text_excerpt": f"msg {i}",
+                "text_len": 10 + i,
+            },
+            "created_at": now - timedelta(hours=i),
+        })
+    await db_session.execute(insert(ModerationEvent), rows)
+    await db_session.commit()
+    return rows
+
+
+@pytest_asyncio.fixture
+def settings_for_tests():
+    """Settings minimalistes pour les tests auth (JWT operator + user)."""
+    from shugu.config import Settings
+    return Settings(
+        _env_file=None,
+        env="test",
+        ip_hash_salt="test-salt-32-chars-or-more-okayyy",
+        shugu_jwt_secret=secrets.token_urlsafe(32),
+        user_jwt_secret=secrets.token_urlsafe(32),
+        jwt_access_ttl_s=1800,
+        jwt_refresh_ttl_s=86400,
+        user_access_ttl_s=3600,
+        user_refresh_ttl_s=2592000,
+    )
+
+
+@pytest_asyncio.fixture
+async def operator_cookie(settings_for_tests, monkeypatch):
+    """Cookie shugu_access valide pour un OperatorIdentity de test.
+
+    Forge un JWT operator via jwt_tokens.issue_pair — même pattern que
+    test_auth_dependencies.py. Monkeypatch get_redis sur shugu.app pour que
+    require_operator puisse vérifier la révocation sans Redis réel.
+    """
+    import fakeredis
+    import shugu.app
+    from shugu.auth import jwt_tokens
+
+    fake_redis = fakeredis.FakeAsyncRedis(decode_responses=False)
+    monkeypatch.setattr(shugu.app, "get_redis", lambda: fake_redis)
+
+    access, _, _ = jwt_tokens.issue_pair(settings_for_tests, "test-operator")
+    yield {"shugu_access": access}
+    await fake_redis.aclose()
+
+
+@pytest_asyncio.fixture
+async def member_cookie(settings_for_tests):
+    """Cookie pour un MemberIdentity de test — ne doit PAS accéder aux routes admin."""
+    from shugu.auth import user_tokens
+    access, _, _ = user_tokens.issue_pair(
+        settings_for_tests,
+        user_id="test-member-id",
+        username="test-member",
+        email="test@example.com",
+        vip_active=False,
+    )
+    return {"shugu_user_access": access}
+
+
+@pytest_asyncio.fixture
+async def api_client(settings_for_tests, monkeypatch, redis_client, db_session):
+    """AsyncClient ASGI sur une FastAPI minimaliste (routes admin moderation).
+
+    - Pas de lifespan complet — évite Redis/DB/LiveKit/workers.
+    - require_operator overridé pour valider les vrais cookies JWT forgés par
+      settings_for_tests (même secret).
+    - get_settings overridé → settings_for_tests.
+    - _get_redis overridé → redis_client fakeredis.
+    - session_scope overridé → wrappé autour du db_session partagé (pour que
+      les assertions du test et les writes du service soient dans la même session).
+
+    Note : db_session est requis pour que les tests service (seed_events etc.)
+    partagent la même connexion Postgres que le router. Si Postgres absent,
+    db_session skipera le test.
+    """
+    import shugu.app
+    from contextlib import asynccontextmanager
+    from fastapi import FastAPI
+    from httpx import AsyncClient, ASGITransport
+    from shugu.config import get_settings
+    from shugu.routes.admin_moderation import router as admin_moderation_router, _get_redis
+
+    # Monkeypatch get_redis (utilisé par require_operator via import différé)
+    monkeypatch.setattr(shugu.app, "get_redis", lambda: redis_client)
+
+    # Override session_scope pour que les routes utilisent le db_session du test
+    @asynccontextmanager
+    async def _test_session_scope():
+        yield db_session
+
+    import shugu.routes.admin_moderation as mod_route
+    import shugu.db.session as db_sess_mod
+    monkeypatch.setattr(mod_route, "session_scope", _test_session_scope)
+
+    app = FastAPI()
+    app.include_router(admin_moderation_router)
+    app.dependency_overrides[get_settings] = lambda: settings_for_tests
+    app.dependency_overrides[_get_redis] = lambda: redis_client
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        yield client
