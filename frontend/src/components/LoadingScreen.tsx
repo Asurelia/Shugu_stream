@@ -74,7 +74,7 @@ export function LoadingScreen({ progress, error, onRetry }: Props = {}) {
         )}
 
         <div className="text-lg sm:text-xl font-semibold text-shugu-pink-soft">
-          Shugu se reveille…
+          Shugu se réveille…
         </div>
         <div className="text-xs sm:text-sm text-shugu-cream-dim mt-1">
           {hasDeterminate ? `${pct}%` : "~28 Mo, quelques secondes"}
