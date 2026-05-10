@@ -21,6 +21,7 @@ TestClient FastAPI avec :
 """
 from __future__ import annotations
 
+import asyncio
 import secrets
 from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock
@@ -59,6 +60,9 @@ def test_settings() -> Settings:
         jwt_refresh_ttl_s=86400,
         operator_username="spoukie",
         operator_password_hash=pw_hash,
+        user_jwt_secret=secrets.token_urlsafe(32),
+        user_access_ttl_s=3600,
+        user_refresh_ttl_s=2592000,
     )
 
 
@@ -343,6 +347,77 @@ class TestLogout:
         assert "shugu_user_refresh" in cleared_names, (
             "shugu_user_refresh not cleared — P0 session leak! "
             f"Set-Cookie headers: {set_cookie_headers}"
+        )
+
+    def test_logout_revokes_all_four_jwts(
+        self,
+        client: TestClient,
+        test_settings: Settings,
+        fake_redis,
+    ) -> None:
+        """S3 P1 — POST /auth/logout doit révoquer les 4 JWTs dans Redis.
+
+        Bug pré-fix : seuls les 2 JWTs operator (shugu_access + shugu_refresh)
+        étaient révoqués. Les 2 JWTs user (shugu_user_access + shugu_user_refresh)
+        n'étaient PAS révoqués : un attaquant qui avait intercepté le cookie
+        user_access avant logout gardait accès pendant encore 30 min (TTL access)
+        ou 30 jours (TTL refresh).
+
+        Ce test vérifie que les 4 jti apparaissent dans Redis après /auth/logout :
+        - shugu:jwt:revoked:<jti>          pour shugu_access  (operator)
+        - shugu:jwt:revoked:<jti>          pour shugu_refresh (operator, même jti)
+        - shugu:user_jwt:revoked:<jti>     pour shugu_user_access  (user)
+        - shugu:user_jwt:revoked:<jti>     pour shugu_user_refresh (user, même jti)
+
+        Stratégie : mint des JWTs valides via issue_pair() (sans passer par la
+        DB), injecter les 4 cookies, POST /auth/logout, vérifier Redis directement.
+        """
+        from shugu.auth import jwt_tokens, user_tokens
+
+        loop = asyncio.get_event_loop()
+
+        # Mint operator JWTs directly (bypass login to avoid bcrypt + DB)
+        op_access, op_refresh, op_jti = jwt_tokens.issue_pair(test_settings, "spoukie")
+
+        # Mint user JWTs directly
+        user_access, user_refresh, user_jti = user_tokens.issue_pair(
+            test_settings,
+            user_id="01JTEST000000000000000000",
+            username="alice",
+            email="alice@test.example",
+            vip_active=False,
+        )
+
+        # Inject the 4 cookies into the test client
+        client.cookies.set("shugu_access", op_access, path="/")
+        client.cookies.set("shugu_refresh", op_refresh, path="/auth/")
+        client.cookies.set("shugu_user_access", user_access, path="/")
+        client.cookies.set("shugu_user_refresh", user_refresh, path="/api/account/")
+
+        # Call logout
+        logout_resp = client.post("/auth/logout")
+        assert logout_resp.status_code == 200
+        assert logout_resp.json() == {"ok": True}
+
+        # Verify operator jti is revoked in Redis
+        op_revoked = loop.run_until_complete(
+            fake_redis.exists(f"shugu:jwt:revoked:{op_jti}".encode())
+        )
+        assert op_revoked, (
+            f"Operator jti {op_jti!r} not found in Redis revocation set "
+            "(shugu:jwt:revoked:<jti>). Operator logout revoke broken."
+        )
+
+        # Verify user jti is revoked in Redis (S3 fix — this was the missing part)
+        user_revoked = loop.run_until_complete(
+            fake_redis.exists(f"shugu:user_jwt:revoked:{user_jti}".encode())
+        )
+        assert user_revoked, (
+            f"User jti {user_jti!r} NOT found in Redis revocation set "
+            "(shugu:user_jwt:revoked:<jti>). "
+            "S3 P1 bug: user tokens survive logout! "
+            "An attacker who captured shugu_user_access before logout retains access "
+            f"for up to {test_settings.user_access_ttl_s // 60} min."
         )
 
 
