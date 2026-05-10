@@ -22,9 +22,10 @@ describe("WorkspaceSwitcher", () => {
 
   it("changes the store currentWorkspace when a tab is clicked", () => {
     render(<WorkspaceSwitcher />);
-    fireEvent.click(screen.getByRole("tab", { name: /overlays/i }));
+    // Radix Tabs activates on mousedown, not click.
+    fireEvent.mouseDown(screen.getByRole("tab", { name: /overlays/i }));
     expect(useSceneEditorStore.getState().currentWorkspace).toBe("2d");
-    fireEvent.click(screen.getByRole("tab", { name: /show/i }));
+    fireEvent.mouseDown(screen.getByRole("tab", { name: /show/i }));
     expect(useSceneEditorStore.getState().currentWorkspace).toBe("show");
   });
 

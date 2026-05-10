@@ -19,6 +19,7 @@
 import React, { forwardRef, useId } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import * as SwitchPrimitive from "@radix-ui/react-switch";
+import * as Tabs from "@radix-ui/react-tabs";
 
 // Re-export toast infra so callers can use a single import path.
 export { useToast, GlassToastProvider } from "./toast";
@@ -249,19 +250,24 @@ export type GlassTabsProps = {
 
 export function GlassTabs({ tabs, value, onChange, className = "", ...a11y }: GlassTabsProps) {
   return (
-    <div role="tablist" aria-label={a11y["aria-label"]} className={`lg-tabs ${className}`.trim()}>
+    <Tabs.Root value={value} onValueChange={onChange}>
+      <Tabs.List
+        aria-label={a11y["aria-label"]}
+        className={`lg-tabs ${className}`.trim()}
+      >
+        {tabs.map((t) => (
+          <Tabs.Trigger key={t.value} value={t.value} className="lg-tab">
+            {t.label}
+          </Tabs.Trigger>
+        ))}
+      </Tabs.List>
+      {/* a11y: hidden Tabs.Content for each tab so aria-controls points to a valid target.
+          GlassTabs is nav-only by design — content rendering is the caller's responsibility.
+          These hidden contents satisfy ARIA without affecting visual layout. */}
       {tabs.map((t) => (
-        <button
-          key={t.value}
-          role="tab"
-          aria-selected={value === t.value}
-          className="lg-tab"
-          onClick={() => onChange(t.value)}
-        >
-          {t.label}
-        </button>
+        <Tabs.Content key={t.value} value={t.value} hidden />
       ))}
-    </div>
+    </Tabs.Root>
   );
 }
 
