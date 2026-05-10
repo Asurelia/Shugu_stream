@@ -17,9 +17,20 @@ import {
   GlassPill,
   GlassButton,
   GlassInput,
+  GlassSelect,
   GlassTabs,
   GlassSwitch,
 } from "@/features/liquid-glass/primitives";
+
+const DAY_OPTIONS: ReadonlyArray<{ value: Event["day"]; label: string }> = [
+  { value: "Lun", label: "Lundi" },
+  { value: "Mar", label: "Mardi" },
+  { value: "Mer", label: "Mercredi" },
+  { value: "Jeu", label: "Jeudi" },
+  { value: "Ven", label: "Vendredi" },
+  { value: "Sam", label: "Samedi" },
+  { value: "Dim", label: "Dimanche" },
+];
 
 type Event = {
   id: string;
@@ -119,10 +130,11 @@ export function ScheduleClient() {
                 onChange={(e) => setDraft({ ...draft, category: e.target.value })}
                 placeholder="Game, JC, Art…"
               />
-              <GlassInput
+              <GlassSelect<Event["day"]>
                 label="Jour"
-                value={draft.day ?? ""}
-                onChange={(e) => setDraft({ ...draft, day: e.target.value as Event["day"] })}
+                options={DAY_OPTIONS}
+                value={draft.day ?? "Lun"}
+                onChange={(day) => setDraft({ ...draft, day })}
               />
               <GlassInput
                 label="Heure"

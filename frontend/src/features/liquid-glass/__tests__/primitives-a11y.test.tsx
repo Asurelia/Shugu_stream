@@ -24,6 +24,7 @@ import {
   GlassButton,
   GlassCard,
   GlassInput,
+  GlassSelect,
   GlassPill,
   GlassSection,
   GlassRow,
@@ -112,6 +113,58 @@ describe("GlassInput a11y", () => {
         label="Password"
         type="password"
         hint="Must be at least 8 characters"
+      />
+    );
+    const results = await axe(container, axeOptions);
+    expect(results).toHaveNoViolations();
+  });
+});
+
+/* ──────────────────────────────────────────────────────────────────
+   GlassSelect
+   ────────────────────────────────────────────────────────────────── */
+
+describe("GlassSelect a11y", () => {
+  const dayOptions = [
+    { value: "Lun", label: "Lundi" },
+    { value: "Mar", label: "Mardi" },
+    { value: "Mer", label: "Mercredi" },
+    { value: "Jeu", label: "Jeudi" },
+    { value: "Ven", label: "Vendredi" },
+    { value: "Sam", label: "Samedi" },
+    { value: "Dim", label: "Dimanche" },
+  ] as const;
+
+  it("labelled select has no violations", async () => {
+    const { container } = render(
+      <GlassSelect label="Jour" options={dayOptions} value="Lun" onChange={() => {}} />
+    );
+    const results = await axe(container, axeOptions);
+    expect(results).toHaveNoViolations();
+  });
+
+  it("select with error message has no violations", async () => {
+    const { container } = render(
+      <GlassSelect
+        label="Jour"
+        options={dayOptions}
+        value="Lun"
+        onChange={() => {}}
+        error="Champ obligatoire"
+      />
+    );
+    const results = await axe(container, axeOptions);
+    expect(results).toHaveNoViolations();
+  });
+
+  it("select with hint has no violations", async () => {
+    const { container } = render(
+      <GlassSelect
+        label="Jour"
+        options={dayOptions}
+        value="Mer"
+        onChange={() => {}}
+        hint="Choisis un jour de la semaine"
       />
     );
     const results = await axe(container, axeOptions);

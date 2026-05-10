@@ -198,6 +198,76 @@ export const GlassInput = forwardRef<HTMLInputElement, GlassInputProps>(
 GlassInput.displayName = "GlassInput";
 
 /* ──────────────────────────────────────────────────────────────
+   GlassSelect — labelled native <select>, typed options
+   Native element keeps full keyboard + screen-reader support and
+   avoids reimplementing a listbox. Styled via the same `.lgi`
+   class as GlassInput; caret is added via `.lgi-select`.
+   ────────────────────────────────────────────────────────────── */
+
+export type GlassSelectOption<V extends string = string> = {
+  value: V;
+  label: React.ReactNode;
+  disabled?: boolean;
+};
+
+export type GlassSelectProps<V extends string = string> = Omit<
+  React.SelectHTMLAttributes<HTMLSelectElement>,
+  "onChange" | "value" | "defaultValue"
+> & {
+  label?: string;
+  hint?: string;
+  error?: string;
+  pill?: boolean;
+  wrapClassName?: string;
+  options: ReadonlyArray<GlassSelectOption<V>>;
+  value?: V;
+  defaultValue?: V;
+  onChange?: (value: V, event: React.ChangeEvent<HTMLSelectElement>) => void;
+  placeholder?: string;
+};
+
+function GlassSelectInner<V extends string = string>(
+  {
+    label, hint, error, pill, options, value, defaultValue, onChange,
+    placeholder, className = "", wrapClassName = "", id, ...rest
+  }: GlassSelectProps<V>,
+  ref: React.ForwardedRef<HTMLSelectElement>
+) {
+  const selectId = id || (label ? `lgs-${label.replace(/\s+/g, "-").toLowerCase()}` : undefined);
+  return (
+    <div className={`lgi-group ${wrapClassName}`.trim()}>
+      {label && <label htmlFor={selectId} className="lgi-label">{label}</label>}
+      <select
+        ref={ref}
+        id={selectId}
+        className={`lgi lgi-select lg-focus-ring ${pill ? "lgi-pill" : ""} ${error ? "lgi-error" : ""} ${className}`.trim()}
+        aria-invalid={!!error}
+        value={value}
+        defaultValue={defaultValue}
+        onChange={(e) => onChange?.(e.target.value as V, e)}
+        {...rest}
+      >
+        {placeholder !== undefined && (
+          <option value="" disabled>{placeholder}</option>
+        )}
+        {options.map((opt) => (
+          <option key={opt.value} value={opt.value} disabled={opt.disabled}>
+            {opt.label}
+          </option>
+        ))}
+      </select>
+      {(error || hint) && (
+        <span className={`lgi-hint ${error ? "error" : ""}`}>{error || hint}</span>
+      )}
+    </div>
+  );
+}
+
+export const GlassSelect = forwardRef(GlassSelectInner) as <V extends string = string>(
+  props: GlassSelectProps<V> & { ref?: React.ForwardedRef<HTMLSelectElement> }
+) => ReturnType<typeof GlassSelectInner>;
+
+/* ──────────────────────────────────────────────────────────────
    GlassPill — compact info chip
    ────────────────────────────────────────────────────────────── */
 
