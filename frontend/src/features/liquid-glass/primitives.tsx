@@ -18,6 +18,7 @@
 
 import React, { forwardRef, useId } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
+import * as SwitchPrimitive from "@radix-ui/react-switch";
 
 // Re-export toast infra so callers can use a single import path.
 export { useToast, GlassToastProvider } from "./toast";
@@ -368,15 +369,13 @@ export type GlassSwitchProps = {
 
 export function GlassSwitch({ checked, onChange, disabled, id, ...a11y }: GlassSwitchProps) {
   return (
-    <button
+    <SwitchPrimitive.Root
       id={id}
-      type="button"
-      role="switch"
-      aria-checked={checked}
-      aria-label={a11y["aria-label"]}
+      checked={checked}
+      onCheckedChange={onChange}
       disabled={disabled}
+      aria-label={a11y["aria-label"]}
       className="lg-switch lg-focus-ring"
-      onClick={() => !disabled && onChange(!checked)}
     />
   );
 }
