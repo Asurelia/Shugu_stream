@@ -21,6 +21,7 @@ import {
   GlassInput,
   GlassTabs,
   GlassModal,
+  useToast,
 } from "@/features/liquid-glass/primitives";
 import { MetricTile } from "@/features/liquid-glass/dataviz";
 import {
@@ -70,10 +71,10 @@ function RoleBadge({ user }: { user: AdminUser }) {
 }
 
 export function AdminUsersClient() {
+  const toast = useToast();
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [roleFilter, setRoleFilter] = useState<RoleFilter>("all");
   const [verifiedOnly, setVerifiedOnly] = useState<boolean | undefined>(undefined);
   const [page, setPage] = useState(0);
@@ -85,7 +86,6 @@ export function AdminUsersClient() {
 
   const load = useCallback(async () => {
     setLoading(true);
-    setError(null);
     try {
       const res = await listUsers({
         role: roleFilter,
@@ -97,12 +97,13 @@ export function AdminUsersClient() {
       setUsers(res.items);
       setTotal(res.total);
     } catch (err) {
-      if (err instanceof AdminError) setError(err.detail);
-      else setError("Erreur réseau");
+      if (err instanceof AdminError)
+        toast.error("Chargement échoué", { description: err.detail });
+      else toast.error("Chargement échoué", { description: "Erreur réseau" });
     } finally {
       setLoading(false);
     }
-  }, [roleFilter, verifiedOnly, offset]);
+  }, [roleFilter, verifiedOnly, offset, toast]);
 
   /* eslint-disable react-hooks/set-state-in-effect -- FIXME P5: fetch-on-mount + filter deps, refactor to useReducer when adopting data lib */
   useEffect(() => { load(); }, [load]);
@@ -119,7 +120,6 @@ export function AdminUsersClient() {
   const commitAction = async () => {
     if (!pendingAction) return;
     setMutating(true);
-    setError(null);
     try {
       if (pendingAction.kind === "grant") {
         const dur = durationDays.trim() ? parseInt(durationDays, 10) : undefined;
@@ -132,8 +132,9 @@ export function AdminUsersClient() {
       setPendingAction(null);
       await load();
     } catch (err) {
-      if (err instanceof AdminError) setError(err.detail);
-      else setError("Erreur lors de l&apos;action");
+      if (err instanceof AdminError)
+        toast.error("Action échouée", { description: err.detail });
+      else toast.error("Action échouée", { description: "Erreur lors de l'action" });
     } finally {
       setMutating(false);
     }
@@ -193,13 +194,6 @@ export function AdminUsersClient() {
             </div>
           </div>
         </GlassSection>
-
-        {/* Erreur globale */}
-        {error && (
-          <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-sm text-rose-100">
-            {error}
-          </div>
-        )}
 
         {/* Liste */}
         <GlassSection title="Comptes" subtitle={`${total} total · page ${page + 1}/${Math.max(1, Math.ceil(total / PAGE_SIZE))}`}>
