@@ -46,6 +46,10 @@ type Props = {
   voice?: VoiceProps;
   /** Stage 3D — le VRM viewer passe par ici pour occuper le fond. */
   stageSlot?: ReactNode;
+  /** U5 a11y: visitor captions toggle state. */
+  captionsEnabled?: boolean;
+  /** U5 a11y: callback to toggle captions on/off. */
+  onToggleCaptions?: (v: boolean) => void;
 };
 
 /* ══════════════════════ LIQUID GLASS LAYERS ══════════════════════ */
@@ -277,11 +281,15 @@ type HudTopProps = {
   onAccount?: () => void;
   onLogout?: () => void;
   onAdmin?: () => void;
+  /** U5 a11y: visitor captions toggle. */
+  captionsEnabled?: boolean;
+  onToggleCaptions?: (v: boolean) => void;
 };
 
 function HudTop({
   session, viewerCount, uptimeLabel, connStatus,
   onLogin, onSignup, onAccount, onLogout, onAdmin,
+  captionsEnabled = false, onToggleCaptions,
 }: HudTopProps) {
   const [open, setOpen] = useState(false);
   const tier: Tier | undefined = session?.tier;
@@ -349,6 +357,21 @@ function HudTop({
               </button>
               <button className="hud-btn subtle" onClick={onLogout}>Déconnexion</button>
             </>
+          )}
+          {/* U5 a11y: captions toggle — always visible in the menu for all
+              visitors (authenticated or not). Off by default. */}
+          {onToggleCaptions && (
+            <button
+              type="button"
+              className={`hud-btn captions-btn ${captionsEnabled ? "active" : ""}`}
+              onClick={() => onToggleCaptions(!captionsEnabled)}
+              aria-pressed={captionsEnabled}
+              aria-label="Activer les sous-titres pour le chat"
+              title={captionsEnabled ? "Désactiver les sous-titres" : "Activer les sous-titres"}
+            >
+              <span aria-hidden>&#9836;</span>
+              {captionsEnabled ? "Sous-titres : actifs" : "Sous-titres"}
+            </button>
           )}
         </div>
       </div>
@@ -476,6 +499,8 @@ export function ViewerStage({
   onAdmin,
   voice,
   stageSlot,
+  captionsEnabled,
+  onToggleCaptions,
 }: Props) {
   const [collapsed, setCollapsed] = useState(false);
   const [unread, setUnread] = useState(0);
@@ -520,6 +545,8 @@ export function ViewerStage({
         onAccount={onAccount}
         onLogout={onLogout}
         onAdmin={onAdmin}
+        captionsEnabled={captionsEnabled}
+        onToggleCaptions={onToggleCaptions}
       />
       <HudBottom />
       <Reactions seed={reactionSeed} />

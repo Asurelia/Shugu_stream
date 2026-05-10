@@ -38,6 +38,7 @@ import { SceneManager } from "@/features/scenes/SceneManager";
 import { refreshScenes } from "@/features/scenes/scenes";
 import { ViewerContext } from "@/features/vrmViewer/viewerContext";
 import { refreshEmotes } from "@/components/EmoteOverlay";
+import { useAccessibilityPrefs } from "@/hooks/useAccessibilityPrefs";
 import { useHmsUptime } from "@/hooks/useHmsUptime";
 import { useVoiceInput } from "@/hooks/useVoiceInput";
 import {
@@ -83,6 +84,11 @@ export function HomeClient() {
   const [speaking, setSpeaking] = useState(false);
   const [debugCaptions, setDebugCaptions] = useState(false);
 
+  // U5 a11y: visitor-facing captions toggle — off by default to preserve
+  // current engagement model (audio TTS is the primary channel for visitors).
+  // When enabled, anonymous visitors see Shugu's assistant messages in the chat.
+  const { captionsEnabled, setCaptionsEnabled } = useAccessibilityPrefs();
+
   // Uptime démarré à l'ouverture du WS. reactionSeed incrémenté à chaque
   // performance.audio pour déclencher les emoji flottants dans ViewerStage.
   const [streamStartMs, setStreamStartMs] = useState<number | null>(null);
@@ -115,10 +121,11 @@ export function HomeClient() {
   const cueTimersRef = useRef<number[]>([]);
 
   const appendLog = (m: Message) => {
-    // Visitors never keep assistant messages in their local log — Shugu's voice
-    // is the only carrier in public. Operator keeps them so the debug-captions
-    // toggle (below) can surface them when enabled.
-    if (m.role === "assistant" && !operator) return;
+    // Visitors never see assistant messages by default — Shugu's TTS audio is
+    // the primary channel in public. Two exceptions override the filter:
+    //   1. Operator: always sees messages (debug-captions toggle below).
+    //   2. Visitor with captionsEnabled: U5 a11y opt-in for deaf visitors.
+    if (m.role === "assistant" && !operator && !captionsEnabled) return;
     setChatLog((l) => [...l.slice(-MAX_CHAT_LOG + 1), m]);
     if (m.role === "user") {
       // Glance toward the chat feed only when a real user message lands; Shugu
@@ -497,6 +504,8 @@ export function HomeClient() {
           start: voice.start,
           stop: voice.stop,
         } : undefined}
+        captionsEnabled={captionsEnabled}
+        onToggleCaptions={setCaptionsEnabled}
       />
 
       {/* VisitorLogin — retirée du viewer (absente du proto). Le login est
