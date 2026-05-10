@@ -369,7 +369,7 @@ function HudTop({
               aria-label="Activer les sous-titres pour le chat"
               title={captionsEnabled ? "Désactiver les sous-titres" : "Activer les sous-titres"}
             >
-              <span aria-hidden>&#9836;</span>
+              <span aria-hidden>[CC]</span>
               {captionsEnabled ? "Sous-titres : actifs" : "Sous-titres"}
             </button>
           )}
