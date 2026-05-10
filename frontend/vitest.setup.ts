@@ -1,13 +1,23 @@
 /**
- * Vitest global setup — jest-dom matchers + browser API stubs.
+ * Vitest global setup — jest-dom matchers + axe-core a11y matchers + browser API stubs.
  *
  * Les tests Zustand n'ont pas besoin de matchers React Testing Library, mais
  * on charge jest-dom ici pour que les futurs tests de composants (panels,
  * primitives) puissent utiliser `toBeInTheDocument()` etc. sans setup par
  * fichier.
+ *
+ * jest-axe (I3.6): extends expect with `toHaveNoViolations()` so any test
+ * can run `expect(await axe(container)).toHaveNoViolations()` without
+ * per-file setup. jest-axe works with Vitest — the "jest" name is historical,
+ * no Jest runtime is pulled in.
  */
 
 import "@testing-library/jest-dom/vitest";
+import { expect } from "vitest";
+import { toHaveNoViolations } from "jest-axe";
+
+// Extend Vitest's expect with axe-core violation matcher.
+expect.extend(toHaveNoViolations);
 
 // jsdom ne ship pas ResizeObserver nativement (ajouté en 2020 mais absent de
 // jsdom 20). On stub un noop pour tous les tests qui montent des composants
