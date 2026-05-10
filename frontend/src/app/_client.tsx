@@ -22,7 +22,6 @@ import { EmoteOverlay, EmoteOverlayHandle } from "@/components/EmoteOverlay";
 import { LiveKitProvider } from "@/features/livekit/LiveKitProvider";
 import { ViewerEventsProvider } from "@/features/viewer/ViewerEventsProvider";
 import { LiquidGlassFilter } from "@/components/LiquidGlassRail";
-import { LoadingScreen } from "@/components/LoadingScreen";
 import { SpeakingRing } from "@/components/SpeakingRing";
 import { VisitorLogin } from "@/components/VisitorLogin";
 import { ViewerStage, type ChatMsg } from "@/components/ViewerStage";
@@ -447,8 +446,6 @@ export function HomeClient() {
 
       <EmoteOverlay ref={emoteOverlayRef} />
       <SpeakingRing visible={speaking} />
-
-      {!avatarLoaded && <LoadingScreen />}
 
       {/* ViewerStage — port 1:1 de preview/proto/app.jsx. Le VRM remplace la
           scène nebula/avatar via la prop `stageSlot`. */}
