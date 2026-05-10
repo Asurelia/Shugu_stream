@@ -213,7 +213,7 @@ export function AssetsClient() {
     try {
       await deleteAsset(pendingDelete.id);
       setPendingDelete(null);
-      toast.success("Asset supprimé", { description: pendingDelete.slug });
+      toast.success("Asset désactivé", { description: pendingDelete.slug });
       void load();
     } catch (err) {
       const detail =
@@ -304,7 +304,7 @@ export function AssetsClient() {
                         onClick={() => setPendingDelete(r)}
                         disabled={!r.is_active}
                       >
-                        Supprimer
+                        Désactiver
                       </GlassButton>
                     </div>
                   }
@@ -322,11 +322,11 @@ export function AssetsClient() {
         </div>
       </section>
 
-      {/* Modal de confirmation suppression */}
+      {/* Modal de confirmation désactivation */}
       <GlassModal
         open={pendingDelete !== null}
         onClose={() => { if (!deleting) setPendingDelete(null); }}
-        title="Supprimer l'asset"
+        title="Désactiver l'asset"
         footer={
           <>
             <GlassButton
@@ -343,16 +343,16 @@ export function AssetsClient() {
               onClick={() => void handleConfirmDelete()}
               disabled={deleting}
             >
-              {deleting ? "…" : "Supprimer"}
+              {deleting ? "…" : "Désactiver"}
             </GlassButton>
           </>
         }
       >
         <p className="text-sm opacity-80">
-          Confirmer la suppression de{" "}
+          Désactiver{" "}
           <strong>&quot;{pendingDelete?.slug}&quot;</strong> ?
           <br />
-          <span className="opacity-60 text-xs">Cette action est irréversible.</span>
+          <span className="opacity-60 text-xs">L&apos;asset reste en base et peut être réactivé via le bouton de bascule.</span>
         </p>
       </GlassModal>
     </AdminShell>

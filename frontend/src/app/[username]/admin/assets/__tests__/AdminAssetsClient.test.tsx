@@ -124,7 +124,7 @@ describe("AssetsClient", () => {
     expect(screen.queryByText("Chargement échoué")).not.toBeInTheDocument();
   });
 
-  it("Test 2: click 'Supprimer' opens modal; click 'Annuler' closes it", async () => {
+  it("Test 2: click 'Désactiver' opens modal; click 'Annuler' closes it", async () => {
     mockListAssets.mockResolvedValueOnce(ONE_ITEM_LIST);
 
     await act(async () => {
@@ -135,16 +135,13 @@ describe("AssetsClient", () => {
       expect(screen.getByText("wave_hello")).toBeInTheDocument(),
     );
 
-    // Open modal
-    const deleteBtn = screen.getByRole("button", { name: "Supprimer" });
-    fireEvent.click(deleteBtn);
+    // Open modal — danger "Désactiver" is the second "Désactiver" button in the row
+    // (first is the ghost toggle, second is the danger deactivate button)
+    const deactivateBtns = screen.getAllByRole("button", { name: "Désactiver" });
+    fireEvent.click(deactivateBtns[deactivateBtns.length - 1]);
 
-    // Modal is open — confirm button visible
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Supprimer" })).toBeInTheDocument(),
-    );
-    // The cancel button should now be visible
-    const cancelBtn = screen.getByRole("button", { name: "Annuler" });
+    // Modal is open — Annuler button now visible
+    const cancelBtn = await screen.findByRole("button", { name: "Annuler" });
     expect(cancelBtn).toBeInTheDocument();
 
     // Click Annuler
@@ -156,7 +153,7 @@ describe("AssetsClient", () => {
     );
   });
 
-  it("Test 3: confirm delete calls API + shows toast.success", async () => {
+  it("Test 3: confirm deactivate calls API + shows toast.success", async () => {
     mockListAssets.mockResolvedValue(ONE_ITEM_LIST);
     mockDeleteAsset.mockResolvedValueOnce(undefined);
 
@@ -168,16 +165,14 @@ describe("AssetsClient", () => {
       expect(screen.getByText("wave_hello")).toBeInTheDocument(),
     );
 
-    // Open modal
-    const deleteBtn = screen.getByRole("button", { name: "Supprimer" });
-    fireEvent.click(deleteBtn);
+    // Open modal — click the row danger "Désactiver" (second button, after ghost toggle)
+    const rowBtns = screen.getAllByRole("button", { name: "Désactiver" });
+    fireEvent.click(rowBtns[rowBtns.length - 1]);
 
-    // Confirm
+    // Confirm — after modal opens there are two "Désactiver" buttons; last is modal footer
     await act(async () => {
-      // Find the confirm "Supprimer" button inside the modal footer
-      const confirmBtn = screen.getAllByRole("button", { name: "Supprimer" });
-      // The last one is the confirm button in the modal footer
-      fireEvent.click(confirmBtn[confirmBtn.length - 1]);
+      const confirmBtns = await screen.findAllByRole("button", { name: "Désactiver" });
+      fireEvent.click(confirmBtns[confirmBtns.length - 1]);
     });
 
     // deleteAsset should be called with the row id
@@ -187,7 +182,7 @@ describe("AssetsClient", () => {
 
     // toast.success should appear — Radix duplicates in ToastAnnounce
     await waitFor(() =>
-      expect(screen.getAllByText("Asset supprimé").length).toBeGreaterThanOrEqual(1),
+      expect(screen.getAllByText("Asset désactivé").length).toBeGreaterThanOrEqual(1),
     );
   });
 
@@ -205,13 +200,13 @@ describe("AssetsClient", () => {
       expect(screen.getByText("wave_hello")).toBeInTheDocument(),
     );
 
-    // Open modal
-    const deleteBtn = screen.getByRole("button", { name: "Supprimer" });
-    fireEvent.click(deleteBtn);
+    // Open modal — click the row danger "Désactiver" (second button, after ghost toggle)
+    const rowBtns = screen.getAllByRole("button", { name: "Désactiver" });
+    fireEvent.click(rowBtns[rowBtns.length - 1]);
 
-    // Confirm
+    // Confirm — after modal opens there are two "Désactiver" buttons; last is modal footer
     await act(async () => {
-      const confirmBtns = screen.getAllByRole("button", { name: "Supprimer" });
+      const confirmBtns = await screen.findAllByRole("button", { name: "Désactiver" });
       fireEvent.click(confirmBtns[confirmBtns.length - 1]);
     });
 
