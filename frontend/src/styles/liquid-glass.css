@@ -235,6 +235,23 @@
 }
 .lgi-hint.error { color: #ff9fb0; }
 
+/* ── Select (native <select> styled like .lgi) ─────────────── */
+.lgi-select {
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  padding-right: 40px;
+  cursor: pointer;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8' fill='none'><path d='M1 1.5L6 6.5L11 1.5' stroke='%23e08efe' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 14px center;
+}
+.lgi-select::-ms-expand { display: none; }
+.lgi-select option {
+  background: rgba(18, 14, 30, 0.98);
+  color: var(--on-surface, #ece8f5);
+}
+
 /* ── Tabs (iOS Settings style) ─────────────────────────────── */
 
 .lg-tabs {
