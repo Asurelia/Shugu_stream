@@ -116,16 +116,23 @@ async def db_session():
 
 
 @pytest_asyncio.fixture(autouse=True)
-async def _clean_moderation_events():
+async def _clean_moderation_events(request):
     """Nettoie la table moderation_events avant chaque test (autouse).
 
     LoggingModeration._persist() utilise session_scope() qui commit sa propre
     transaction. Le rollback du db_session fixture ne peut pas défaire ces
     commits. Sans ce garde-fou, les tests s'accumulent entre eux.
 
-    Utilise le même DSN que db_session (TEST_DATABASE_URL > DATABASE_URL).
-    Gated sur la présence du DSN — no-op si pas de Postgres.
+    Optimisation : ne touche pas la DB si le test ne demande pas `db_session`
+    (évite de créer N engines pour les 1400+ tests unit qui n'en ont pas besoin).
     """
+    # Seulement utile pour les tests qui travaillent avec la DB de moderation.
+    # request.fixturenames inclut les dépendances transitives (ex: api_client→db_session).
+    _db_markers = {"db_session", "seed_events", "api_client", "patch_session_scope"}
+    uses_db = bool(_db_markers & set(request.fixturenames))
+    if not uses_db:
+        yield
+        return
     dsn = _test_dsn()
     if not dsn:
         yield
