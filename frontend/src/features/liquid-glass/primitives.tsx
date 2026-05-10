@@ -261,6 +261,12 @@ export function GlassTabs({ tabs, value, onChange, className = "", ...a11y }: Gl
           </Tabs.Trigger>
         ))}
       </Tabs.List>
+      {/* a11y: hidden Tabs.Content for each tab so aria-controls points to a valid target.
+          GlassTabs is nav-only by design — content rendering is the caller's responsibility.
+          These hidden contents satisfy ARIA without affecting visual layout. */}
+      {tabs.map((t) => (
+        <Tabs.Content key={t.value} value={t.value} hidden />
+      ))}
     </Tabs.Root>
   );
 }
