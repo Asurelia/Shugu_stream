@@ -1,4 +1,5 @@
 """FastAPI app factory + lifespan wiring."""
+
 from __future__ import annotations
 
 import asyncio
@@ -43,6 +44,7 @@ from .pipeline.workers import PrepWorker
 from .routes import (
     account,
     admin,
+    admin_analytics,
     admin_moderation,
     admin_users,
     assets_catalog_api,
@@ -144,6 +146,7 @@ async def lifespan(app: FastAPI):
     # par settings.voice_metrics_enabled (cohérent avec voice/metrics.py
     # turn metrics — le même flag active les deux).
     from .voice.pipeline_metrics import make_pipeline_recorder
+
     _pipeline_metrics = make_pipeline_recorder(
         enabled=settings.voice_metrics_enabled,
         registry=_prom_recorder.registry,
@@ -196,6 +199,7 @@ async def lifespan(app: FastAPI):
     _need_embedder = settings.memory_enabled or settings.director_cache_enabled
     if _need_embedder:
         from .memory.embedder import FastEmbedE5Large
+
         embedder = FastEmbedE5Large(
             model_name=settings.memory_embedder_model,
             cache_dir=settings.memory_embedder_cache_dir or None,
@@ -218,7 +222,8 @@ async def lifespan(app: FastAPI):
     )
 
     personality_loader = MarkdownPersonalityLoader(
-        Path(settings.personality_dir), poll_every_s=settings.personality_reload_poll_s,
+        Path(settings.personality_dir),
+        poll_every_s=settings.personality_reload_poll_s,
     )
     # Phase 5.2 — persona wiring : chargement best-effort de PersonaState
     # et injection d'un provider Callable dans ShuguPersonaBrain.
@@ -226,11 +231,13 @@ async def lifespan(app: FastAPI):
     # sans restart). Conditionnel sur streamer_agent_enabled + mémoire disponible.
     if settings.streamer_agent_enabled and _memory is not None:
         from .persona.loader import load_persona_state as _load_persona_state
+
         app.state.persona_state = await _load_persona_state(_memory)
         log.info(
             "persona.loaded",
             mood=app.state.persona_state.mood_arc[-1].state
-            if app.state.persona_state.mood_arc else "unknown",
+            if app.state.persona_state.mood_arc
+            else "unknown",
         )
     else:
         app.state.persona_state = None
@@ -259,33 +266,48 @@ async def lifespan(app: FastAPI):
     _eleven = ElevenLabsTTS(settings, http)
     _edge = EdgeTTS()
     if settings.tts_primary == "edge":
-        tts = FallbackTTS(_edge, _minimax_tts,
-                          primary_voice=settings.edge_tts_voice,
-                          secondary_voice=settings.minimax_voice_id,
-                          metrics=_prom_recorder)
+        tts = FallbackTTS(
+            _edge,
+            _minimax_tts,
+            primary_voice=settings.edge_tts_voice,
+            secondary_voice=settings.minimax_voice_id,
+            metrics=_prom_recorder,
+        )
     elif settings.tts_primary == "elevenlabs":
-        tts = FallbackTTS(_eleven, _edge,
-                          primary_voice=settings.shugu_voice_id,
-                          secondary_voice=settings.edge_tts_voice,
-                          metrics=_prom_recorder)
+        tts = FallbackTTS(
+            _eleven,
+            _edge,
+            primary_voice=settings.shugu_voice_id,
+            secondary_voice=settings.edge_tts_voice,
+            metrics=_prom_recorder,
+        )
     else:  # minimax (default) — Edge as fallback
-        tts = FallbackTTS(_minimax_tts, _edge,
-                          primary_voice=settings.minimax_voice_id,
-                          secondary_voice=settings.edge_tts_voice,
-                          metrics=_prom_recorder)
+        tts = FallbackTTS(
+            _minimax_tts,
+            _edge,
+            primary_voice=settings.minimax_voice_id,
+            secondary_voice=settings.edge_tts_voice,
+            metrics=_prom_recorder,
+        )
 
     moderation = LoggingModeration(BasicModeration(settings, _redis, metrics=_prom_recorder))
     queue = RedisQueue(_redis, pending_cap=settings.queue_pending_cap)
 
     prep_worker = PrepWorker(
-        settings=settings, queue=queue,
-        brain_shugu=brain_shugu, tts=tts, moderation=moderation,
+        settings=settings,
+        queue=queue,
+        brain_shugu=brain_shugu,
+        tts=tts,
+        moderation=moderation,
     )
     picker = Picker(settings=settings, queue=queue, event_bus=event_bus, tts=tts)
     picker.set_metrics(_metrics)
     ambient = AmbientDaemon(
-        settings=settings, queue=queue, viewer_counter=viewer_counter,
-        event_bus=event_bus, config=AmbientConfig(),
+        settings=settings,
+        queue=queue,
+        viewer_counter=viewer_counter,
+        event_bus=event_bus,
+        config=AmbientConfig(),
     )
 
     prep_task = asyncio.create_task(prep_worker.run(), name="prep_worker")
@@ -322,9 +344,8 @@ async def lifespan(app: FastAPI):
         if settings.fact_extractor_llm_fallback_enabled:
             from .adapters.brain_memory_extractor import MemoryExtractorBrain
             from .memory.extractors.llm import LlmFactExtractor
-            llm_extractor = LlmFactExtractor(
-                MemoryExtractorBrain(settings=settings, http=http)
-            )
+
+            llm_extractor = LlmFactExtractor(MemoryExtractorBrain(settings=settings, http=http))
 
         fact_extractor = FactExtractor(
             regex_extractor=RegexFactExtractor(),
@@ -349,34 +370,55 @@ async def lifespan(app: FastAPI):
             fact_extractor_enabled=settings.fact_extractor_enabled,
         )
 
-    visitor_ws.set_deps(visitor_ws.WSDeps(
-        event_bus=event_bus, moderation=moderation, queue=queue, settings=settings,
-        viewer_counter=viewer_counter, ambient=ambient,
-    ))
-    operator_ws.set_deps(operator_ws.OpWSDeps(
-        event_bus=event_bus, moderation=moderation, queue=queue, settings=settings,
-        redis=_redis, http=http, tts=tts,
-        viewer_counter=viewer_counter, ambient=ambient,
-    ))
+    visitor_ws.set_deps(
+        visitor_ws.WSDeps(
+            event_bus=event_bus,
+            moderation=moderation,
+            queue=queue,
+            settings=settings,
+            viewer_counter=viewer_counter,
+            ambient=ambient,
+        )
+    )
+    operator_ws.set_deps(
+        operator_ws.OpWSDeps(
+            event_bus=event_bus,
+            moderation=moderation,
+            queue=queue,
+            settings=settings,
+            redis=_redis,
+            http=http,
+            tts=tts,
+            viewer_counter=viewer_counter,
+            ambient=ambient,
+        )
+    )
     # Scene Editor WS — Phase D. Broadcast-only collab (pas de persistence
     # nouvelle : les drafts passent toujours par `/api/scene-editor/scenes/
     # {id}/drafts`). Voir `routes/editor_ws.py` pour le contract.
-    editor_ws.set_deps(editor_ws.EditorWSDeps(
-        event_bus=event_bus, settings=settings, redis=_redis,
-    ))
+    editor_ws.set_deps(
+        editor_ws.EditorWSDeps(
+            event_bus=event_bus,
+            settings=settings,
+            redis=_redis,
+        )
+    )
     # Viewer WS + REST — Sprint D PR D-3. Push director events (scene.apply +
     # voice.interrupt) vers le frontend React + bootstrap/refresh JWT viewer +
     # snapshot SceneState pour resync reconnect. Cf routes/viewer.py.
     # Le state_store est un singleton in-memory déjà instancié par get_director_state_store()
     # ailleurs dans le wiring (Director ou pas, le store existe pour servir GET /viewer/state).
     from .director.state_store import get_director_state_store as _get_state_store
-    viewer.set_deps(viewer.ViewerDeps(
-        event_bus=event_bus,
-        settings=settings,
-        redis=_redis,
-        state_store=_get_state_store(),
-        pipeline_metrics=_pipeline_metrics,
-    ))
+
+    viewer.set_deps(
+        viewer.ViewerDeps(
+            event_bus=event_bus,
+            settings=settings,
+            redis=_redis,
+            state_store=_get_state_store(),
+            pipeline_metrics=_pipeline_metrics,
+        )
+    )
     # Observatory SSE (Sprint mos-A) — flux temps réel des events workers.
     # Lit le bus event partagé en read-only ; aucun side effect possible côté
     # producteurs. Topic set restreint aux flux JSON-safe (pas `stage`).
@@ -386,10 +428,14 @@ async def lifespan(app: FastAPI):
     # late-joiners (régression P1 review #56). None tant que
     # streamer_agent_enabled=False — wiré post-startup ci-dessous quand l'agent
     # est activé.
-    world_ws.set_deps(world_ws.WorldWSDeps(
-        event_bus=event_bus, settings=settings, redis=_redis,
-        world_store=None,
-    ))
+    world_ws.set_deps(
+        world_ws.WorldWSDeps(
+            event_bus=event_bus,
+            settings=settings,
+            redis=_redis,
+            world_store=None,
+        )
+    )
     # Director workers (Phase E3) — registry tag_name -> Worker injecté avec le bus.
     # Utilisé par l'orchestrator E2 pour dispatcher les tags inline vers les workers
     # déterministes (outfit, vfx, anim, face, say_emotion, camera, scene).
@@ -413,6 +459,7 @@ async def lifespan(app: FastAPI):
     # Voir backend/shugu/director/workers/__init__.py docstring pour exemple.
     from .director.workers import make_workers
     from .voice.voice_runtime import VoiceRuntimeState
+
     _voice_runtime = VoiceRuntimeState()
     app.state.voice_runtime = _voice_runtime  # exposé pour tests + extensions futures
     app.state.director_workers = make_workers(
@@ -434,9 +481,11 @@ async def lifespan(app: FastAPI):
         async def _load_authored_scene(scene_id: str):
             """Loader async injecté dans ScenePlayer pour résoudre les loops."""
             async with session_scope() as _session:
-                return (await _session.execute(
-                    _sa_select(_AuthoredSceneRow).where(_AuthoredSceneRow.id == scene_id)
-                )).scalar_one_or_none()
+                return (
+                    await _session.execute(
+                        _sa_select(_AuthoredSceneRow).where(_AuthoredSceneRow.id == scene_id)
+                    )
+                ).scalar_one_or_none()
 
         app.state.scene_player = ScenePlayer(
             workers=app.state.director_workers,
@@ -477,9 +526,7 @@ async def lifespan(app: FastAPI):
             clock_ms=0,
         )
         # Phase 8.2 — injecter le recorder Prometheus dans WorldStateStore et runner.
-        _world_store = _WorldStateStore(
-            _initial_world, event_bus, metrics_recorder=_prom_recorder
-        )
+        _world_store = _WorldStateStore(_initial_world, event_bus, metrics_recorder=_prom_recorder)
         _agent_components = build_agent_components(
             brain=brain_shugu,
             identity=OperatorIdentity(username="streamer"),
@@ -493,12 +540,14 @@ async def lifespan(app: FastAPI):
         # que les late-joiners reçoivent le snapshot initial (régression P1
         # review #56). Avant ce point, world_ws.set_deps(world_store=None)
         # avait été appelé avec un placeholder.
-        world_ws.set_deps(world_ws.WorldWSDeps(
-            event_bus=event_bus,
-            settings=settings,
-            redis=_redis,
-            world_store=_world_store,
-        ))
+        world_ws.set_deps(
+            world_ws.WorldWSDeps(
+                event_bus=event_bus,
+                settings=settings,
+                redis=_redis,
+                world_store=_world_store,
+            )
+        )
         # Démarrage de la boucle runtime (sense → tick → act).
         # start() est idempotent — sûr à appeler plusieurs fois si nécessaire.
         await _agent_components.runner.start()
@@ -576,15 +625,39 @@ async def lifespan(app: FastAPI):
         # Les workers OutfitWorker / VfxWorker / AnimWorker / SceneWorker
         # valident le slug émis par le LLM contre cette liste.
         # Si la liste est vide, TOUS les slugs LLM sont rejetés → silences.
-        await director_state_store.update({
-            "assets_available": {
-                "outfits": ["default", "vip_celebration", "cozy_pajama", "streamer_gear", "elegant"],
-                "vfx": ["confetti_gold", "sparkle_pink", "heart_rain", "star_burst", "fade_warm"],
-                "anims": ["wave", "excited_wave", "bow", "shy_giggle", "dance",
-                          "thinking", "clap", "thumbs_up", "peace_sign", "idle_loop"],
-                "scenes": ["main_talk", "intro", "outro"],
+        await director_state_store.update(
+            {
+                "assets_available": {
+                    "outfits": [
+                        "default",
+                        "vip_celebration",
+                        "cozy_pajama",
+                        "streamer_gear",
+                        "elegant",
+                    ],
+                    "vfx": [
+                        "confetti_gold",
+                        "sparkle_pink",
+                        "heart_rain",
+                        "star_burst",
+                        "fade_warm",
+                    ],
+                    "anims": [
+                        "wave",
+                        "excited_wave",
+                        "bow",
+                        "shy_giggle",
+                        "dance",
+                        "thinking",
+                        "clap",
+                        "thumbs_up",
+                        "peace_sign",
+                        "idle_loop",
+                    ],
+                    "scenes": ["main_talk", "intro", "outro"],
+                }
             }
-        })
+        )
         await director_orchestrator.start(director_trigger_bus)
         app.state.director_orchestrator = director_orchestrator
         log.info(
@@ -710,27 +783,37 @@ def create_app() -> FastAPI:
     # Ajouté en premier pour que toutes les réponses (y compris erreurs 4xx/5xx)
     # bénéficient des headers défensifs.
     from .middleware import SecurityHeadersMiddleware
+
     _settings_for_mw = get_settings()
     app.add_middleware(SecurityHeadersMiddleware, env=_settings_for_mw.env)
 
     app.include_router(health.router)
     app.include_router(auth.router)
-    app.include_router(account.router)       # /account/* — self-service user auth (v4 Phase 1)
+    app.include_router(account.router)  # /account/* — self-service user auth (v4 Phase 1)
     app.include_router(admin.router)
-    app.include_router(admin_users.router)   # /api/admin/users — VIP promote/revoke
+    app.include_router(admin_users.router)  # /api/admin/users — VIP promote/revoke
     app.include_router(admin_moderation.router)  # /api/admin/moderation/* — moderation hub pivot
-    app.include_router(observatory.router)   # /api/admin/observatory/events — Sprint mos-A SSE
-    app.include_router(observatory_missions.router)  # /api/admin/observatory/missions — Sprint mos-A iter 2b Kanban
+    app.include_router(admin_analytics.router)  # /api/admin/analytics/* — analytics dashboard
+    app.include_router(observatory.router)  # /api/admin/observatory/events — Sprint mos-A SSE
+    app.include_router(
+        observatory_missions.router
+    )  # /api/admin/observatory/missions — Sprint mos-A iter 2b Kanban
     app.include_router(registry_api.public_router)
     app.include_router(registry_api.admin_router)
-    app.include_router(scene_editor_api.router)  # /api/scene-editor/* — Phase C drafts/patterns/layouts/timeline
-    app.include_router(scene_composer_api.router)  # /api/scene-composer/* — Phase E5.1 authored scenes + play
-    app.include_router(assets_catalog_api.router)  # /api/assets/catalog — Phase E5.1 unified catalog
+    app.include_router(
+        scene_editor_api.router
+    )  # /api/scene-editor/* — Phase C drafts/patterns/layouts/timeline
+    app.include_router(
+        scene_composer_api.router
+    )  # /api/scene-composer/* — Phase E5.1 authored scenes + play
+    app.include_router(
+        assets_catalog_api.router
+    )  # /api/assets/catalog — Phase E5.1 unified catalog
     app.include_router(visitor_ws.router)
     app.include_router(operator_ws.router)
-    app.include_router(editor_ws.router)   # /ws/editor — Phase D collab
-    app.include_router(world_ws.router)    # /ws/world — Phase L4 world.delta viewer
-    app.include_router(viewer.router)      # /viewer/events + /voice/token* — Sprint D PR D-3
+    app.include_router(editor_ws.router)  # /ws/editor — Phase D collab
+    app.include_router(world_ws.router)  # /ws/world — Phase L4 world.delta viewer
+    app.include_router(viewer.router)  # /viewer/events + /voice/token* — Sprint D PR D-3
     # Phase E4 — route de test Director (gated par settings.test_triggers_enabled).
     # La route retourne 404 si le flag est OFF, donc on peut toujours l'inclure —
     # pas de risque de surface d'attaque en prod. L'inclusion inconditionnelle

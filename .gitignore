@@ -12,6 +12,9 @@ backend/venv/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
 
 # ── Frontend (Node/Next) ───────────────────────────────────────────────
 # frontend/.gitignore already ignores node_modules + .next; listed here too
