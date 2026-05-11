@@ -13,14 +13,18 @@ Fixtures présentes :
 - `seed_redis_bans` — insère 2 bans Redis dans redis_client.
 - `seed_events` — insère 20 ModerationEvent variés via db_session.
 - `operator_cookie` — cookie JWT operator valide pour les tests routes.
-- `api_client` — AsyncClient ASGI sur une FastAPI minimaliste (admin moderation).
+- `api_client` — AsyncClient ASGI sur une FastAPI minimaliste (admin moderation + analytics).
 - `member_cookie` — cookie JWT user/member pour tests non-régression sécurité.
+- `seed_performances` — insère 50 Performance variées sur 6 jours pour tests analytics.
+- `seed_visitors` — insère 30 Visitor avec ban_until variés.
+- `seed_user_accounts` — insère 15 UserAccount (5 pending, 7 members, 3 VIPs).
 
 Garde-fou : on set `SHUGU_ENV_FILE` au **module load** (pas dans une fixture)
 parce que `shugu.config.Settings` lit le fichier dès le premier `get_settings()`
 et `@lru_cache` le mémoïse. Un set tardif dans une fixture n'aurait pas d'effet
 si `shugu.app` est importé en premier par un test.
 """
+
 from __future__ import annotations
 
 import os
@@ -54,6 +58,7 @@ async def settings_test():
     unique, env stable) mais c'est pénible en CI.
     """
     from shugu.config import get_settings
+
     get_settings.cache_clear()
     try:
         yield get_settings()
@@ -105,6 +110,7 @@ async def db_session():
     if not dsn:
         pytest.skip("no TEST_DATABASE_URL / DATABASE_URL — DB-bound test skipped")
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
     engine = create_async_engine(dsn, pool_pre_ping=True)
     SessionFactory = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
     async with SessionFactory() as session:
@@ -139,10 +145,58 @@ async def _clean_moderation_events(request):
         return
     from sqlalchemy import text
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
     engine = create_async_engine(dsn, pool_pre_ping=True)
     SessionFactory = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
     async with SessionFactory() as s:
         await s.execute(text("DELETE FROM moderation_events"))
+        await s.commit()
+    await engine.dispose()
+    yield
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def _clean_analytics_tables(request):
+    """Nettoie les tables analytics avant chaque test analytics (autouse).
+
+    Les fixtures seed_performances / seed_visitors / seed_user_accounts commitent
+    leurs données. Le rollback du db_session ne peut pas défaire ces commits.
+    Ce guard-rail garantit l'isolation entre tests analytics.
+
+    Déclenché si le test demande l'un des fixtures seed analytics OU si le
+    module de test est test_admin_analytics_routes (pour les tests "zero data"
+    qui n'ont pas besoin de seed mais ont besoin que la DB soit vide).
+
+    Les tables user_sessions ont des FK sur user_accounts ;
+    on les truncate en cascade pour éviter les violations FK.
+    """
+    _analytics_markers = {
+        "seed_performances",
+        "seed_visitors",
+        "seed_user_accounts",
+    }
+    uses_analytics = bool(_analytics_markers & set(request.fixturenames))
+    # Also trigger for all tests in the analytics test module (for "zero data" tests)
+    in_analytics_module = "test_admin_analytics" in (
+        request.module.__name__ if request.module else ""
+    )
+    if not (uses_analytics or in_analytics_module):
+        yield
+        return
+    dsn = _test_dsn()
+    if not dsn:
+        yield
+        return
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+    engine = create_async_engine(dsn, pool_pre_ping=True)
+    SessionFactory = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+    async with SessionFactory() as s:
+        # Truncate cascade pour gérer les FK (user_sessions→user_accounts, etc.)
+        await s.execute(text("TRUNCATE TABLE performances CASCADE"))
+        await s.execute(text("TRUNCATE TABLE visitors CASCADE"))
+        await s.execute(text("TRUNCATE TABLE user_accounts CASCADE"))
         await s.commit()
     await engine.dispose()
     yield
@@ -172,19 +226,21 @@ async def seed_events(db_session):
     detectors = ["profanity", "injection", "rate_limit"]
     phases = ["ingress", "egress"]
     for i in range(20):
-        rows.append({
-            "phase": phases[i % 2],
-            "detector": detectors[i % 3],
-            "verdict": "refused",
-            "details": {
-                "reason": f"reason-{i}",
-                "identity_kind": "visitor",
-                "ip_hash": "c" * 64,
-                "text_excerpt": f"msg {i}",
-                "text_len": 10 + i,
-            },
-            "created_at": now - timedelta(hours=i),
-        })
+        rows.append(
+            {
+                "phase": phases[i % 2],
+                "detector": detectors[i % 3],
+                "verdict": "refused",
+                "details": {
+                    "reason": f"reason-{i}",
+                    "identity_kind": "visitor",
+                    "ip_hash": "c" * 64,
+                    "text_excerpt": f"msg {i}",
+                    "text_len": 10 + i,
+                },
+                "created_at": now - timedelta(hours=i),
+            }
+        )
     await db_session.execute(insert(ModerationEvent), rows)
     await db_session.commit()
     return rows
@@ -194,6 +250,7 @@ async def seed_events(db_session):
 def settings_for_tests():
     """Settings minimalistes pour les tests auth (JWT operator + user)."""
     from shugu.config import Settings
+
     return Settings(
         _env_file=None,
         env="test",
@@ -232,6 +289,7 @@ async def operator_cookie(settings_for_tests, monkeypatch):
 async def member_cookie(settings_for_tests):
     """Cookie pour un MemberIdentity de test — ne doit PAS accéder aux routes admin."""
     from shugu.auth import user_tokens
+
     access, _, _ = user_tokens.issue_pair(
         settings_for_tests,
         user_id="test-member-id",
@@ -262,19 +320,20 @@ async def patch_session_scope(monkeypatch, db_session):
 
     import shugu.adapters.moderation_logging as mod_log
     import shugu.db.session as db_sess_mod
+
     monkeypatch.setattr(db_sess_mod, "session_scope", _test_scope)
     monkeypatch.setattr(mod_log, "session_scope", _test_scope)
 
 
 @pytest_asyncio.fixture
 async def api_client(settings_for_tests, monkeypatch, redis_client, db_session):
-    """AsyncClient ASGI sur une FastAPI minimaliste (routes admin moderation).
+    """AsyncClient ASGI sur une FastAPI minimaliste (admin moderation + analytics).
 
     - Pas de lifespan complet — évite Redis/DB/LiveKit/workers.
     - require_operator overridé pour valider les vrais cookies JWT forgés par
       settings_for_tests (même secret).
     - get_settings overridé → settings_for_tests.
-    - _get_redis overridé → redis_client fakeredis.
+    - _get_redis overridé → redis_client fakeredis (pour les deux routers).
     - session_scope overridé → wrappé autour du db_session partagé (pour que
       les assertions du test et les writes du service soient dans la même session).
 
@@ -289,7 +348,9 @@ async def api_client(settings_for_tests, monkeypatch, redis_client, db_session):
 
     import shugu.app
     from shugu.config import get_settings
-    from shugu.routes.admin_moderation import _get_redis
+    from shugu.routes.admin_analytics import _get_redis as analytics_get_redis
+    from shugu.routes.admin_analytics import router as admin_analytics_router
+    from shugu.routes.admin_moderation import _get_redis as moderation_get_redis
     from shugu.routes.admin_moderation import router as admin_moderation_router
 
     # Monkeypatch get_redis (utilisé par require_operator via import différé)
@@ -300,14 +361,171 @@ async def api_client(settings_for_tests, monkeypatch, redis_client, db_session):
     async def _test_session_scope():
         yield db_session
 
+    import shugu.routes.admin_analytics as analytics_route
     import shugu.routes.admin_moderation as mod_route
+
     monkeypatch.setattr(mod_route, "session_scope", _test_session_scope)
+    monkeypatch.setattr(analytics_route, "session_scope", _test_session_scope)
 
     app = FastAPI()
     app.include_router(admin_moderation_router)
+    app.include_router(admin_analytics_router)
     app.dependency_overrides[get_settings] = lambda: settings_for_tests
-    app.dependency_overrides[_get_redis] = lambda: redis_client
+    app.dependency_overrides[moderation_get_redis] = lambda: redis_client
+    app.dependency_overrides[analytics_get_redis] = lambda: redis_client
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         yield client
+
+
+# ─── Analytics fixtures ───────────────────────────────────────────────────────
+
+
+@pytest_asyncio.fixture
+async def seed_performances(db_session):
+    """Insère 50 Performance variées sur 6 jours pour tests analytics."""
+    from datetime import datetime, timedelta, timezone
+
+    from sqlalchemy import insert
+
+    from shugu.db.models import Performance
+
+    try:
+        from ulid import ULID
+    except ImportError:
+        import uuid
+
+        def ULID():  # noqa: N802
+            return uuid.uuid4().hex[:26]
+
+    now = datetime.now(timezone.utc)
+    roles = ["visitor", "member", "vip", "operator"]
+    routes = ["visitor_ws", "viewer", "operator_ws"]
+    rows = []
+    for i in range(50):
+        rows.append(
+            {
+                "performance_id": str(ULID()),
+                "author_role": roles[i % 4],
+                "author_ip_hash": ("a" * 32 + f"{i:032d}")[:64],
+                "route": routes[i % 3],
+                "input_text": f"input {i}",
+                "input_sha256": "0" * 64,
+                "output_text": f"output {i}" if i % 5 else None,
+                "duration_ms": 100 + i * 10,
+                "moderation_ingress": {"detector": "profanity"} if i % 7 == 0 else None,
+                "moderation_egress": None,
+                "created_at": now - timedelta(hours=i * 3),
+            }
+        )
+    await db_session.execute(insert(Performance), rows)
+    await db_session.commit()
+    return rows
+
+
+@pytest_asyncio.fixture
+async def seed_visitors(db_session):
+    """Insère 30 Visitor avec ban_until variés."""
+    from datetime import datetime, timedelta, timezone
+
+    from sqlalchemy import insert
+
+    from shugu.db.models import Visitor
+
+    now = datetime.now(timezone.utc)
+    rows = []
+    for i in range(30):
+        rows.append(
+            {
+                "ip_hash": ("v" * 32 + f"{i:032d}")[:64],
+                "first_seen": now - timedelta(days=i),
+                "last_seen": now - timedelta(hours=i),
+                "msg_count": i * 3,
+                "ban_until": (now + timedelta(hours=2)) if i % 7 == 0 else None,
+            }
+        )
+    await db_session.execute(insert(Visitor), rows)
+    await db_session.commit()
+    return rows
+
+
+@pytest_asyncio.fixture
+async def seed_user_accounts(db_session):
+    """Insère 15 UserAccount : 5 pending, 7 members, 3 VIPs."""
+    from datetime import datetime, timezone
+
+    try:
+        from ulid import ULID
+    except ImportError:
+        import uuid
+
+        def ULID():  # noqa: N802
+            return uuid.uuid4().hex[:26]
+
+    now = datetime.now(timezone.utc)
+    rows = []
+    for i in range(5):
+        rows.append(
+            {
+                "id": str(ULID()),
+                "username": f"pending{i}",
+                "email": f"p{i}@ex.com",
+                "password_hash": "x" * 60,
+                "email_verified_at": None,
+                "is_active": True,
+                "created_at": now,
+            }
+        )
+    for i in range(7):
+        rows.append(
+            {
+                "id": str(ULID()),
+                "username": f"member{i}",
+                "email": f"m{i}@ex.com",
+                "password_hash": "x" * 60,
+                "email_verified_at": now,
+                "is_active": True,
+                "created_at": now,
+            }
+        )
+    for i in range(3):
+        rows.append(
+            {
+                "id": str(ULID()),
+                "username": f"vip{i}",
+                "email": f"v{i}@ex.com",
+                "password_hash": "x" * 60,
+                "email_verified_at": now,
+                "vip_since": now,
+                "is_active": True,
+                "created_at": now,
+            }
+        )
+    # Use explicit text insert to avoid sending is_operator column default
+    # when migration 0012 (which adds that column) hasn't been applied on local dev DB.
+    # column list = only the 9 columns present in both old and new schema.
+    from sqlalchemy import text as _text
+
+    for row in rows:
+        await db_session.execute(
+            _text(
+                "INSERT INTO user_accounts "
+                "(id, username, email, password_hash, email_verified_at, "
+                "vip_since, is_active, created_at) "
+                "VALUES (:id, :username, :email, :password_hash, "
+                ":email_verified_at, :vip_since, :is_active, :created_at)"
+            ),
+            {
+                "id": row["id"],
+                "username": row["username"],
+                "email": row["email"],
+                "password_hash": row["password_hash"],
+                "email_verified_at": row.get("email_verified_at"),
+                "vip_since": row.get("vip_since"),
+                "is_active": row.get("is_active", True),
+                "created_at": row["created_at"],
+            },
+        )
+    await db_session.commit()
+    return rows

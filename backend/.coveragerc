@@ -1,0 +1,6 @@
+[run]
+concurrency = greenlet, thread
+source = shugu
+
+[report]
+show_missing = True
