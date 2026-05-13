@@ -1,0 +1,534 @@
+{
+  "title": "Shugu — Voice ↔ Body Pipeline",
+  "description": "Dashboard Grafana couvrant les 13 métriques Prometheus du pipeline voice↔body. Spec : docs/superpowers/specs/2026-05-13-d10c-grafana-dashboard-design.md. SLO §7.2 : cancel_speaking p95 <200ms, drift audio_at_ms p95 <100ms, TTFB voice p50 0.2-0.3s.",
+  "schemaVersion": 39,
+  "version": 1,
+  "uid": "shugu-voice-body-pipeline",
+  "tags": ["voice", "pipeline", "shugu", "slo"],
+  "timezone": "browser",
+  "refresh": "30s",
+  "time": { "from": "now-1h", "to": "now" },
+  "timepicker": {},
+  "panels": [
+    {
+      "id": 1,
+      "title": "Row 1 — Pipeline Health Overview",
+      "type": "row",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "panels": [
+        {
+          "id": 101,
+          "title": "TTFB voice (p50 / p95 / p99)",
+          "description": "End-to-end TTFB voice : VAD END_OF_SPEECH → first AudioFrame published. Cible SLO §7.2 : p50 dans 0.2-0.3s.",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 1 },
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.50, sum(rate(voice_turn_latency_seconds_bucket{stage=\"audio_first\"}[5m])) by (le))",
+              "legendFormat": "p50"
+            },
+            {
+              "expr": "histogram_quantile(0.95, sum(rate(voice_turn_latency_seconds_bucket{stage=\"audio_first\"}[5m])) by (le))",
+              "legendFormat": "p95"
+            },
+            {
+              "expr": "histogram_quantile(0.99, sum(rate(voice_turn_latency_seconds_bucket{stage=\"audio_first\"}[5m])) by (le))",
+              "legendFormat": "p99"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s",
+              "custom": {}
+            }
+          },
+          "options": {}
+        },
+        {
+          "id": 102,
+          "title": "Turn rate (turns / min)",
+          "description": "Nombre de turns vocaux complétés par minute (stage=audio_first).",
+          "type": "stat",
+          "gridPos": { "h": 4, "w": 6, "x": 12, "y": 1 },
+          "targets": [
+            {
+              "expr": "sum(rate(voice_turn_latency_seconds_count{stage=\"audio_first\"}[1m])) * 60",
+              "legendFormat": "turns/min"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "custom": {}
+            }
+          },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] } }
+        },
+        {
+          "id": 103,
+          "title": "Bridge sentence success rate (%)",
+          "description": "Taux de succès des phrases TTS publiées vs skippées.",
+          "type": "stat",
+          "gridPos": { "h": 4, "w": 6, "x": 18, "y": 1 },
+          "targets": [
+            {
+              "expr": "100 * sum(rate(voice_bridge_sentences_published_total[5m])) / (sum(rate(voice_bridge_sentences_published_total[5m])) + sum(rate(voice_bridge_sentences_skipped_total[5m])))",
+              "legendFormat": "success %"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percent",
+              "custom": {}
+            }
+          },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] } }
+        },
+        {
+          "id": 104,
+          "title": "Chunk drop rate (%)",
+          "description": "Taux de drop des chunks PCM LiveKit. Cible SLO : <1%.",
+          "type": "stat",
+          "gridPos": { "h": 4, "w": 6, "x": 12, "y": 5 },
+          "targets": [
+            {
+              "expr": "100 * sum(rate(voice_publisher_chunks_dropped_total[5m])) / sum(rate(voice_publisher_chunks_published_total[5m]))",
+              "legendFormat": "drop %"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percent",
+              "custom": {}
+            }
+          },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] } }
+        },
+        {
+          "id": 105,
+          "title": "Bridge skip rate (%)",
+          "description": "Taux de skip des phrases TTS. Cible SLO : <5%.",
+          "type": "stat",
+          "gridPos": { "h": 4, "w": 6, "x": 18, "y": 5 },
+          "targets": [
+            {
+              "expr": "100 * sum(rate(voice_bridge_sentences_skipped_total[5m])) / (sum(rate(voice_bridge_sentences_published_total[5m])) + sum(rate(voice_bridge_sentences_skipped_total[5m])))",
+              "legendFormat": "skip %"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percent",
+              "custom": {}
+            }
+          },
+          "options": { "reduceOptions": { "calcs": ["lastNotNull"] } }
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Row 2 — Audio Pipeline (Publisher D-1)",
+      "type": "row",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 9 },
+      "panels": [
+        {
+          "id": 201,
+          "title": "Chunks published / sec",
+          "description": "Débit de chunks PCM publiés avec succès vers LiveKit.",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 8, "x": 0, "y": 10 },
+          "targets": [
+            {
+              "expr": "sum(rate(voice_publisher_chunks_published_total[1m]))",
+              "legendFormat": "chunks/s"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "ops",
+              "custom": {}
+            }
+          },
+          "options": {}
+        },
+        {
+          "id": 202,
+          "title": "Publish duration p50 / p95 (ms)",
+          "description": "Latence du publish LiveKit d'un chunk PCM. Cible : p95 <100ms.",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 8, "x": 8, "y": 10 },
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.50, sum(rate(voice_publisher_publish_duration_ms_bucket[5m])) by (le))",
+              "legendFormat": "p50"
+            },
+            {
+              "expr": "histogram_quantile(0.95, sum(rate(voice_publisher_publish_duration_ms_bucket[5m])) by (le))",
+              "legendFormat": "p95"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "ms",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "red", "value": 100 }
+                ]
+              },
+              "custom": {}
+            }
+          },
+          "options": {}
+        },
+        {
+          "id": 203,
+          "title": "Chunk drops / sec",
+          "description": "Taux de chunks PCM droppés (PCM trop court, reconnect failed).",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 8, "x": 16, "y": 10 },
+          "targets": [
+            {
+              "expr": "sum(rate(voice_publisher_chunks_dropped_total[1m]))",
+              "legendFormat": "drops/s"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "ops",
+              "custom": {}
+            }
+          },
+          "options": {}
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Row 3 — TTS Bridge (D-2)",
+      "type": "row",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 18 },
+      "panels": [
+        {
+          "id": 301,
+          "title": "Sentences published / min",
+          "description": "Débit de phrases TTS publiées avec succès (Piper synth + LiveKit publish).",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 8, "x": 0, "y": 19 },
+          "targets": [
+            {
+              "expr": "sum(rate(voice_bridge_sentences_published_total[1m])) * 60",
+              "legendFormat": "sentences/min"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "custom": {}
+            }
+          },
+          "options": {}
+        },
+        {
+          "id": 302,
+          "title": "Sentences skipped by reason (stacked)",
+          "description": "Breakdown des phrases skippées par raison.",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 8, "x": 8, "y": 19 },
+          "targets": [
+            {
+              "expr": "sum(rate(voice_bridge_sentences_skipped_total[5m])) by (reason)",
+              "legendFormat": "{{reason}}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "ops",
+              "custom": { "stacking": { "group": "A", "mode": "normal" } }
+            }
+          },
+          "options": {}
+        },
+        {
+          "id": 303,
+          "title": "Publish sentence duration p50 / p95 (ms)",
+          "description": "Durée totale publish_sentence (Piper synth + LiveKit publish). Cible : <3s.",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 8, "x": 16, "y": 19 },
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.50, sum(rate(voice_bridge_publish_sentence_duration_ms_bucket[5m])) by (le))",
+              "legendFormat": "p50"
+            },
+            {
+              "expr": "histogram_quantile(0.95, sum(rate(voice_bridge_publish_sentence_duration_ms_bucket[5m])) by (le))",
+              "legendFormat": "p95"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "ms",
+              "custom": {}
+            }
+          },
+          "options": {}
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Row 4 — Barge-in SLO (D-4)",
+      "type": "row",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 27 },
+      "panels": [
+        {
+          "id": 401,
+          "title": "Cancel speaking p95 vs SLO (ms)",
+          "description": "Latence p95 de cancel_speaking (barge-in cut-off). SLO §7.2 : p95 <200ms. Threshold rouge à 200ms.",
+          "type": "gauge",
+          "gridPos": { "h": 8, "w": 8, "x": 0, "y": 28 },
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.95, sum(rate(voice_cancel_speaking_duration_ms_bucket[5m])) by (le))",
+              "legendFormat": "p95 cancel ms"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "ms",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "red", "value": 200 }
+                ]
+              },
+              "custom": {}
+            }
+          },
+          "options": {
+            "reduceOptions": { "calcs": ["lastNotNull"] },
+            "showThresholdLabels": true,
+            "showThresholdMarkers": true
+          }
+        },
+        {
+          "id": 402,
+          "title": "Cancel / min by reason (stacked)",
+          "description": "Nombre de cancel_speaking par minute, ventilé par raison (barge_in, shutdown, external, unknown).",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 16, "x": 8, "y": 28 },
+          "targets": [
+            {
+              "expr": "sum(rate(voice_cancel_speaking_total[1m])) by (reason) * 60",
+              "legendFormat": "{{reason}}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "custom": { "stacking": { "group": "A", "mode": "normal" } }
+            }
+          },
+          "options": {}
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Row 5 — Audio↔Expression Sync SLO (D-5)",
+      "type": "row",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 36 },
+      "panels": [
+        {
+          "id": 501,
+          "title": "audio_at_ms drift p95 by kind",
+          "description": "Distribution p95 du drift audio_at_ms par kind (say_emotion, face, unknown). SLO §7.2 : p95 <100ms. Threshold rouge à 100ms.",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 37 },
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.95, sum(rate(director_audio_at_ms_distribution_bucket[5m])) by (le, kind))",
+              "legendFormat": "p95 {{kind}}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "ms",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "red", "value": 100 }
+                ]
+              },
+              "custom": {}
+            }
+          },
+          "options": {}
+        },
+        {
+          "id": 502,
+          "title": "audio_at_ms drift heatmap",
+          "description": "Heatmap de la distribution complète du drift audio_at_ms.",
+          "type": "heatmap",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 37 },
+          "targets": [
+            {
+              "expr": "sum(rate(director_audio_at_ms_distribution_bucket[5m])) by (le)",
+              "legendFormat": "{{le}}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "ms",
+              "custom": {}
+            }
+          },
+          "options": {}
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Row 6 — Viewer WebSocket (D-3)",
+      "type": "row",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 45 },
+      "panels": [
+        {
+          "id": 601,
+          "title": "WS connections opened / min",
+          "description": "Connexions WS /ws/viewer/events ouvertes (post-auth, post-rate-limit).",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 8, "x": 0, "y": 46 },
+          "targets": [
+            {
+              "expr": "sum(rate(viewer_ws_connections_total[1m]))",
+              "legendFormat": "connections/min"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "ops",
+              "custom": {}
+            }
+          },
+          "options": {}
+        },
+        {
+          "id": 602,
+          "title": "WS disconnects by reason (stacked)",
+          "description": "Déconnexions WS par raison (client_close, auth_failed, rate_limited, server_error, unknown).",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 8, "x": 8, "y": 46 },
+          "targets": [
+            {
+              "expr": "sum(rate(viewer_ws_disconnects_total[5m])) by (reason)",
+              "legendFormat": "{{reason}}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "ops",
+              "custom": { "stacking": { "group": "A", "mode": "normal" } }
+            }
+          },
+          "options": {}
+        },
+        {
+          "id": 603,
+          "title": "Token refresh outcomes",
+          "description": "Résultats des tentatives de refresh de viewer token (success, expired_grace, auth_failed, missing_token, unknown).",
+          "type": "piechart",
+          "gridPos": { "h": 8, "w": 8, "x": 16, "y": 46 },
+          "targets": [
+            {
+              "expr": "sum(rate(viewer_token_refresh_total[5m])) by (outcome)",
+              "legendFormat": "{{outcome}}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "custom": {}
+            }
+          },
+          "options": {}
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "Row 7 — Turn Pipeline Stages",
+      "type": "row",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 54 },
+      "panels": [
+        {
+          "id": 701,
+          "title": "TTFB cumulé par stage p95 (stacked)",
+          "description": "Latence p95 cumulée par stage voice pipeline (stt, intent, llm_first_token, tts_first_frame, audio_first). Permet d'identifier quel stage est le goulot.",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 14, "x": 0, "y": 55 },
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.95, sum(rate(voice_turn_latency_seconds_bucket{stage=\"stt\"}[5m])) by (le))",
+              "legendFormat": "p95 stt"
+            },
+            {
+              "expr": "histogram_quantile(0.95, sum(rate(voice_turn_latency_seconds_bucket{stage=\"intent\"}[5m])) by (le))",
+              "legendFormat": "p95 intent"
+            },
+            {
+              "expr": "histogram_quantile(0.95, sum(rate(voice_turn_latency_seconds_bucket{stage=\"llm_first_token\"}[5m])) by (le))",
+              "legendFormat": "p95 llm_first_token"
+            },
+            {
+              "expr": "histogram_quantile(0.95, sum(rate(voice_turn_latency_seconds_bucket{stage=\"tts_first_frame\"}[5m])) by (le))",
+              "legendFormat": "p95 tts_first_frame"
+            },
+            {
+              "expr": "histogram_quantile(0.95, sum(rate(voice_turn_latency_seconds_bucket{stage=\"audio_first\"}[5m])) by (le))",
+              "legendFormat": "p95 audio_first"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s",
+              "custom": { "stacking": { "group": "A", "mode": "normal" } }
+            }
+          },
+          "options": {}
+        },
+        {
+          "id": 702,
+          "title": "Turns by intent",
+          "description": "Répartition des turns vocaux par intent détecté (chat, web_search, emotion, emote, unknown).",
+          "type": "piechart",
+          "gridPos": { "h": 8, "w": 10, "x": 14, "y": 55 },
+          "targets": [
+            {
+              "expr": "sum(rate(voice_turn_latency_seconds_count{stage=\"audio_first\"}[5m])) by (intent)",
+              "legendFormat": "{{intent}}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "custom": {}
+            }
+          },
+          "options": {}
+        }
+      ]
+    }
+  ]
+}
