@@ -7,7 +7,9 @@ Ces tests garantissent que le dashboard JSON :
 1. Est valide (parseable).
 2. Contient le schéma minimum (title, panels, schemaVersion, version, 7 rows).
 3. Référence UNIQUEMENT des métriques existantes dans pipeline_metrics.py + metrics.py.
-4. Inclut les threshold lines SLO §7.2 sur les panels critiques.
+4. Valide que les valeurs de labels utilisés dans les expr PromQL appartiennent
+   aux whitelists exportées par les modules source.
+5. Inclut les threshold lines SLO §7.2 sur les panels critiques.
 
 TDD strict — ces tests sont écrits AVANT la création du dashboard (Phase RED).
 NE JAMAIS modifier ces tests pour les faire passer. Si un test est rouge,
@@ -19,12 +21,17 @@ import json
 import re
 from pathlib import Path
 
-import pytest
-
-# ---------------------------------------------------------------------------
-# Imports depuis les modules source — source de vérité des whitelists labels.
-# NOTE : _VALID_* ne sont pas dans __all__ mais l'import explicite fonctionne.
-# ---------------------------------------------------------------------------
+from shugu.voice.metrics import (
+    _VALID_INTENT_LABELS,
+    STAGE_AUDIO_FIRST,
+    STAGE_INTENT_DONE,
+    STAGE_LLM_FIRST,
+    STAGE_SENTENCE_FIRST,
+    STAGE_STT_DONE,
+    STAGE_TTS_FIRST,
+    STAGE_VAD_END,
+    STAGE_WEB_DONE,
+)
 from shugu.voice.pipeline_metrics import (
     _VALID_AUDIO_AT_MS_KINDS,
     _VALID_CANCEL_REASONS,
@@ -32,7 +39,6 @@ from shugu.voice.pipeline_metrics import (
     _VALID_SKIP_REASONS,
     _VALID_WS_DISCONNECT_REASONS,
 )
-from shugu.voice.metrics import _VALID_INTENT_LABELS
 
 # ---------------------------------------------------------------------------
 # Chemin vers le dashboard — parents[4] car le fichier est en :
@@ -94,6 +100,30 @@ _PROMQL_KEYWORDS: frozenset[str] = frozenset({
 # Préfixes spécifiques aux métriques du projet — tout identifiant avec l'un
 # de ces préfixes DOIT être dans ALLOWED_METRICS.
 _METRIC_PREFIXES = ("voice_", "viewer_", "director_")
+
+# ---------------------------------------------------------------------------
+# Whitelists de valeurs de labels — construites depuis les modules source.
+# La clé est le nom du label PromQL tel qu'utilisé dans les expr.
+# Pour "reason", l'union permissive est utilisée (cf. spec §5 item 4 note).
+# ---------------------------------------------------------------------------
+_LABEL_WHITELISTS: dict[str, frozenset[str]] = {
+    # "reason" est partagé par bridge (skip), cancel et ws_disconnect
+    "reason": _VALID_CANCEL_REASONS | _VALID_SKIP_REASONS | _VALID_WS_DISCONNECT_REASONS,
+    "outcome": _VALID_REFRESH_OUTCOMES,
+    "kind": _VALID_AUDIO_AT_MS_KINDS,
+    "intent": _VALID_INTENT_LABELS,
+    # Stages construits depuis les constantes STAGE_* de metrics.py
+    "stage": frozenset({
+        STAGE_VAD_END,
+        STAGE_STT_DONE,
+        STAGE_INTENT_DONE,
+        STAGE_WEB_DONE,
+        STAGE_LLM_FIRST,
+        STAGE_SENTENCE_FIRST,
+        STAGE_TTS_FIRST,
+        STAGE_AUDIO_FIRST,
+    }),
+}
 
 
 def _strip_histogram_suffix(name: str) -> str:
@@ -197,7 +227,39 @@ def test_all_exprs_reference_known_metrics() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Test 4 — Threshold lines SLO §7.2
+# Test 4 — Valeurs de labels dans les whitelists (spec §5 item 4)
+# ---------------------------------------------------------------------------
+
+
+def test_all_label_values_in_whitelists() -> None:
+    """Toute valeur de label {label="value"} dans les expr PromQL doit
+    appartenir à la whitelist correspondante exportée par les modules source.
+
+    Vérifie les labels : reason, outcome, kind, intent, stage.
+    """
+    data = json.loads(DASHBOARD_PATH.read_text(encoding="utf-8"))
+    exprs = _walk_exprs(data["panels"])
+
+    violations: list[tuple[str, str, str]] = []
+    for expr in exprs:
+        # Extrait tous les paires label="value" dans les sélecteurs PromQL
+        for label, value in re.findall(r'(\w+)\s*=\s*"([^"]+)"', expr):
+            wl = _LABEL_WHITELISTS.get(label)
+            if wl is not None and value not in wl:
+                violations.append((label, value, expr))
+
+    assert not violations, (
+        "Valeurs de labels hors whitelist dans les expr PromQL :\n"
+        + "\n".join(
+            f"  - {label}={value!r} (whitelist={sorted(_LABEL_WHITELISTS[label])}) dans: {expr!r}"
+            for label, value, expr in violations[:10]
+        )
+        + (f"\n  ... et {len(violations) - 10} autres" if len(violations) > 10 else "")
+    )
+
+
+# ---------------------------------------------------------------------------
+# Test 5 — Threshold lines SLO §7.2
 # ---------------------------------------------------------------------------
 
 
