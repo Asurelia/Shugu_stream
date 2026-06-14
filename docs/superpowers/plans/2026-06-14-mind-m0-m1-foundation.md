@@ -306,6 +306,18 @@ async def test_generate_http_error_raises() -> None:
     await http.aclose()
 
 
+@respx.mock
+async def test_generate_malformed_200_raises_director_error() -> None:
+    """200 avec choices vide → DirectorBrainError (pas IndexError) pour que le
+    fallback chain s'enclenche (review PR #168)."""
+    http = httpx.AsyncClient()
+    brain = M3Brain(settings=_settings(), http=http)
+    respx.post(_M3_URL).mock(return_value=httpx.Response(200, json={"choices": [], "usage": {}}))
+    with pytest.raises(DirectorBrainError, match="malformée|choices"):
+        await brain.generate(system="s", messages=[Message(role="user", content="u")])
+    await http.aclose()
+
+
 async def test_generate_no_key_raises() -> None:
     http = httpx.AsyncClient()
     brain = M3Brain(settings=_settings(mind_m3_api_key=""), http=http)
@@ -470,7 +482,13 @@ class M3Brain:
 
     @staticmethod
     def _parse(data: dict[str, Any]) -> BrainResult:
-        message = (data.get("choices", [{}])[0] or {}).get("message", {}) or {}
+        # Garde de forme : une réponse 200 avec choices vide / sans message
+        # doit lever DirectorBrainError (et NON IndexError/AttributeError) pour
+        # que ResilientDirectorBrain enclenche la chaîne de fallback (m3→ollama→canned).
+        choices = data.get("choices") or []
+        if not choices or not isinstance(choices[0], dict):
+            raise DirectorBrainError("m3: réponse malformée (choices vide/invalide)")
+        message = choices[0].get("message") or {}
         text = (message.get("content") or "").strip()
         usage_raw = data.get("usage", {}) or {}
         usage = Usage(
@@ -1318,15 +1336,22 @@ Repérer le bloc lifespan où le Director est instancié (après `make_director_
         try:
             from .voice.llm_local import LocalLLM
             _warm_llm = LocalLLM(settings)
-            # Un appel court force le chargement du modèle en VRAM.
-            async for _ in _warm_llm.generate(system="warmup", user="ok"):
-                break
+            # Un appel court force le chargement du modèle en VRAM (_ensure_loaded).
+            # Signature réelle (vérifiée backend/shugu/voice/llm_local.py:75) :
+            #   async def generate(self, system, messages: Sequence[dict], max_tokens=512, ...) -> str
+            # → c'est un coroutine awaité (PAS un AsyncIterator ; le stream est `LocalLLM.stream`).
+            # → il prend `messages` (liste de dicts role/content), PAS `user`.
+            await _warm_llm.generate(
+                system="warmup",
+                messages=[{"role": "user", "content": "ok"}],
+                max_tokens=1,
+            )
             log.info("mind.fallback_preloaded")
         except Exception as exc:  # noqa: BLE001 — best-effort, ne bloque jamais le boot
             log.warning("mind.fallback_preload_failed", extra={"error": repr(exc)})
 ```
 
-> Note exécutant : vérifier la signature exacte de `LocalLLM.generate` (`backend/shugu/voice/llm_local.py:75`) et adapter l'appel warmup (c'est un `AsyncIterator`). Si la signature diffère, faire un appel minimal équivalent — l'objectif est juste de déclencher `_ensure_loaded()`.
+> Note exécutant : la signature est confirmée ci-dessus. ⚠️ Le `except Exception` est volontairement large (le préchargement ne doit jamais bloquer le boot) — mais cela signifie qu'un appel mal formé échouerait SILENCIEUSEMENT et le cold-start de 30-60s reviendrait à la première bascule. C'est précisément pourquoi l'appel ci-dessus utilise la vraie signature. Si tu modifies cet appel, vérifie qu'il ne lève pas (teste le pré-warm réellement, log `mind.fallback_preloaded` présent).
 
 - [ ] **Step 4: Lancer → succès**
 
