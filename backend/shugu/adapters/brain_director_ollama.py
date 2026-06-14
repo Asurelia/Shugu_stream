@@ -12,7 +12,7 @@ import logging
 import httpx
 
 from ..config import Settings
-from ..director.brain_provider import DirectorBrainError  # noqa: F401 — réexporté pour les tests
+from ..director.brain_provider import DirectorBrainError
 
 log = logging.getLogger(__name__)
 

@@ -140,6 +140,72 @@ def test_repr_hides_key() -> None:
     assert "super-secret-xyz" not in repr(brain)
 
 
+@respx.mock
+async def test_parse_content_as_list_returns_empty_text() -> None:
+    """200 avec content liste (réponse vision/structurée) → BrainResult.text="" (pas AttributeError)."""
+    http = httpx.AsyncClient()
+    brain = M3Brain(settings=_settings(), http=http)
+    respx.post(_M3_URL).mock(return_value=httpx.Response(
+        200,
+        json={
+            "choices": [{"message": {"content": [{"type": "text", "text": "hi"}]}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 2},
+        },
+    ))
+    result = await brain.generate(system="s", messages=[Message(role="user", content="u")])
+    assert result.text == ""
+    assert result.usage.input_tokens == 5
+    await http.aclose()
+
+
+@respx.mock
+async def test_parse_usage_non_numeric_returns_zero() -> None:
+    """200 avec usage non-numérique → BrainResult.usage.(0,0) (pas ValueError sur int())."""
+    http = httpx.AsyncClient()
+    brain = M3Brain(settings=_settings(), http=http)
+    respx.post(_M3_URL).mock(return_value=httpx.Response(
+        200,
+        json={
+            "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": "N/A", "completion_tokens": None},
+        },
+    ))
+    result = await brain.generate(system="s", messages=[Message(role="user", content="u")])
+    assert result.text == "ok"
+    assert result.usage.input_tokens == 0
+    assert result.usage.output_tokens == 0
+    await http.aclose()
+
+
+@respx.mock
+async def test_parse_tool_call_non_dict_ignored() -> None:
+    """200 avec tool_calls contenant un non-dict → ignoré (pas AttributeError sur .get)."""
+    http = httpx.AsyncClient()
+    brain = M3Brain(settings=_settings(), http=http)
+    respx.post(_M3_URL).mock(return_value=httpx.Response(
+        200,
+        json={
+            "choices": [{
+                "message": {
+                    "content": "ok",
+                    "tool_calls": [
+                        "not_a_dict",
+                        None,
+                        {"id": "c1", "function": {"name": "say", "arguments": "{}"}},
+                    ],
+                },
+                "finish_reason": "tool_calls",
+            }],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 2},
+        },
+    ))
+    result = await brain.generate(system="s", messages=[Message(role="user", content="u")])
+    assert result.text == "ok"
+    assert len(result.tool_calls) == 1
+    assert result.tool_calls[0].name == "say"
+    await http.aclose()
+
+
 async def test_director_adapter_returns_text() -> None:
     from shugu.adapters.brain_m3 import M3DirectorBrain
     from shugu.director.brain_provider import DirectorBrain

@@ -30,6 +30,14 @@ Thinking = Literal["adaptive", "disabled"]
 DIRECTOR_MAX_TOKENS = 200
 
 
+def _safe_int(value: Any, default: int = 0) -> int:
+    """Convertit `value` en int sans lever d'exception (usage tokens peut être None ou 'N/A')."""
+    try:
+        return int(value)
+    except (ValueError, TypeError):
+        return default
+
+
 @dataclass(frozen=True)
 class Message:
     """Message d'une conversation M3. content = texte ; images via image_urls (base64 data-URI)."""
@@ -150,14 +158,21 @@ class M3Brain:
         if not choices or not isinstance(choices[0], dict):
             raise DirectorBrainError("m3: réponse malformée (choices vide/invalide)")
         message = choices[0].get("message") or {}
-        text = (message.get("content") or "").strip()
+        # Fix review PR #168 : content peut être une liste (réponse vision/structurée).
+        # Dans ce cas, on renvoie texte vide plutôt que planter sur .strip().
+        content = message.get("content")
+        text = content.strip() if isinstance(content, str) else ""
         usage_raw = data.get("usage", {}) or {}
+        # Fix review PR #168 : usage peut contenir des valeurs non-numériques ou None.
         usage = Usage(
-            input_tokens=int(usage_raw.get("prompt_tokens", 0)),
-            output_tokens=int(usage_raw.get("completion_tokens", 0)),
+            input_tokens=_safe_int(usage_raw.get("prompt_tokens", 0)),
+            output_tokens=_safe_int(usage_raw.get("completion_tokens", 0)),
         )
         tool_calls: list[ToolCall] = []
         for tc in message.get("tool_calls", []) or []:
+            # Fix review PR #168 : un élément de tool_calls peut être un non-dict.
+            if not isinstance(tc, dict):
+                continue
             fn = tc.get("function", {}) or {}
             raw_args = fn.get("arguments", "{}")
             try:

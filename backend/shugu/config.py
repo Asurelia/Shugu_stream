@@ -518,8 +518,9 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices(
             "DIRECTOR_LLM_TIMEOUT_S", "SHUGU_DIRECTOR_LLM_TIMEOUT_S"
         ),
-        description="Timeout (s) de l'appel LLM Réflexe. 5.0 absorbe le TTFB M3. "
-                    "Bornes [1.0, 60.0]. Remplace l'ancien hardcode 3.0.",
+        description="Timeout (s) de l'appel LLM Réflexe (utilisé dès que l'orchestrator est "
+                    "recâblé en M-1 Task 13 ; aujourd'hui l'orchestrator hardcode encore 3.0s). "
+                    "5.0 absorbe le TTFB M3. Bornes [1.0, 60.0].",
     )
     mind_cost_cap_hourly_usd: float = Field(
         default=5.0,

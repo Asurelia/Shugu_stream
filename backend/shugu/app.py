@@ -581,28 +581,29 @@ async def lifespan(app: FastAPI):
         director_trigger_bus = get_trigger_bus()
         director_brain = make_director_brain(settings=settings, http=http)
 
-        # M-0 : pré-warm du fallback Gemma pour éviter le cold-start à la 1re bascule.
+        # M-0 : pré-warm du fallback Ollama réel pour éviter le cold-start à la 1re bascule.
+        # Fix review PR #168 : l'ancien code chauffait LocalLLM (Gemma in-process du pipeline
+        # voix) alors que le vrai fallback du Réflexe M3 est OllamaDirectorBrain (serveur
+        # Ollama séparé). Le warmup est fire-and-forget (create_task) pour ne pas retarder
+        # le boot. Si Ollama est absent en dev, le except best-effort log un warning.
         from .mind.preload import should_preload_fallback
         if should_preload_fallback(
             preload=settings.mind_fallback_preload,
             provider=settings.director_llm_provider,
         ):
-            try:
-                from .voice.llm_local import LocalLLM
-                _warm_llm = LocalLLM(settings)
-                # Un appel court force le chargement du modèle en VRAM (_ensure_loaded).
-                # Signature réelle (vérifiée backend/shugu/voice/llm_local.py:75) :
-                #   async def generate(self, system, messages: Sequence[dict], max_tokens=512, ...) -> str
-                # → c'est un coroutine awaité (PAS un AsyncIterator ; le stream est `LocalLLM.stream`).
-                # → il prend `messages` (liste de dicts role/content), PAS `user`.
-                await _warm_llm.generate(
-                    system="warmup",
-                    messages=[{"role": "user", "content": "ok"}],
-                    max_tokens=1,
-                )
-                log.info("mind.fallback_preloaded")
-            except Exception as exc:  # noqa: BLE001 — best-effort, ne bloque jamais le boot
-                log.warning("mind.fallback_preload_failed", extra={"error": repr(exc)})
+            async def _warmup_ollama_fallback() -> None:
+                _warmup_http = httpx.AsyncClient()
+                try:
+                    from .adapters.brain_director_ollama import OllamaDirectorBrain
+                    _warm_brain = OllamaDirectorBrain(settings=settings, http=_warmup_http)
+                    await _warm_brain.complete(system="warmup", user="ok")
+                    log.info("mind.fallback_preloaded")
+                except Exception as exc:  # noqa: BLE001 — best-effort, Ollama peut être absent en dev
+                    log.warning("mind.fallback_preload_failed", extra={"error": repr(exc)})
+                finally:
+                    await _warmup_http.aclose()
+
+            asyncio.create_task(_warmup_ollama_fallback())
 
         director_debouncer = TriggerDebouncer(
             window_seconds=settings.director_debounce_window_seconds,

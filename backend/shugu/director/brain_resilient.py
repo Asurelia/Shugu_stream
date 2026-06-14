@@ -15,8 +15,8 @@ import logging
 import time
 from typing import Callable
 
-from .brain_provider import DirectorBrain, DirectorBrainError
 from ..mind.metrics import MindMetricsRecorder, get_null_mind_recorder
+from .brain_provider import DirectorBrain, DirectorBrainError
 
 log = logging.getLogger(__name__)
 
