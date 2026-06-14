@@ -115,17 +115,6 @@ async def test_openai_skeleton_raises_not_implemented() -> None:
     await http.aclose()
 
 
-async def test_ollama_skeleton_raises_not_implemented() -> None:
-    """OllamaDirectorBrain.complete() lève NotImplementedError."""
-    http = httpx.AsyncClient()
-    settings = _settings("ollama")
-    brain = make_director_brain(settings, http)
-
-    with pytest.raises(NotImplementedError, match="Phase E2.6"):
-        await brain.complete(system="test", user="test")
-
-    await http.aclose()
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Tests DirectorBrainError

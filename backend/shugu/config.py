@@ -537,6 +537,18 @@ class Settings(BaseSettings):
         description="Pré-charger le modèle Gemma local au démarrage (évite le cold-start "
                     "30-60s à la première bascule fallback).",
     )
+    ollama_base_url: str = Field(
+        default="http://localhost:11434/v1",
+        validation_alias=AliasChoices("OLLAMA_BASE_URL", "SHUGU_OLLAMA_BASE_URL"),
+        description="Base URL OpenAI-compat d'Ollama local (fallback Mind).",
+    )
+    ollama_director_model: str = Field(
+        default="gemma2",
+        validation_alias=AliasChoices(
+            "OLLAMA_DIRECTOR_MODEL", "SHUGU_OLLAMA_DIRECTOR_MODEL"
+        ),
+        description="Modèle Ollama pour le fallback Director/Réflexe.",
+    )
 
     # Director cache sémantique pgvector — Phase E2.5.
     director_cache_enabled: bool = Field(
