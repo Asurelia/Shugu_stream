@@ -138,8 +138,9 @@ Puis ajouter, juste après le bloc `director_llm_provider`, les settings Mind (c
         validation_alias=AliasChoices(
             "DIRECTOR_LLM_TIMEOUT_S", "SHUGU_DIRECTOR_LLM_TIMEOUT_S"
         ),
-        description="Timeout (s) de l'appel LLM Réflexe. 5.0 absorbe le TTFB M3. "
-                    "Bornes [1.0, 60.0]. Remplace l'ancien hardcode 3.0.",
+        description="Timeout (s) de l'appel LLM Réflexe (utilisé dès que l'orchestrator est "
+                    "recâblé en M-1 Task 13 ; aujourd'hui l'orchestrator hardcode encore 3.0s). "
+                    "5.0 absorbe le TTFB M3. Bornes [1.0, 60.0].",
     )
     mind_cost_cap_hourly_usd: float = Field(
         default=5.0,
@@ -489,14 +490,21 @@ class M3Brain:
         if not choices or not isinstance(choices[0], dict):
             raise DirectorBrainError("m3: réponse malformée (choices vide/invalide)")
         message = choices[0].get("message") or {}
-        text = (message.get("content") or "").strip()
+        # Fix review PR #168 : content peut être une liste (réponse vision/structurée).
+        # Dans ce cas, on renvoie texte vide plutôt que planter sur .strip().
+        content = message.get("content")
+        text = content.strip() if isinstance(content, str) else ""
         usage_raw = data.get("usage", {}) or {}
+        # Fix review PR #168 : usage peut contenir des valeurs non-numériques ou None.
         usage = Usage(
-            input_tokens=int(usage_raw.get("prompt_tokens", 0)),
-            output_tokens=int(usage_raw.get("completion_tokens", 0)),
+            input_tokens=_safe_int(usage_raw.get("prompt_tokens", 0)),
+            output_tokens=_safe_int(usage_raw.get("completion_tokens", 0)),
         )
         tool_calls: list[ToolCall] = []
         for tc in message.get("tool_calls", []) or []:
+            # Fix review PR #168 : un élément de tool_calls peut être un non-dict.
+            if not isinstance(tc, dict):
+                continue
             fn = tc.get("function", {}) or {}
             raw_args = fn.get("arguments", "{}")
             try:
@@ -506,6 +514,11 @@ class M3Brain:
             tool_calls.append(ToolCall(id=tc.get("id", ""), name=fn.get("name", ""), arguments=args))
         return BrainResult(text=text, tool_calls=tool_calls, usage=usage)
 ```
+
+> **Fix review PR #168 :** `_parse` durci contre 3 formes de réponse 200 plausibles :
+> - `content` liste (vision/structuré) → `text = ""` au lieu d'`AttributeError`
+> - `usage` non-numérique → `_safe_int()` helper retourne 0 au lieu d'`ValueError`
+> - élément `tool_calls` non-dict → ignoré au lieu d'`AttributeError`
 
 - [ ] **Step 4: Lancer → succès**
 
@@ -1327,28 +1340,29 @@ def should_preload_fallback(*, preload: bool, provider: str) -> bool:
 Repérer le bloc lifespan où le Director est instancié (après `make_director_brain`). Ajouter, gated :
 
 ```python
-    # M-0 : pré-warm du fallback Gemma pour éviter le cold-start à la 1re bascule.
+    # M-0 : pré-warm du fallback Ollama réel pour éviter le cold-start à la 1re bascule.
+    # Fix review PR #168 : l'ancien code chauffait LocalLLM (Gemma in-process du pipeline
+    # voix) alors que le vrai fallback du Réflexe M3 est OllamaDirectorBrain (serveur
+    # Ollama séparé). Le warmup est fire-and-forget (create_task) pour ne pas retarder
+    # le boot. Si Ollama est absent en dev, le except best-effort log un warning.
     from .mind.preload import should_preload_fallback
     if should_preload_fallback(
         preload=settings.mind_fallback_preload,
         provider=settings.director_llm_provider,
     ):
-        try:
-            from .voice.llm_local import LocalLLM
-            _warm_llm = LocalLLM(settings)
-            # Un appel court force le chargement du modèle en VRAM (_ensure_loaded).
-            # Signature réelle (vérifiée backend/shugu/voice/llm_local.py:75) :
-            #   async def generate(self, system, messages: Sequence[dict], max_tokens=512, ...) -> str
-            # → c'est un coroutine awaité (PAS un AsyncIterator ; le stream est `LocalLLM.stream`).
-            # → il prend `messages` (liste de dicts role/content), PAS `user`.
-            await _warm_llm.generate(
-                system="warmup",
-                messages=[{"role": "user", "content": "ok"}],
-                max_tokens=1,
-            )
-            log.info("mind.fallback_preloaded")
-        except Exception as exc:  # noqa: BLE001 — best-effort, ne bloque jamais le boot
-            log.warning("mind.fallback_preload_failed", extra={"error": repr(exc)})
+        async def _warmup_ollama_fallback() -> None:
+            _warmup_http = httpx.AsyncClient()
+            try:
+                from .adapters.brain_director_ollama import OllamaDirectorBrain
+                _warm_brain = OllamaDirectorBrain(settings=settings, http=_warmup_http)
+                await _warm_brain.complete(system="warmup", user="ok")
+                log.info("mind.fallback_preloaded")
+            except Exception as exc:  # noqa: BLE001 — best-effort, Ollama peut être absent en dev
+                log.warning("mind.fallback_preload_failed", extra={"error": repr(exc)})
+            finally:
+                await _warmup_http.aclose()
+
+        asyncio.create_task(_warmup_ollama_fallback())
 ```
 
 > Note exécutant : la signature est confirmée ci-dessus. ⚠️ Le `except Exception` est volontairement large (le préchargement ne doit jamais bloquer le boot) — mais cela signifie qu'un appel mal formé échouerait SILENCIEUSEMENT et le cold-start de 30-60s reviendrait à la première bascule. C'est précisément pourquoi l'appel ci-dessus utilise la vraie signature. Si tu modifies cet appel, vérifie qu'il ne lève pas (teste le pré-warm réellement, log `mind.fallback_preloaded` présent).
@@ -1807,6 +1821,13 @@ git commit -m "feat(mind): build_prompt injects mind_state (plan/activity/recent
 ---
 
 ## Task 13 : Timeout orchestrator depuis settings
+
+> **DETTE M-0 (review PR #168) :** l'orchestrator wrappe `complete()` dans un seul
+> `asyncio.wait_for` ; avec `ResilientDirectorBrain` (m3 → ollama → canned) un timeout
+> unique ne couvre pas toute la chaîne. En M-1 Task 13, recâbler sur
+> `director_llm_timeout_s` ET soit augmenter le budget pour couvrir primary+fallback,
+> soit laisser le `ResilientDirectorBrain` gérer ses timeouts internes sans
+> `wait_for` outer serré.
 
 **Files:**
 - Modify: `backend/shugu/director/orchestrator.py` (remplacer le hardcode `3.0`)
