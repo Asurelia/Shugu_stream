@@ -138,3 +138,20 @@ def test_repr_hides_key() -> None:
     http = httpx.AsyncClient()
     brain = M3Brain(settings=_settings(mind_m3_api_key="super-secret-xyz"), http=http)
     assert "super-secret-xyz" not in repr(brain)
+
+
+async def test_director_adapter_returns_text() -> None:
+    from shugu.adapters.brain_m3 import M3DirectorBrain
+    from shugu.director.brain_provider import DirectorBrain
+
+    http = httpx.AsyncClient()
+    inner = M3Brain(settings=_settings(), http=http)
+    director = M3DirectorBrain(inner=inner, settings=_settings())
+
+    assert isinstance(director, DirectorBrain)  # conforme au Protocol runtime_checkable
+
+    with respx.mock:
+        respx.post(_M3_URL).mock(return_value=_ok_response("réponse director"))
+        text = await director.complete(system="sys", user="usr")
+    assert text == "réponse director"
+    await http.aclose()
