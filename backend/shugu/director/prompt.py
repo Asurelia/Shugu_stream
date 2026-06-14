@@ -35,10 +35,13 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from .scene_state import SceneStateSnapshot
 from .triggers import TriggerEvent
+
+if TYPE_CHECKING:
+    from ..mind.types import MindState
 
 log = logging.getLogger(__name__)
 
@@ -115,6 +118,8 @@ def build_prompt(
     trigger: TriggerEvent,
     persona: Optional[str] = None,
     memory_facts: Optional[list[str]] = None,
+    *,
+    mind_state: "MindState | None" = None,
 ) -> tuple[str, str]:
     """Construit le couple (system, user) pour l'appel LLM Shugu Soul.
 
@@ -128,6 +133,10 @@ def build_prompt(
                       que Shugu se souvienne des préférences VIP. Chaque
                       fact est sanitisé (newlines + cap 300 chars) avant
                       injection pour éviter le prompt injection.
+        mind_state:   État Mind courant (activité, plan, dernière parole).
+                      Keyword-only. Si None, le bloc Mind n'est pas injecté
+                      (compat ascendante garantie). Import sous TYPE_CHECKING
+                      pour éviter l'import circulaire prompt→mind.
 
     Returns:
         (system, user) : tuple de strings prêts à passer à `AsyncAnthropic`.
@@ -188,6 +197,11 @@ def build_prompt(
 
     system = "\n\n".join(system_parts)
 
+    # M-1 Task 12 — Enrichissement Mind : injecte plan/activité/dernière parole
+    # si un mind_state est fourni. Sans mind_state, le system prompt reste identique
+    # (compat ascendante garantie).
+    system = _augment_with_mind(system, mind_state)
+
     # ── User prompt ──────────────────────────────────────────────────────────
     # Trigger courant + events récents (max 10 déjà garanti par SceneState).
     trigger_line = _format_trigger(trigger)
@@ -203,6 +217,31 @@ def build_prompt(
     user = f"{trigger_line}\n\n{events_block}"
 
     return system, user
+
+
+def _augment_with_mind(system: str, mind_state: "MindState | None") -> str:
+    """Injecte le plan + l'activité + les dernières paroles dans le system prompt.
+
+    Keyword-only depuis build_prompt. Si mind_state est None, retourne le system
+    inchangé (compat ascendante garantie).
+
+    Le bloc est ajouté à la fin du system prompt existant (après les instructions
+    de format) pour ne pas perturber la structure persona/scène/assets/format.
+    L'import de MindState est sous TYPE_CHECKING — aucune dépendance runtime
+    vers shugu.mind (évite l'import circulaire prompt→mind).
+    """
+    if mind_state is None:
+        return system
+    lines = [system, "", "## Ton état actuel (Mind)"]
+    lines.append(f"Activité : {mind_state.activity}.")
+    if getattr(mind_state, "current_game", None):
+        lines.append(f"Tu joues à : {mind_state.current_game}.")
+    if mind_state.plan.primary:
+        lines.append(f"Objectif actuel : {mind_state.plan.primary}.")
+    if mind_state.recent_speech:
+        last = mind_state.recent_speech[-1].text
+        lines.append(f"Tu viens de dire : « {last} ». Ne te répète pas, reste cohérente.")
+    return "\n".join(lines)
 
 
 def _format_trigger(trigger: TriggerEvent) -> str:
