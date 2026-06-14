@@ -44,17 +44,21 @@ from shugu.memory.types import MemoryItem, RecallQuery
 
 def _settings(**kwargs) -> Settings:
     """Crée des Settings avec director_enabled par défaut."""
-    return Settings(
-        env="test",
-        ip_hash_salt="test",
-        director_enabled=kwargs.get("director_enabled", True),
-        anthropic_api_key=kwargs.get("anthropic_api_key", "test-key-abc"),
-        director_model=kwargs.get("director_model", "claude-haiku-4-5-20251001"),
-        director_canned_enabled=kwargs.get("director_canned_enabled", False),  # OFF par défaut dans les tests
-        director_cache_enabled=kwargs.get("director_cache_enabled", False),    # OFF par défaut dans les tests
-        director_llm_provider=kwargs.get("director_llm_provider", "anthropic"),
-        director_max_ticks_per_hour=kwargs.get("director_max_ticks_per_hour", 200),
-    )
+    base: dict = {
+        "env": "test",
+        "ip_hash_salt": "test",
+        "director_enabled": kwargs.get("director_enabled", True),
+        "anthropic_api_key": kwargs.get("anthropic_api_key", "test-key-abc"),
+        "director_model": kwargs.get("director_model", "claude-haiku-4-5-20251001"),
+        "director_canned_enabled": kwargs.get("director_canned_enabled", False),  # OFF par défaut dans les tests
+        "director_cache_enabled": kwargs.get("director_cache_enabled", False),    # OFF par défaut dans les tests
+        "director_llm_provider": kwargs.get("director_llm_provider", "anthropic"),
+        "director_max_ticks_per_hour": kwargs.get("director_max_ticks_per_hour", 200),
+    }
+    # M-1 Task 13 — forward director_llm_timeout_s si fourni (sinon Settings garde son défaut 5.0).
+    if "director_llm_timeout_s" in kwargs:
+        base["director_llm_timeout_s"] = kwargs["director_llm_timeout_s"]
+    return Settings(**base)
 
 
 class _StubWorker:
@@ -924,3 +928,68 @@ async def test_orchestrator_memory_recall_failure_skip_silently() -> None:
     # Le brain a quand même été appelé sans memories.
     assert len(brain.calls) == 1
     assert "Mémoires pertinentes" not in brain.calls[0]["system"]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# M-1 Task 13 — Timeout configurable via settings.director_llm_timeout_s
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+async def test_orchestrator_uses_configurable_timeout() -> None:
+    """Le timeout du wait_for LLM est lu depuis settings.director_llm_timeout_s.
+
+    Stratégie : on patche asyncio.wait_for dans le module orchestrator pour
+    capturer la valeur `timeout` effectivement passée, puis on vérifie qu'elle
+    correspond à settings.director_llm_timeout_s (et non au hardcode 3.0).
+
+    On utilise aussi un _StubBrain qui lève TimeoutError pour simuler le timeout
+    et vérifier que le fallback [say_emotion:neutral] est appliqué — ce qui
+    valide que le chemin complet (wait_for → timeout → fallback) reste intact.
+    """
+    import asyncio as _asyncio
+    from unittest.mock import patch as _patch
+
+    captured_timeouts: list[float] = []
+    _real_wait_for = _asyncio.wait_for
+
+    async def _spy_wait_for(coro, *, timeout=None, **kw):
+        # Capture le timeout passé et re-lève TimeoutError pour simuler le dépassement.
+        captured_timeouts.append(timeout)
+        # Annule la coroutine proprement avant de lever.
+        try:
+            coro.close()
+        except Exception:
+            pass
+        raise TimeoutError()
+
+    say_worker = _StubWorker("say_emotion", StateDelta(patch={}))
+    store = DirectorStateStore()
+    bus = _StubEventBus()
+
+    custom_timeout = 7.0  # valeur distincte du hardcode 3.0 et du défaut 5.0
+    s = _settings(director_enabled=True, director_llm_timeout_s=custom_timeout)
+    assert s.director_llm_timeout_s == custom_timeout  # sanity
+
+    orch = Orchestrator(
+        state_store=store,
+        workers={"say_emotion": say_worker},
+        llm_client=_StubBrain("[face:joy]"),
+        event_bus=bus,
+        settings=s,
+    )
+
+    # Patche asyncio.wait_for dans le module orchestrator (pas le module test).
+    with _patch("shugu.director.orchestrator.asyncio.wait_for", _spy_wait_for):
+        trigger = TriggerEvent(kind="vip_arrival", payload={"sender": "alice"})
+        await orch.tick(trigger)
+
+    # Le spy a capturé exactement un appel à wait_for.
+    assert len(captured_timeouts) == 1, f"Attendu 1 appel wait_for, got {len(captured_timeouts)}"
+    # La valeur passée doit être celle du setting (7.0), pas le hardcode 3.0.
+    assert captured_timeouts[0] == custom_timeout, (
+        f"wait_for appelé avec timeout={captured_timeouts[0]}, "
+        f"attendu {custom_timeout} (settings.director_llm_timeout_s)"
+    )
+    # Le fallback say_emotion:neutral doit avoir été dispatché (TimeoutError → fallback).
+    assert len(say_worker.calls) == 1
+    assert say_worker.calls[0][0] == "neutral"
