@@ -32,7 +32,7 @@ import httpx
 
 from ..config import Settings
 
-DirectorProvider = Literal["minimax", "anthropic", "openai", "ollama"]
+DirectorProvider = Literal["minimax", "anthropic", "openai", "ollama", "m3"]
 
 
 @runtime_checkable
@@ -88,9 +88,11 @@ def make_director_brain(settings: Settings, http: httpx.AsyncClient) -> "Directo
         return _make_openai_director(settings, http)
     if provider == "ollama":
         return _make_ollama_director(settings, http)
+    if provider == "m3":
+        return _make_m3_director(settings, http)
     raise ValueError(
         f"director_llm_provider inconnu: {provider!r}. "
-        f"Valeurs valides: minimax, anthropic, openai, ollama"
+        f"Valeurs valides: minimax, anthropic, openai, ollama, m3"
     )
 
 
@@ -112,3 +114,16 @@ def _make_openai_director(settings: Settings, http: httpx.AsyncClient) -> "Direc
 def _make_ollama_director(settings: Settings, http: httpx.AsyncClient) -> "DirectorBrain":
     from ..adapters.brain_director_ollama import OllamaDirectorBrain
     return OllamaDirectorBrain(settings=settings, http=http)
+
+
+def _make_m3_director(settings: Settings, http: httpx.AsyncClient) -> "DirectorBrain":
+    from ..adapters.brain_canned import CannedFallbackBrain
+    from ..adapters.brain_director_ollama import OllamaDirectorBrain
+    from ..adapters.brain_m3 import M3Brain, M3DirectorBrain
+    from .brain_resilient import ResilientDirectorBrain
+
+    primary = M3DirectorBrain(inner=M3Brain(settings=settings, http=http), settings=settings)
+    fallback = OllamaDirectorBrain(settings=settings, http=http)
+    return ResilientDirectorBrain(
+        primary=primary, fallback=fallback, canned=CannedFallbackBrain(),
+    )
