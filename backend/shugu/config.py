@@ -485,13 +485,57 @@ class Settings(BaseSettings):
     # Director LLM multi-provider — Phase E2.5. MiniMax par défaut (réutilise
     # l'infrastructure existante, 5-10x moins cher qu'Anthropic).
     # Override via SHUGU_DIRECTOR_LLM_PROVIDER=anthropic pour Claude Haiku/Sonnet.
-    director_llm_provider: Literal["minimax", "anthropic", "openai", "ollama"] = Field(
+    director_llm_provider: Literal["minimax", "anthropic", "openai", "ollama", "m3"] = Field(
         default="minimax",
         validation_alias=AliasChoices(
             "DIRECTOR_LLM_PROVIDER", "SHUGU_DIRECTOR_LLM_PROVIDER"
         ),
-        description="Provider LLM Director (default minimax — réutilise l'infra ShuguPersonaBrain). "
-                    "minimax | anthropic | openai (E2.6) | ollama (E2.6).",
+        description="Provider LLM Director (default minimax). "
+                    "minimax | anthropic | openai | ollama | m3 (cerveau Mind).",
+    )
+
+    # ── Cerveau autonome "Mind" — Shugu Mind (M-0). ──────────────────────────
+    mind_m3_base_url: str = Field(
+        default="https://api.minimax.io/v1",
+        validation_alias=AliasChoices("MIND_M3_BASE_URL", "SHUGU_MIND_M3_BASE_URL"),
+        description="Base URL OpenAI-compat du provider M3 (MiniMax direct ou SiliconFlow). "
+                    "Benchmark TTFB en M-0 pour choisir.",
+    )
+    mind_m3_model: str = Field(
+        default="minimax-m3",
+        validation_alias=AliasChoices("MIND_M3_MODEL", "SHUGU_MIND_M3_MODEL"),
+        description="Nom du modèle M3 chez le provider configuré.",
+    )
+    mind_m3_api_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("MIND_M3_API_KEY", "SHUGU_MIND_M3_API_KEY"),
+        description="Clé API M3. Si vide, fallback sur minimax_api_key.",
+    )
+    director_llm_timeout_s: float = Field(
+        default=5.0,
+        ge=1.0,
+        le=60.0,
+        validation_alias=AliasChoices(
+            "DIRECTOR_LLM_TIMEOUT_S", "SHUGU_DIRECTOR_LLM_TIMEOUT_S"
+        ),
+        description="Timeout (s) de l'appel LLM Réflexe. 5.0 absorbe le TTFB M3. "
+                    "Bornes [1.0, 60.0]. Remplace l'ancien hardcode 3.0.",
+    )
+    mind_cost_cap_hourly_usd: float = Field(
+        default=5.0,
+        ge=0.0,
+        validation_alias=AliasChoices(
+            "MIND_COST_CAP_HOURLY_USD", "SHUGU_MIND_COST_CAP_HOURLY_USD"
+        ),
+        description="Cap dur du coût API Mind par heure glissante (USD). 0 = illimité.",
+    )
+    mind_fallback_preload: bool = Field(
+        default=True,
+        validation_alias=AliasChoices(
+            "MIND_FALLBACK_PRELOAD", "SHUGU_MIND_FALLBACK_PRELOAD"
+        ),
+        description="Pré-charger le modèle Gemma local au démarrage (évite le cold-start "
+                    "30-60s à la première bascule fallback).",
     )
 
     # Director cache sémantique pgvector — Phase E2.5.
@@ -655,6 +699,10 @@ class Settings(BaseSettings):
                     "operator_only | emergency_mute. "
                     "Env : SHUGU_STREAM_MODE (ou STREAM_MODE).",
     )
+
+    def effective_m3_api_key(self) -> str:
+        """Clé M3 effective : mind_m3_api_key si présente, sinon minimax_api_key."""
+        return self.mind_m3_api_key or self.minimax_api_key
 
     @field_validator("public_site_url", mode="after")
     @classmethod
