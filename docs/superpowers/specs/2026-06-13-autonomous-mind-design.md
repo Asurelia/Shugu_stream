@@ -1,8 +1,8 @@
 # Spec — Shugu Mind : cerveau autonome Cortex + Réflexes sur MiniMax M3
 
 > **Date** : 2026-06-13
-> **Statut** : validé en brainstorming + review adversariale (3 reviewers non-auteurs, 10 bloquants / 14 majeurs intégrés)
-> **Périmètre** : conception du cerveau autonome (type Neuro-sama) + gameplay autonome (type Gemini Plays Pokémon), en Strangler Fig au-dessus des briques existantes.
+> **Statut** : validé en brainstorming + review adversariale (3 reviewers non-auteurs, 10 bloquants / 14 majeurs intégrés) + track voix temps réel ajouté (recherche 2026-06-14)
+> **Périmètre** : conception du cerveau autonome (type Neuro-sama) + gameplay autonome (type Gemini Plays Pokémon) + **voix conversationnelle temps réel** (type Gemini Live / OpenAI Realtime, §13), en Strangler Fig au-dessus des briques existantes.
 > **Précède** : plan d'implémentation `docs/superpowers/plans/2026-06-13-autonomous-mind-plan.md` (à produire via writing-plans).
 
 ---
@@ -18,8 +18,9 @@ Shugu devient un **streamer IA autonome** : il décide en continu quoi faire (pa
 | O1 | Autonomie proactive | En l'absence de tout trigger externe, Shugu produit une initiative (parole, changement d'activité) au moins toutes les 60 s |
 | O2 | Répartie chat vivante | Latence message chat → début audio TTS **p50 < 5,5 s** pendant une session de jeu active (voir §5.F1 pour le budget détaillé — la valeur dépend du debounce, tranchée ci-dessous) |
 | O3 | Gameplay autonome | Shugu progresse seul dans Pokémon Rouge/Bleu (sortir du bourg, gagner un combat) sans intervention humaine sur une session de 2 h |
-| O4 | Un seul cerveau | 100 % des appels de cognition passent par la famille `M3Brain` (fallback local uniquement sur erreur, mesuré par métrique) |
+| O4 | Un seul état mental | 100 % de la cognition **non temps-réel** (chat, cortex, mémoire) passe par la famille `M3Brain` ; le hot-path vocal temps réel utilise le modèle local pour la latence (§13) mais partage le **même Blackboard** — l'unité est l'état mental, pas le modèle |
 | O5 | Coût borné | Coût API < 5 $/heure de stream, cap dur configurable, mesuré en continu |
+| O6 | Voix conversationnelle temps réel | Conversation parlée **voix-à-voix p50 600–900 ms** (zone Neuro-sama), barge-in naturel, détection sémantique de fin de parole (§13) |
 
 ### Non-objectifs (hors scope de ce spec)
 
@@ -411,7 +412,16 @@ Chaque jalon = 1 PR squashée, feature-flaggée, démontrable, CI verte. **Réor
 | **M-5b** | `navigate_to` BFS sur collision map RAM Gen 1 (parsing carte, warps, connexions) — **optionnel pour O3** | M | Navigation auto labyrinthes |
 | **M-6** | Consolidation : extracteur mémoire → M3, suppression brains morts, vérif whitelist Grafana `mind_`, O4 vérifié, smoke live 30 min | M | Session live complète, GO/NO-GO |
 
-Rollback à chaque jalon : flags `mind_*_enabled=false` → comportement actuel intact.
+**Track voix temps réel** (parallèle, indépendant des M-0→M-6 ci-dessus — voir §13 pour le détail technique) :
+
+| Jalon | Contenu | Effort | Démo |
+|---|---|---|---|
+| **M-V0** | Mesure du budget de latence actuel (voix-à-voix) sur le pipeline existant : instrumenter `mind_voice_latency_seconds` à chaque étage (turn → STT → LLM → TTS). Baseline chiffrée AVANT toute optimisation | S | Tableau de latence par étage du pipeline réel |
+| **M-V1** | **Détection sémantique de fin de parole** (plus gros levier) : activer le turn-detector EOU de LiveKit Agents (déjà dans le SDK) à la place du VAD silence seul. Fallback VAD si modèle indispo | M | Tour coupé sans attendre le timeout silence, -85 % d'interruptions involontaires |
+| **M-V2** | **STT partiels rapides** + **overlap du pipeline** : STT streaming (Moonshine/Parakeet/Deepgram) → démarrage LLM sur partiels → démarrage TTS sur premier token. Voix branchée comme **sense haute priorité** du Réflexe, partage le Blackboard (§13.4) | L | Voix-à-voix p50 < 900 ms mesuré (O6) |
+| **M-V3** (option) | TTS expressif français (MiniMax Speech-2.8 sound tags ou Cartesia Sonic) en remplacement/complément de Piper, derrière flag | M | Voix plus vivante (rires, respirations), latence préservée |
+
+Rollback à chaque jalon : flags `mind_*_enabled=false` / `mind_voice_*` → comportement actuel intact.
 
 ---
 
@@ -460,3 +470,77 @@ Hypothèses **conservatrices** (cortex `max_tokens=500`, `thinking=disabled` en 
 8. **Pas de sous-agents LLM** (pattern `define_agent` GPP) dans cette itération : le pathfinding est un BFS Python (M-5b). YAGNI — réévaluer après M-5 si le cortex bloque sur les labyrinthes.
 9. **Vitesse émulateur** : temps réel (`speed=1`) — le stream doit être regardable.
 10. **Le réflexe n'a pas la vision** : seuls `state_text` résumé + plan dans son prompt — appels courts, TTFB bas.
+11. **Voix temps réel = cascade, pas S2S natif** : choix architectural assumé (§13.1). Le hot-path vocal utilise le modèle local (latence), M3 en escalade optionnelle — d'où la nuance d'O4.
+
+---
+
+## 13. Track voix temps réel (type Google Gemini Live / OpenAI Realtime)
+
+> Recherche de référence : `research-realtime-voice` (2026-06-14, 4 axes). Rapports archivés. Cette section répond à la demande explicite de l'utilisateur : « un système de voix temps réel comme Google et OpenAI ».
+
+### 13.1 Décision d'architecture : cascade, pas speech-to-speech natif
+
+Deux paradigmes existent en 2026 :
+
+| | Speech-to-speech natif | Cascade STT→LLM→TTS streaming |
+|---|---|---|
+| Exemples | OpenAI Realtime (`gpt-realtime`), Gemini Live native audio, Moshi | Ce que Shugu fait déjà ; recommandé par Daily.co/Pipecat |
+| Latence voix-à-voix | ~200–300 ms | **600–900 ms** (bien optimisé) |
+| Tool-calling | **Faible/peu fiable** (Gemini native audio « galère », Moshi 1,26/5 instruction-following) | **Parfait** (texte intermédiaire) |
+| Contexte / RAG / mémoire | Limité | 128 K+, RAG, observabilité complète |
+
+**Décision : cascade.** Shugu est un **agent à outils** (`say`, `set_activity`, `press_buttons`, mémoire…). Le S2S natif gagne ~400 ms mais sacrifie la fiabilité du tool-calling — le cœur du projet. Le S2S natif échangerait l'essentiel (Shugu qui agit) contre du cosmétique. Google eux-mêmes maintiennent une variante half-cascade « more reliable in production, especially with tool use ». **De plus, M3 est texte-seul en sortie → la cascade est de toute façon le seul chemin avec M3.** La cible 600–900 ms est la zone Neuro-sama : « acceptable pour un VTuber ».
+
+### 13.2 État actuel (déjà solide)
+
+Le pipeline voix existant (`backend/shugu/voice/`) est **déjà sur la bonne architecture** :
+
+- **LiveKit Agents** (`voice/livekit_agent.py`) — le *même* framework que beaucoup d'intégrations production OpenAI/Gemini Realtime. La recherche conclut explicitement : « si vous utilisez déjà LiveKit, restez-y, pas de raison de migrer ».
+- **STT** : whisper.cpp local (`voice/stt_local.py`) + VAD Silero.
+- **LLM** : Gemma 26B local (`voice/llm_local.py`, `enable_thinking: False` pour la latence).
+- **TTS** : Piper local (`voice/tts_local.py`) — TTFA **< 50 ms**, déjà excellent.
+- **Barge-in** : déjà implémenté (chaîne voice-body, cancel coopératif `voice/llm_local.py:17`).
+
+Donc : transport WebRTC ✅, barge-in ✅, TTS rapide ✅. L'écart vers le « feel » Google/OpenAI tient à **3 briques précises**, pas à une refonte.
+
+### 13.3 Les 3 briques de l'écart (par impact décroissant)
+
+1. **Détection sémantique de fin de parole** (M-V1) — *le plus gros levier.* Aujourd'hui les tours sont coupés au silence VAD, ce qui ajoute mécaniquement ~800 ms à chaque réponse et confond « euh… » avec une fin de phrase. C'est LA chose qui sépare un talkie-walkie d'une conversation. Solution : **modèle EOU de LiveKit** (135 M, ~50 ms CPU, **déjà dans le SDK**, −85 % d'interruptions involontaires) ou SmartTurn de Pipecat (14 langues dont FR). Gain : 400–600 ms + fluidité.
+
+2. **STT partiels rapides** (M-V2) — whisper.cpp ne streame pas en < 300 ms. Options self-host : **Moonshine v2** (107 ms, < 2 Go), **Parakeet TDT** (< 100 ms, 4 Go) ; cloud : Deepgram Nova-3 (~150 ms). Permet de démarrer le LLM avant la fin de la phrase utilisateur.
+
+3. **Overlap total du pipeline** (M-V2) — plomberie : démarrer le LLM sur les partiels STT, démarrer le TTS dès le premier token LLM (buffer « sentence-aware » pour la prosodie). Latence = `max(turn, STT) + LLM_TTFT + TTS_TTFA + réseau`, pas une somme.
+
+**TTS et cerveau** : déjà bons. Piper suffit ; M-V3 (optionnel) ajoute une voix française plus expressive (MiniMax Speech-2.8 sound tags, ~250 ms ; Cartesia Sonic, ~90 ms) si désiré.
+
+### 13.4 Intégration au Mind — la voix devient un sense conscient
+
+Aujourd'hui le cerveau vocal est une **île** : quand on parle à Shugu, elle ignore qu'elle joue à Pokémon, ne se souvient pas du chat, n'a pas le plan. Le Mind corrige ça **sans toucher à la latence** :
+
+- **Voix = sense haute priorité du Réflexe** : la fin de tour vocal produit un `TriggerEvent(kind="voice")` (nouveau kind) → Réflexe → réponse parlée. La voix court-circuite le debounce (priorité immédiate).
+- **Hot-path local** : le LLM du tour vocal reste **Gemma local** (TTFB ~instantané vs M3 ~2,7 s — incompatible avec une conversation parlée). C'est la nuance d'O4. M3 en **escalade optionnelle** pour une question complexe, masquée par un filler (« laisse-moi réfléchir… » — la `filler_bank` existe déjà dans `voice/filler_bank.py`).
+- **Conscience partagée** : le prompt du tour vocal reçoit le `MindState` (activité, plan, `recent_speech`) → « je suis en train de jouer, attends ». Et le tour vocal **écrit** dans le Blackboard (`append_speech`, `append_chat` équivalent voix) → cortex et chat savent ce qui s'est dit de vive voix. Plus de schizophrénie.
+
+### 13.5 Budget de latence cible (cascade optimisée)
+
+```
+Fin de parole (EOU LiveKit)      :  80–150 ms
+STT (Moonshine/Parakeet, partiel): 100–150 ms  [chevauché avec turn]
+LLM TTFT (Gemma local)           : 100–250 ms
+TTS TTFA (Piper)                 :  < 50 ms
+Transport WebRTC (local)         :  20–50 ms
+──────────────────────────────────────────────
+Voix-à-voix perçu (pipeline overlap) : 600–900 ms  ← O6
+```
+
+### 13.6 Observabilité voix
+
+- `mind_voice_latency_seconds{stage=turn|stt|llm|tts|total}` (histogram) — instrumenté dès M-V0 pour mesurer la baseline.
+- `mind_voice_turn_detector_total{outcome=cut|wait|false_interrupt}`.
+- `mind_voice_escalation_total{to=m3}` — combien de tours escaladés vers M3.
+
+### 13.7 Ce qui n'est PAS retenu (et pourquoi)
+
+- **OpenAI Realtime / Gemini Live en direct** : dépendance API externe sur le hot-path, tool-calling moins fiable (native audio), coût par minute. La cascade self-host est plus alignée avec « M3 + local ».
+- **Modèles S2S natifs open (Moshi, Qwen-Omni)** : instruction-following insuffisant pour un agent à outils ; anglais surtout (Moshi). À reconsidérer si un S2S natif FR à bon instruction-following émerge.
+- **Entrée vidéo temps réel Gemini Live (1 fps)** pour regarder le jeu : déjà couvert autrement par le cortex M3 avec vision (§4.4) — pas besoin d'un second canal.
