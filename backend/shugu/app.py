@@ -580,6 +580,30 @@ async def lifespan(app: FastAPI):
         director_state_store = get_director_state_store()
         director_trigger_bus = get_trigger_bus()
         director_brain = make_director_brain(settings=settings, http=http)
+
+        # M-0 : pré-warm du fallback Gemma pour éviter le cold-start à la 1re bascule.
+        from .mind.preload import should_preload_fallback
+        if should_preload_fallback(
+            preload=settings.mind_fallback_preload,
+            provider=settings.director_llm_provider,
+        ):
+            try:
+                from .voice.llm_local import LocalLLM
+                _warm_llm = LocalLLM(settings)
+                # Un appel court force le chargement du modèle en VRAM (_ensure_loaded).
+                # Signature réelle (vérifiée backend/shugu/voice/llm_local.py:75) :
+                #   async def generate(self, system, messages: Sequence[dict], max_tokens=512, ...) -> str
+                # → c'est un coroutine awaité (PAS un AsyncIterator ; le stream est `LocalLLM.stream`).
+                # → il prend `messages` (liste de dicts role/content), PAS `user`.
+                await _warm_llm.generate(
+                    system="warmup",
+                    messages=[{"role": "user", "content": "ok"}],
+                    max_tokens=1,
+                )
+                log.info("mind.fallback_preloaded")
+            except Exception as exc:  # noqa: BLE001 — best-effort, ne bloque jamais le boot
+                log.warning("mind.fallback_preload_failed", extra={"error": repr(exc)})
+
         director_debouncer = TriggerDebouncer(
             window_seconds=settings.director_debounce_window_seconds,
             max_batch=settings.director_debounce_max_batch,
