@@ -235,11 +235,13 @@ def _augment_with_mind(system: str, mind_state: "MindState | None") -> str:
     lines = [system, "", "## Ton état actuel (Mind)"]
     lines.append(f"Activité : {mind_state.activity}.")
     if getattr(mind_state, "current_game", None):
-        lines.append(f"Tu joues à : {mind_state.current_game}.")
+        safe_game = _sanitize_user_input(mind_state.current_game, max_len=200)
+        lines.append(f"Tu joues à : {safe_game}.")
     if mind_state.plan.primary:
-        lines.append(f"Objectif actuel : {mind_state.plan.primary}.")
+        safe_plan = _sanitize_user_input(mind_state.plan.primary, max_len=200)
+        lines.append(f"Objectif actuel : {safe_plan}.")
     if mind_state.recent_speech:
-        last = mind_state.recent_speech[-1].text
+        last = _sanitize_user_input(mind_state.recent_speech[-1].text, max_len=200)
         lines.append(f"Tu viens de dire : « {last} ». Ne te répète pas, reste cohérente.")
     return "\n".join(lines)
 

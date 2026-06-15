@@ -61,7 +61,7 @@ class Blackboard:
                     notes = value.get("session_notes", self._state.plan.session_notes)
                     self._state.plan = PlanState(
                         primary=value.get("primary", self._state.plan.primary),
-                        secondary=value.get("secondary", self._state.plan.secondary),
+                        secondary=list(value.get("secondary", self._state.plan.secondary)),
                         session_notes=notes[:_NOTES_CAP],
                     )
                 elif hasattr(self._state, key):

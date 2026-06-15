@@ -70,3 +70,15 @@ async def test_session_notes_capped_at_4000() -> None:
     await bb.update({"plan": {"session_notes": "x" * 5000}})
     st = await bb.get()
     assert len(st.plan.session_notes) == 4000
+
+
+async def test_secondary_defensive_copy_on_update() -> None:
+    """Muter la liste passée à update() ne doit PAS affecter l'état interne."""
+    bb = Blackboard(state_store=_FakeStateStore(), event_bus=_SpyBus())
+    lst = ["goal_a", "goal_b"]
+    await bb.update({"plan": {"secondary": lst}})
+    # Mutation de la liste externe APRÈS l'update.
+    lst.append("goal_injected")
+    st = await bb.get()
+    assert "goal_injected" not in st.plan.secondary
+    assert st.plan.secondary == ["goal_a", "goal_b"]
