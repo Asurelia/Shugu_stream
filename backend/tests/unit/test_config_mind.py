@@ -34,3 +34,9 @@ def test_provider_accepts_m3() -> None:
 def test_director_timeout_env_alias() -> None:
     s = Settings(env="test", ip_hash_salt="test", SHUGU_DIRECTOR_LLM_TIMEOUT_S="7.5")
     assert s.director_llm_timeout_s == 7.5
+
+
+def test_mind_feature_flags_default_off() -> None:
+    s = _settings()
+    assert s.mind_cortex_enabled is False
+    assert s.mind_arbiter_enabled is False

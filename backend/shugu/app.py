@@ -419,6 +419,21 @@ async def lifespan(app: FastAPI):
             pipeline_metrics=_pipeline_metrics,
         )
     )
+    # M-1 : Blackboard (état mental partagé). Éphémère, reset au boot.
+    # Injecte le DirectorStateStore (source de vérité des scènes) et l'event_bus
+    # (pour publier mind.activity sur le topic stage à chaque transition).
+    # Wiring ici (hors du bloc director_enabled) car le Blackboard sert aussi
+    # aux endpoints admin et aux tests — il doit exister même sans Director actif.
+    from .mind.blackboard import get_blackboard as _get_blackboard
+
+    _mind_blackboard = _get_blackboard(
+        state_store=_get_state_store(),
+        event_bus=event_bus,
+    )
+    await _mind_blackboard.reset()
+    app.state.mind_blackboard = _mind_blackboard
+    log.info("mind.blackboard_ready")
+
     # Observatory SSE (Sprint mos-A) — flux temps réel des events workers.
     # Lit le bus event partagé en read-only ; aucun side effect possible côté
     # producteurs. Topic set restreint aux flux JSON-safe (pas `stage`).

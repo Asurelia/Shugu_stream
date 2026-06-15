@@ -550,6 +550,17 @@ class Settings(BaseSettings):
         ),
         description="Modèle Ollama pour le fallback Director/Réflexe.",
     )
+    mind_cortex_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("MIND_CORTEX_ENABLED", "SHUGU_MIND_CORTEX_ENABLED"),
+        description="Active la boucle Cortex (M-3+). Off = comportement actuel.",
+    )
+    mind_arbiter_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("MIND_ARBITER_ENABLED", "SHUGU_MIND_ARBITER_ENABLED"),
+        description="Route les sorties Réflexe/Cortex via l'ActionArbiter (M-2+). "
+                    "Off = dispatch direct actuel.",
+    )
 
     # Director cache sémantique pgvector — Phase E2.5.
     director_cache_enabled: bool = Field(
