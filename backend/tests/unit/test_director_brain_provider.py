@@ -115,16 +115,19 @@ async def test_openai_skeleton_raises_not_implemented() -> None:
     await http.aclose()
 
 
-async def test_ollama_skeleton_raises_not_implemented() -> None:
-    """OllamaDirectorBrain.complete() lève NotImplementedError."""
+
+def test_make_director_brain_m3_returns_resilient() -> None:
+    import httpx
+
+    from shugu.config import Settings
+    from shugu.director.brain_provider import make_director_brain
+    from shugu.director.brain_resilient import ResilientDirectorBrain
+
+    s = Settings(env="test", ip_hash_salt="test", director_llm_provider="m3",
+                 mind_m3_api_key="k")
     http = httpx.AsyncClient()
-    settings = _settings("ollama")
-    brain = make_director_brain(settings, http)
-
-    with pytest.raises(NotImplementedError, match="Phase E2.6"):
-        await brain.complete(system="test", user="test")
-
-    await http.aclose()
+    brain = make_director_brain(s, http)
+    assert isinstance(brain, ResilientDirectorBrain)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

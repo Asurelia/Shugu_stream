@@ -29,8 +29,9 @@ TriggerBus ──→  Orchestrator.tick(trigger)
 - **Rate limit** : 1 tick / 2s max (timestamp monotonic `_last_tick_at`).
   Exception : `vip_arrival` bypass immédiat (on ne veut pas rater l'accueil VIP).
 - **Max 10 tags** : géré dans `tag_parser.parse_tags(max_tags=10)`.
-- **Timeout LLM 3s** : `asyncio.wait_for` → fallback déterministe
-  `[say_emotion:neutral]`, pas de mutation d'état.
+- **Timeout LLM configurable (settings.director_llm_timeout_s, défaut 5s)** :
+  `asyncio.wait_for` → fallback déterministe `[say_emotion:neutral]`,
+  pas de mutation d'état.
 - **Feature flag** : `settings.director_enabled=False` → `tick()` est un no-op.
 - **Lifecycle** : `start()` subscribe au `TriggerBus`, `stop()` unsubscribe
   et attend la fin du tick courant s'il y en a un.
@@ -216,7 +217,7 @@ class Orchestrator:
         - Rate limit 2s → skip (sauf vip_arrival).
         - Cap horaire → skip avec warning si max ticks/h atteint.
         - Un seul tick concurrent (asyncio.Lock).
-        - Timeout LLM 3s → fallback [say_emotion:neutral].
+        - Timeout LLM configurable (settings.director_llm_timeout_s) → fallback [say_emotion:neutral].
         """
         if not self._settings.director_enabled:
             return
@@ -358,9 +359,12 @@ class Orchestrator:
         tts_text: str
 
         try:
+            # NOTE M-2 (dette review PR #168) : avec provider=m3 + ResilientDirectorBrain,
+            # ce wait_for unique ne couvre pas toute la chaîne m3→ollama→canned.
+            # À recâbler en M-2.
             llm_text = await asyncio.wait_for(
                 self._llm_client.complete(system=system, user=user),
-                timeout=3.0,
+                timeout=self._settings.director_llm_timeout_s,
             )
             # 7. Parse tags + strip pour TTS.
             tags = parse_tags(llm_text, max_tags=10, state=state)
@@ -368,7 +372,7 @@ class Orchestrator:
         except TimeoutError:
             log.warning(
                 "director.orchestrator_llm_timeout",
-                extra={"kind": trigger.kind, "timeout_s": 3.0},
+                extra={"kind": trigger.kind, "timeout_s": self._settings.director_llm_timeout_s},
             )
             tags = [_FALLBACK_TAG]
             tts_text = ""
